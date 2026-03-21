@@ -1,0 +1,108 @@
+<%# pages/dashboard.ejs %>
+
+<!-- KPIs -->
+<div class="kpi-grid">
+  <div class="kpi lime">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Usuarios activos</div>
+    <div class="kpi-val"><%= stats.usuarios || 0 %></div>
+    <div class="kpi-delta">en la plataforma</div>
+  </div>
+  <div class="kpi blue">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Establecimientos</div>
+    <div class="kpi-val"><%= stats.establecimientos || 0 %></div>
+    <div class="kpi-delta">orgs activas</div>
+  </div>
+  <div class="kpi red">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Registros pendientes</div>
+    <div class="kpi-val" style="color:var(--red)"><%= stats.regPendientes || 0 %></div>
+    <div class="kpi-delta"><%= stats.regPendientes > 0 ? '⚠ requieren aprobación' : '✓ todo al día' %></div>
+  </div>
+  <div class="kpi teal">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Servidor</div>
+    <div class="kpi-val" style="font-size:18px;color:var(--lime)">Online</div>
+    <div class="kpi-delta">✓ CouchDB conectado</div>
+  </div>
+</div>
+
+<div class="g2">
+
+  <!-- Registros pendientes (solo superadmin) -->
+  <% if (user.rol_global === 'superadmin') { %>
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">📋 Registros pendientes</span>
+      <a href="/registros" class="card-action">Ver todos →</a>
+    </div>
+    <% if (!registros || registros.length === 0) { %>
+      <div class="empty-state" style="padding:30px">
+        <span class="icon">✅</span>
+        <p>Sin registros pendientes</p>
+      </div>
+    <% } else { %>
+      <div style="padding:8px 0">
+        <% registros.slice(0,4).forEach(r => { %>
+        <div id="dash-reg-<%= r._id %>"
+          style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,0.04)">
+          <div style="flex:1">
+            <div class="td-main"><%= r.nombre %></div>
+            <div class="td-dim"><%= r.org_nombre %> · <%= r.org_provincia || '–' %></div>
+          </div>
+          <button class="btn btn-sm btn-lime-outline"
+            onclick="dashAprobar('<%= r._id.replace('reg_','') %>', '<%= r.nombre %>', this)">
+            ✓ Aprobar
+          </button>
+        </div>
+        <% }) %>
+      </div>
+    <% } %>
+  </div>
+  <% } %>
+
+  <!-- Usuarios recientes -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">👥 Usuarios recientes</span>
+      <a href="/usuarios" class="card-action">Ver todos →</a>
+    </div>
+    <% if (!usuarios || usuarios.length === 0) { %>
+      <div class="empty-state" style="padding:30px"><p>Sin usuarios</p></div>
+    <% } else { %>
+    <div style="padding:8px 0">
+      <% usuarios.slice(0,5).forEach(u => { %>
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid rgba(255,255,255,0.04)">
+        <div style="width:28px;height:28px;border-radius:7px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--lime);flex-shrink:0">
+          <%= (u.nombre||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase() %>
+        </div>
+        <div style="flex:1;min-width:0">
+          <div class="td-main" style="font-size:12px"><%= u.nombre || u.email %></div>
+          <div class="td-dim"><%= u.email %></div>
+        </div>
+        <%- rolBadge(u.rol_global) %>
+      </div>
+      <% }) %>
+    </div>
+    <% } %>
+  </div>
+
+</div>
+
+<script>
+async function dashAprobar(token, nombre, btn) {
+  if (!confirm('¿Aprobar a ' + nombre + '?\nSe creará su cuenta y base de datos.')) return;
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    await Auth.post('/api/auth/aprobar/' + token, {});
+    toast('✓ ' + nombre + ' aprobado', 'Cuenta y DB creadas', 'lime');
+    document.getElementById('dash-reg-reg_' + token)?.remove();
+  } catch(e) {
+    toast('✗ Error al aprobar', e.message, 'red');
+    btn.disabled = false;
+    btn.textContent = '✓ Aprobar';
+  }
+}
+</script>

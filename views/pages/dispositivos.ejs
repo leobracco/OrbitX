@@ -1,0 +1,140 @@
+<%# pages/dispositivos.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Dispositivos</h2>
+    <p>Nodos ESP32-S3 y PCs de tractor registrados</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/dispositivos" class="btn">↻ Actualizar</a>
+    <button class="btn btn-primary" onclick="toast('📡 Próximamente','Registro de dispositivos vía QR','blue')">+ Registrar</button>
+  </div>
+</div>
+
+<% if (!dispositivos || dispositivos.length === 0) { %>
+  <div class="empty-state">
+    <span class="icon">📡</span>
+    <p>No hay dispositivos registrados.<br>Los nodos ESP32-S3 se registran automáticamente al conectarse.</p>
+  </div>
+<% } else { %>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">
+  <% dispositivos.forEach(d => {
+    const online  = d.ultimo_sync && (Date.now() - d.ultimo_sync < 5*60*1000);
+    const syncPct = d.sync_pct || 0;
+  %>
+  <div class="device-card <%= online ? 'online' : 'offline' %>" style="background:var(--surface);border:1px solid <%= online ? 'rgba(184,255,60,0.2)' : 'rgba(255,176,60,0.15)' %>;border-radius:var(--radius);padding:16px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="font-size:22px">🚜</div>
+      <div style="flex:1;min-width:0">
+        <div class="td-main"><%= d.nombre || d.uid %></div>
+        <div class="td-mono" style="font-size:10px;color:var(--muted2)"><%= d.uid %></div>
+      </div>
+      <span class="badge <%= online ? 'badge-lime' : 'badge-amber' %>">
+        <%= online ? 'Online' : 'Offline' %>
+      </span>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted2)">Establecimiento</span>
+        <span style="color:var(--text)"><%= d.estab_nombre || d.orgSlug || '–' %></span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted2)">Último sync</span>
+        <span style="color:var(--text)"><%= d.ultimo_sync ? fmtDate(d.ultimo_sync) : 'Nunca' %></span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--muted2)">Bajadas config.</span>
+        <span style="font-family:var(--font-m);color:var(--lime)"><%= (d.pines || []).length %> / 8</span>
+      </div>
+    </div>
+
+    <div style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:4px">
+        <span>Configuración</span>
+        <span style="font-family:var(--font-m)"><%= syncPct %>%</span>
+      </div>
+      <div class="progress">
+        <div class="progress-fill" style="width:<%= syncPct %>%;background:<%= syncPct===100 ? 'var(--lime)' : online ? 'var(--blue)' : 'var(--amber)' %>"></div>
+      </div>
+    </div>
+
+    <button class="btn btn-sm btn-ghost" style="width:100%;margin-top:10px"
+      onclick="verNodo('<%= d.uid %>', '<%= d.orgSlug %>')">
+      ⚙ Configurar bajadas
+    </button>
+  </div>
+  <% }) %>
+</div>
+
+<% } %>
+
+<!-- Modal configurar nodo -->
+<div class="modal-backdrop" id="modal-nodo">
+  <div class="modal" style="width:500px">
+    <div class="modal-title">Configurar nodo</div>
+    <div class="modal-sub" id="modal-nodo-uid" style="font-family:var(--font-m);color:var(--lime)">–</div>
+    <div id="modal-nodo-pines" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;max-height:320px;overflow-y:auto"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-nodo')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="guardarNodo()">Guardar config</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _nodoActual = null;
+
+async function verNodo(uid, orgSlug) {
+  _nodoActual = { uid, orgSlug };
+  document.getElementById('modal-nodo-uid').textContent = uid;
+  document.getElementById('modal-nodo-pines').innerHTML = '<div class="loading">Cargando...</div>';
+  openModal('modal-nodo');
+
+  let nodo = { pines: [] };
+  try {
+    nodo = await Auth.get(`/api/config/nodos/${uid}`);
+  } catch {}
+
+  const pinesHtml = Array.from({length:8}, (_, i) => {
+    const pin   = (nodo.pines || []).find(p => p.pin === i) || {};
+    const bajada = pin.bajada || '';
+    const nombre = pin.nombre || '';
+    return `
+      <div style="display:grid;grid-template-columns:60px 80px 1fr;gap:8px;align-items:center;background:var(--surface2);padding:8px 10px;border-radius:8px;border:1px solid var(--border)">
+        <span style="font-family:var(--font-m);font-size:12px;color:var(--muted2)">Pin ${i}</span>
+        <div class="field" style="margin:0">
+          <input type="number" placeholder="Bajada" value="${bajada}" id="pin-bajada-${i}" min="1" max="99"
+            style="padding:5px 8px;font-size:12px;border-radius:6px"/>
+        </div>
+        <div class="field" style="margin:0">
+          <input type="text" placeholder="Nombre surco" value="${nombre}" id="pin-nombre-${i}"
+            style="padding:5px 8px;font-size:12px;border-radius:6px"/>
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('modal-nodo-pines').innerHTML = pinesHtml;
+}
+
+async function guardarNodo() {
+  if (!_nodoActual) return;
+  const pines = Array.from({length:8}, (_, i) => ({
+    pin:    i,
+    bajada: parseInt(document.getElementById(`pin-bajada-${i}`)?.value) || null,
+    nombre: document.getElementById(`pin-nombre-${i}`)?.value.trim() || '',
+  })).filter(p => p.bajada);
+
+  try {
+    await Auth.put(`/api/config/nodos/${_nodoActual.uid}`, { uid:_nodoActual.uid, pines });
+    toast('✓ Configuración guardada', _nodoActual.uid, 'lime');
+    closeModal('modal-nodo');
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+</script>
+
+<style>
+.device-card { transition: transform 0.15s; cursor: default; }
+.device-card:hover { transform: translateY(-2px); }
+</style>

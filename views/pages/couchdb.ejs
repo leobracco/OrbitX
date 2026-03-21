@@ -1,0 +1,80 @@
+<%# pages/couchdb.ejs %>
+
+<div class="page-header">
+  <div><h2>CouchDB</h2><p>Estado del servidor y bases de datos</p></div>
+  <a href="/couchdb" class="btn">↻ Actualizar</a>
+</div>
+
+<div class="g2" style="margin-bottom:16px">
+
+  <!-- Estado -->
+  <div class="card">
+    <div class="card-head"><span class="card-title">Estado del servidor</span></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:var(--lime)"><%= couchInfo.dbs %></div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Bases de datos</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:var(--blue)"><%= couchInfo.docs %></div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Documentos</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:var(--teal)"><%= couchInfo.version %></div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Versión</div>
+        </div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--font-m);font-size:11px;color:var(--muted2);line-height:1.9">
+        URL: &nbsp;&nbsp;&nbsp;<%= couchInfo.url %><br>
+        Cluster: single node<br>
+        Estado: <span style="color:var(--lime)">● Online</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bases de datos -->
+  <div class="card">
+    <div class="card-head"><span class="card-title">Bases de datos</span></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Base de datos</th><th>Tipo</th></tr></thead>
+        <tbody>
+          <% (couchInfo.dbList || []).forEach(name => { %>
+          <tr>
+            <td class="td-mono" style="color:var(--lime)"><%= name %></td>
+            <td>
+              <span class="badge <%= name.startsWith('orbitx_') ? 'badge-blue' : 'badge-gray' %>">
+                <%= name === 'orbitx_global' ? 'Global' : name.startsWith('orbitx_') ? 'Establecimiento' : 'Sistema' %>
+              </span>
+            </td>
+          </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Replicación -->
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">Protocolo de replicación PouchDB ↔ CouchDB</span>
+  </div>
+  <div class="card-body">
+    <div style="font-size:13px;color:var(--muted2);line-height:1.8;margin-bottom:14px">
+      Cada tractor (PouchDB local) sincroniza automáticamente con la base
+      <span style="color:var(--lime);font-family:var(--font-m)">orbitx_{estab}</span>
+      en CouchDB cuando detecta conexión a internet. El protocolo es bidireccional y maneja conflictos via
+      <span style="color:var(--lime);font-family:var(--font-m)">_rev</span>.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+      <% (couchInfo.dbList || []).filter(n => n.startsWith('orbitx_') && n !== 'orbitx_global').forEach(name => { %>
+      <div style="background:var(--surface2);border:1px solid rgba(184,255,60,0.15);border-radius:8px;padding:10px 14px">
+        <div style="font-family:var(--font-m);font-size:11px;color:var(--lime)"><%= name %></div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px">● Replicación activa</div>
+      </div>
+      <% }) %>
+    </div>
+  </div>
+</div>

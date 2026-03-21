@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OrbitX — Agro Parallel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600;700;800&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:       #050810;
+  --surface:  rgba(255,255,255,0.04);
+  --surface2: rgba(255,255,255,0.07);
+  --border:   rgba(255,255,255,0.08);
+  --border2:  rgba(255,255,255,0.14);
+  --lime:     #B8FF3C;
+  --lime-dim: rgba(184,255,60,0.1);
+  --blue:     #3C9EFF;
+  --red:      #FF4444;
+  --amber:    #FFB03C;
+  --text:     #E2E8F0;
+  --muted:    #4A5568;
+  --muted2:   #718096;
+  --font-h:   'Clash Display', sans-serif;
+  --font-b:   'Geist', sans-serif;
+  --font-m:   'Geist Mono', monospace;
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+
+html, body {
+  height:100%;
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-b);
+  overflow:hidden;
+}
+
+/* Ambient */
+body::before {
+  content:'';
+  position:fixed; inset:0;
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%,   rgba(184,255,62,0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 90% 100%,  rgba(60,158,255,0.04) 0%, transparent 50%);
+  pointer-events:none;
+}
+
+/* Grid background */
+body::after {
+  content:'';
+  position:fixed; inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events:none;
+}
+
+/* ── LAYOUT ─────────────────────────────────── */
+.page {
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  position:relative;
+  z-index:1;
+}
+
+/* ── CARD ───────────────────────────────────── */
+.card {
+  width:100%;
+  max-width:420px;
+  background:rgba(13,18,32,0.85);
+  border:1px solid var(--border2);
+  border-radius:20px;
+  padding:36px 32px;
+  backdrop-filter:blur(20px);
+  animation:cardIn 0.4s cubic-bezier(0.34,1.2,0.64,1) both;
+}
+@keyframes cardIn {
+  from { opacity:0; transform:translateY(20px) scale(0.97); }
+  to   { opacity:1; transform:translateY(0)    scale(1); }
+}
+
+/* ── LOGO ───────────────────────────────────── */
+.logo {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:32px;
+}
+.logo-orb {
+  width:36px; height:36px; flex-shrink:0;
+}
+.logo-name {
+  font-family:var(--font-h);
+  font-size:22px;
+  font-weight:800;
+  letter-spacing:-0.5px;
+  color:#fff;
+}
+.logo-name em { color:var(--lime); font-style:normal; }
+.logo-badge {
+  font-size:9px;
+  padding:2px 7px;
+  background:var(--lime-dim);
+  color:var(--lime);
+  border:1px solid rgba(184,255,60,0.2);
+  border-radius:20px;
+  font-family:var(--font-m);
+  text-transform:uppercase;
+  letter-spacing:1px;
+  margin-left:auto;
+}
+
+/* ── TABS ───────────────────────────────────── */
+.tabs {
+  display:flex;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:3px;
+  margin-bottom:28px;
+}
+.tab {
+  flex:1;
+  padding:8px;
+  text-align:center;
+  font-size:13px;
+  font-weight:500;
+  color:var(--muted2);
+  cursor:pointer;
+  border-radius:8px;
+  transition:all 0.2s;
+}
+.tab.active {
+  background:var(--surface2);
+  color:#fff;
+  border:1px solid var(--border2);
+}
+
+/* ── FORM ───────────────────────────────────── */
+.form { display:flex; flex-direction:column; gap:14px; }
+
+.field { display:flex; flex-direction:column; gap:6px; }
+.field label {
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:1.5px;
+  color:var(--muted2);
+  font-weight:500;
+}
+.field input, .field select {
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border2);
+  color:var(--text);
+  padding:11px 14px;
+  border-radius:10px;
+  font-family:var(--font-b);
+  font-size:14px;
+  outline:none;
+  transition:border-color 0.15s, background 0.15s;
+  -webkit-appearance:none;
+}
+.field input:focus, .field select:focus {
+  border-color:rgba(184,255,60,0.5);
+  background:rgba(184,255,60,0.03);
+}
+.field input::placeholder { color:var(--muted); }
+
+.field-row {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+
+/* ── DIVIDER ────────────────────────────────── */
+.divider {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:4px 0;
+  font-size:11px;
+  color:var(--muted);
+}
+.divider::before, .divider::after {
+  content:'';
+  flex:1;
+  height:1px;
+  background:var(--border);
+}
+
+/* ── SUBMIT BTN ─────────────────────────────── */
+.btn-submit {
+  width:100%;
+  padding:13px;
+  background:var(--lime);
+  color:#050810;
+  border:none;
+  border-radius:10px;
+  font-family:var(--font-h);
+  font-size:14px;
+  font-weight:700;
+  cursor:pointer;
+  transition:all 0.15s;
+  letter-spacing:0.3px;
+  position:relative;
+  overflow:hidden;
+  margin-top:4px;
+}
+.btn-submit:hover {
+  background:#c8ff50;
+  transform:translateY(-1px);
+  box-shadow:0 8px 24px rgba(184,255,60,0.3);
+}
+.btn-submit:active { transform:translateY(0); }
+.btn-submit:disabled {
+  opacity:0.5;
+  cursor:not-allowed;
+  transform:none;
+  box-shadow:none;
+}
+.btn-submit .spinner {
+  display:none;
+  width:16px; height:16px;
+  border:2px solid rgba(5,8,16,0.3);
+  border-top-color:#050810;
+  border-radius:50%;
+  animation:spin 0.7s linear infinite;
+  margin:0 auto;
+}
+.btn-submit.loading .btn-text { display:none; }
+.btn-submit.loading .spinner  { display:block; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── ERROR / SUCCESS ────────────────────────── */
+.alert {
+  padding:11px 14px;
+  border-radius:10px;
+  font-size:13px;
+  line-height:1.4;
+  display:none;
+  animation:fadeIn 0.2s ease;
+}
+.alert.show { display:block; }
+.alert.error {
+  background:rgba(255,68,68,0.1);
+  border:1px solid rgba(255,68,68,0.3);
+  color:#ff8080;
+}
+.alert.success {
+  background:rgba(184,255,60,0.08);
+  border:1px solid rgba(184,255,60,0.25);
+  color:var(--lime);
+}
+@keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── FOOTER NOTE ────────────────────────────── */
+.form-note {
+  text-align:center;
+  font-size:12px;
+  color:var(--muted);
+  margin-top:4px;
+  line-height:1.5;
+}
+.form-note a {
+  color:var(--lime);
+  text-decoration:none;
+  cursor:pointer;
+}
+.form-note a:hover { text-decoration:underline; }
+
+/* ── SECTION HEADER ─────────────────────────── */
+.section-head {
+  margin-bottom:20px;
+}
+.section-head h2 {
+  font-family:var(--font-h);
+  font-size:20px;
+  font-weight:700;
+  color:#fff;
+  margin-bottom:4px;
+}
+.section-head p {
+  font-size:13px;
+  color:var(--muted2);
+  line-height:1.4;
+}
+
+/* ── PASO (registro multi-step) ─────────────── */
+.step { display:none; }
+.step.active { display:flex; flex-direction:column; gap:14px; }
+
+.step-indicator {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:8px;
+}
+.step-dot {
+  width:8px; height:8px;
+  border-radius:50%;
+  background:var(--border2);
+  transition:background 0.2s;
+}
+.step-dot.active { background:var(--lime); box-shadow:0 0 8px rgba(184,255,60,0.5); }
+.step-dot.done   { background:var(--lime); opacity:0.5; }
+
+.step-label {
+  font-size:11px;
+  color:var(--muted2);
+  font-family:var(--font-m);
+}
+
+.btn-back {
+  background:transparent;
+  border:1px solid var(--border2);
+  color:var(--muted2);
+  padding:11px;
+  border-radius:10px;
+  font-size:13px;
+  cursor:pointer;
+  transition:all 0.15s;
+  font-family:var(--font-b);
+}
+.btn-back:hover { color:var(--text); border-color:var(--border2); }
+
+/* ── PENDING SCREEN ─────────────────────────── */
+.pending-screen {
+  text-align:center;
+  padding:8px 0;
+}
+.pending-icon {
+  font-size:48px;
+  margin-bottom:16px;
+  display:block;
+}
+.pending-screen h2 {
+  font-family:var(--font-h);
+  font-size:20px;
+  color:#fff;
+  margin-bottom:8px;
+}
+.pending-screen p {
+  font-size:13px;
+  color:var(--muted2);
+  line-height:1.6;
+}
+.pending-screen .email-highlight {
+  color:var(--lime);
+  font-family:var(--font-m);
+  font-size:12px;
+}
+
+/* ── RESPONSIVE ─────────────────────────────── */
+@media (max-width:480px) {
+  .card { padding:28px 20px; border-radius:16px; }
+  .field-row { grid-template-columns:1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+  <div class="card" id="main-card">
+
+    <!-- Logo -->
+    <div class="logo">
+      <svg class="logo-orb" viewBox="0 0 36 36" fill="none">
+        <circle cx="18" cy="18" r="4" fill="#B8FF3C"/>
+        <circle cx="18" cy="18" r="8.5" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
+        <ellipse cx="18" cy="18" rx="15.5" ry="6.5" stroke="#B8FF3C" stroke-width="1.1" opacity="0.65" transform="rotate(-28 18 18)"/>
+        <circle cx="27" cy="10" r="2.2" fill="#3C9EFF"/>
+      </svg>
+      <div class="logo-name">Orbit<em>X</em></div>
+      <div class="logo-badge">Cloud</div>
+    </div>
+
+    <!-- ── LOGIN ── -->
+    <div id="view-login">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('login')">Ingresar</div>
+        <div class="tab" onclick="switchTab('register')">Registrarse</div>
+      </div>
+
+      <div class="section-head">
+        <h2>Bienvenido</h2>
+        <p>Ingresá con tu cuenta de OrbitX</p>
+      </div>
+
+      <div id="login-alert" class="alert error"></div>
+
+      <div class="form">
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="tu@campo.com" autocomplete="email"/>
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"
+                 onkeydown="if(event.key==='Enter') doLogin()"/>
+        </div>
+
+        <button class="btn-submit" id="btn-login" onclick="doLogin()">
+          <span class="btn-text">Ingresar</span>
+          <div class="spinner"></div>
+        </button>
+
+        <div class="form-note">
+          ¿Olvidaste tu contraseña? <a onclick="switchView('reset')">Recuperar acceso</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REGISTRO ── -->
+    <div id="view-register" style="display:none">
+      <div class="tabs">
+        <div class="tab" onclick="switchTab('login')">Ingresar</div>
+        <div class="tab active" onclick="switchTab('register')">Registrarse</div>
+      </div>
+
+      <div class="step-indicator" id="step-indicator">
+        <div class="step-dot active" id="dot-1"></div>
+        <div class="step-dot" id="dot-2"></div>
+        <span class="step-label" id="step-label">Paso 1 de 2 — Tu cuenta</span>
+      </div>
+
+      <div id="reg-alert" class="alert error"></div>
+
+      <!-- Paso 1: datos personales -->
+      <div class="step active" id="reg-step-1">
+        <div class="section-head">
+          <h2>Crear cuenta</h2>
+          <p>Registrá tu establecimiento en OrbitX</p>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Nombre</label>
+            <input type="text" id="reg-nombre" placeholder="Juan" autocomplete="given-name"/>
+          </div>
+          <div class="field">
+            <label>Apellido</label>
+            <input type="text" id="reg-apellido" placeholder="García"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="reg-email" placeholder="tu@campo.com" autocomplete="email"/>
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <input type="password" id="reg-pass" placeholder="Mínimo 8 caracteres" autocomplete="new-password"/>
+        </div>
+        <div class="field">
+          <label>Teléfono (opcional)</label>
+          <input type="tel" id="reg-tel" placeholder="+54 9 351 000 0000"/>
+        </div>
+        <button class="btn-submit" onclick="goStep2()">
+          <span class="btn-text">Continuar →</span>
+          <div class="spinner"></div>
+        </button>
+      </div>
+
+      <!-- Paso 2: datos del campo -->
+      <div class="step" id="reg-step-2">
+        <div class="section-head">
+          <h2>Tu establecimiento</h2>
+          <p>Datos del campo que vas a gestionar con OrbitX</p>
+        </div>
+        <div class="field">
+          <label>Nombre del campo</label>
+          <input type="text" id="reg-org" placeholder="La Esperanza"/>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Hectáreas totales</label>
+            <input type="number" id="reg-ha" placeholder="3420" min="1"/>
+          </div>
+          <div class="field">
+            <label>Provincia</label>
+            <select id="reg-prov">
+              <option value="">Seleccioná...</option>
+              <option>Buenos Aires</option>
+              <option>Córdoba</option>
+              <option>Santa Fe</option>
+              <option>Entre Ríos</option>
+              <option>La Pampa</option>
+              <option>Santiago del Estero</option>
+              <option>Chaco</option>
+              <option>Tucumán</option>
+              <option>Salta</option>
+              <option>Mendoza</option>
+              <option>San Luis</option>
+              <option>Formosa</option>
+              <option>Corrientes</option>
+              <option>Misiones</option>
+              <option>Otra</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn-back" onclick="goStep1()">← Atrás</button>
+          <button class="btn-submit" id="btn-register" onclick="doRegister()" style="flex:1">
+            <span class="btn-text">Crear mi cuenta</span>
+            <div class="spinner"></div>
+          </button>
+        </div>
+        <div class="form-note">
+          Al registrarte aceptás los <a href="#" onclick="return false">Términos de uso</a>.
+          Tu cuenta será revisada por Agro Parallel antes de activarse.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PENDIENTE DE APROBACIÓN ── -->
+    <div id="view-pending" style="display:none">
+      <div class="pending-screen">
+        <span class="pending-icon">📬</span>
+        <h2>¡Registro enviado!</h2>
+        <p>
+          Enviamos un email de verificación a<br>
+          <span class="email-highlight" id="pending-email">tu@campo.com</span>
+        </p>
+        <p style="margin-top:12px">
+          Una vez que verificás tu email, el equipo de Agro Parallel
+          revisará tu solicitud y te habilitará el acceso.
+          Suele demorar menos de 24 horas.
+        </p>
+        <button class="btn-submit" style="margin-top:24px" onclick="switchTab('login')">
+          <span class="btn-text">Volver al login</span>
+          <div class="spinner"></div>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── RESET PASSWORD ── -->
+    <div id="view-reset" style="display:none">
+      <div class="section-head">
+        <h2>Recuperar acceso</h2>
+        <p>Ingresá tu email y te enviamos un link para restablecer tu contraseña</p>
+      </div>
+
+      <div id="reset-alert" class="alert error"></div>
+
+      <div class="form">
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="reset-email" placeholder="tu@campo.com"/>
+        </div>
+        <button class="btn-submit" id="btn-reset" onclick="doReset()">
+          <span class="btn-text">Enviar link de recuperación</span>
+          <div class="spinner"></div>
+        </button>
+        <div class="form-note">
+          <a onclick="switchView('login')">← Volver al login</a>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /card -->
+</div><!-- /page -->
+
+<script>
+// ════════════════════════════════════════════════
+//  OrbitX Auth — Login / Registro
+// ════════════════════════════════════════════════
+
+// Si ya hay token válido → ir al dashboard
+(function checkExistingSession() {
+  const token = localStorage.getItem("orbitx_token");
+  if (!token) return;
+  // Verificar que no esté expirado (decode básico del JWT)
+  try {
+    const [,payload] = token.split(".");
+    const decoded = JSON.parse(atob(payload + "==".slice((payload.length % 4) || 4)));
+    if (decoded.exp && decoded.exp * 1000 > Date.now()) {
+      window.location.replace("/dashboard");
+    } else {
+      localStorage.removeItem("orbitx_token");
+      localStorage.removeItem("orbitx_user");
+    }
+  } catch {}
+})();
+
+// ── Vistas ───────────────────────────────────────
+const VIEWS = ["login","register","pending","reset"];
+
+function switchView(id) {
+  VIEWS.forEach(v => {
+    document.getElementById(`view-${v}`).style.display = v === id ? "block" : "none";
+  });
+  clearAlerts();
+}
+
+function switchTab(tab) {
+  if (tab === "login") {
+    switchView("login");
+  } else {
+    switchView("register");
+    goStep1();
+  }
+}
+
+// ── Registro multi-step ──────────────────────────
+function goStep1() {
+  document.getElementById("reg-step-1").classList.add("active");
+  document.getElementById("reg-step-2").classList.remove("active");
+  document.getElementById("dot-1").className = "step-dot active";
+  document.getElementById("dot-2").className = "step-dot";
+  document.getElementById("step-label").textContent = "Paso 1 de 2 — Tu cuenta";
+}
+
+function goStep2() {
+  clearAlerts();
+  const nombre   = document.getElementById("reg-nombre").value.trim();
+  const apellido = document.getElementById("reg-apellido").value.trim();
+  const email    = document.getElementById("reg-email").value.trim();
+  const pass     = document.getElementById("reg-pass").value;
+
+  if (!nombre)               return showAlert("reg", "Ingresá tu nombre");
+  if (!email || !email.includes("@")) return showAlert("reg", "Email inválido");
+  if (pass.length < 8)       return showAlert("reg", "La contraseña debe tener al menos 8 caracteres");
+
+  document.getElementById("reg-step-1").classList.remove("active");
+  document.getElementById("reg-step-2").classList.add("active");
+  document.getElementById("dot-1").className = "step-dot done";
+  document.getElementById("dot-2").className = "step-dot active";
+  document.getElementById("step-label").textContent = "Paso 2 de 2 — Tu campo";
+}
+
+// ── LOGIN ────────────────────────────────────────
+async function doLogin() {
+  clearAlerts();
+  const email    = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-pass").value;
+
+  if (!email)    return showAlert("login", "Ingresá tu email");
+  if (!password) return showAlert("login", "Ingresá tu contraseña");
+
+  setLoading("btn-login", true);
+
+  try {
+    const res  = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      return showAlert("login", data.error || "Error al ingresar");
+    }
+
+    // Guardar token y datos del usuario
+    localStorage.setItem("orbitx_token", data.token);
+    localStorage.setItem("orbitx_user",  JSON.stringify(data.user));
+
+    // Redirigir al dashboard
+    window.location.replace("/dashboard");
+
+  } catch (e) {
+    showAlert("login", "Error de conexión. Verificá que el servidor esté activo.");
+  } finally {
+    setLoading("btn-login", false);
+  }
+}
+
+// ── REGISTRO ─────────────────────────────────────
+async function doRegister() {
+  clearAlerts();
+
+  const nombre    = (document.getElementById("reg-nombre").value.trim() + " " +
+                     document.getElementById("reg-apellido").value.trim()).trim();
+  const email     = document.getElementById("reg-email").value.trim();
+  const password  = document.getElementById("reg-pass").value;
+  const telefono  = document.getElementById("reg-tel").value.trim();
+  const org_nombre= document.getElementById("reg-org").value.trim();
+  const org_ha    = document.getElementById("reg-ha").value;
+  const org_prov  = document.getElementById("reg-prov").value;
+
+  if (!org_nombre) return showAlert("reg", "Ingresá el nombre del establecimiento");
+  if (!org_prov)   return showAlert("reg", "Seleccioná la provincia");
+
+  setLoading("btn-register", true);
+
+  try {
+    const res  = await fetch("/api/auth/registro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nombre, email, password, telefono, org_nombre, org_ha, org_provincia: org_prov })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      return showAlert("reg", data.error || "Error al registrarse");
+    }
+
+    // Mostrar pantalla de pendiente
+    document.getElementById("pending-email").textContent = email;
+    switchView("pending");
+
+  } catch (e) {
+    showAlert("reg", "Error de conexión. Intentá de nuevo.");
+  } finally {
+    setLoading("btn-register", false);
+  }
+}
+
+// ── RESET PASSWORD ───────────────────────────────
+async function doReset() {
+  clearAlerts();
+  const email = document.getElementById("reset-email").value.trim();
+  if (!email) return showAlert("reset", "Ingresá tu email");
+
+  setLoading("btn-reset", true);
+
+  try {
+    await fetch("/api/auth/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    // Siempre mostrar éxito (el endpoint es silencioso por seguridad)
+    const alert = document.getElementById("reset-alert");
+    alert.className = "alert success show";
+    alert.textContent = "Si el email existe, recibirás el link en unos minutos.";
+  } catch {
+    showAlert("reset", "Error de conexión.");
+  } finally {
+    setLoading("btn-reset", false);
+  }
+}
+
+// ── Helpers ──────────────────────────────────────
+function showAlert(view, msg) {
+  const el = document.getElementById(`${view}-alert`);
+  el.textContent = msg;
+  el.className = "alert error show";
+}
+
+function clearAlerts() {
+  document.querySelectorAll(".alert").forEach(a => a.classList.remove("show"));
+}
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.classList.toggle("loading", loading);
+}
+</script>
+</body>
+</html>

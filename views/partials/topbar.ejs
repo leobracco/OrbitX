@@ -1,0 +1,11 @@
+<%# partials/topbar.ejs %>
+<header class="topbar">
+  <button class="hamburger" onclick="toggleSidebar()">☰</button>
+  <h1 class="topbar-title"><%= title || 'Dashboard' %></h1>
+  <div class="topbar-right">
+    <span class="topbar-time" id="topbar-time"></span>
+    <% if (typeof topbarActions !== 'undefined') { %>
+      <%- topbarActions %>
+    <% } %>
+  </div>
+</header>

@@ -1,0 +1,91 @@
+<%# pages/alertas.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Alertas activas</h2>
+    <p><%= alertas.length %> alerta<%= alertas.length !== 1 ? 's' : '' %> sin resolver</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/alertas" class="btn">↻ Actualizar</a>
+    <% if (alertas.length > 0) { %>
+    <button class="btn btn-danger" onclick="resolverTodas()">✓ Resolver todas</button>
+    <% } %>
+  </div>
+</div>
+
+<% if (!alertas || alertas.length === 0) { %>
+  <div class="empty-state">
+    <span class="icon">✅</span>
+    <p>No hay alertas activas</p>
+  </div>
+<% } else { %>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table" id="alertas-table">
+      <thead>
+        <tr>
+          <th>Bajada / Surco</th>
+          <th>Máquina</th>
+          <th>Lote</th>
+          <th>Mensaje</th>
+          <th>Nivel</th>
+          <th>Hora</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% alertas.forEach(a => { %>
+        <tr id="alerta-<%= a._id %>">
+          <td class="td-main"><%= a.bajada_id || a.bajada || '–' %></td>
+          <td class="td-dim"><%= a.maquina_id || '–' %></td>
+          <td class="td-dim"><%= a.lote_id || '–' %></td>
+          <td style="font-size:12px;color:var(--muted2);max-width:220px"><%= a.mensaje || a.msg || '–' %></td>
+          <td>
+            <span class="badge <%= a.nivel === 'CRITICO' ? 'badge-red' : 'badge-amber' %>">
+              <%= a.nivel || 'ADVERTENCIA' %>
+            </span>
+          </td>
+          <td class="td-mono" style="color:var(--muted);font-size:11px">
+            <%= fmtDate(a.ts_inicio || a.ts) %>
+          </td>
+          <td>
+            <button class="btn btn-sm btn-ghost"
+              onclick="resolverAlerta('<%= a._id %>', this)">
+              ✓ Resolver
+            </button>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>
+
+<script>
+async function resolverAlerta(id, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await Auth.patch(`/api/alertas/${encodeURIComponent(id)}/resolver`, {});
+    document.getElementById(`alerta-${id}`)?.remove();
+    toast('✓ Alerta resuelta', '', 'lime');
+    const tbody = document.querySelector('#alertas-table tbody');
+    if (tbody && !tbody.children.length) location.reload();
+  } catch(e) {
+    toast('✗ Error', e.message, 'red');
+    btn.disabled = false; btn.textContent = '✓ Resolver';
+  }
+}
+
+async function resolverTodas() {
+  if (!confirm('¿Resolver todas las alertas activas?')) return;
+  const btns = document.querySelectorAll('#alertas-table button');
+  btns.forEach(b => { b.disabled = true; b.textContent = '...'; });
+  const ids = [...document.querySelectorAll('#alertas-table tr[id]')].map(r => r.id.replace('alerta-',''));
+  await Promise.allSettled(ids.map(id => Auth.patch(`/api/alertas/${encodeURIComponent(id)}/resolver`, {})));
+  toast('✓ Todas las alertas resueltas', '', 'lime');
+  setTimeout(() => location.reload(), 800);
+}
+</script>

@@ -1,0 +1,108 @@
+<%# pages/establecimientos.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Establecimientos</h2>
+    <p><%= establecimientos.length %> organizaciones en la plataforma</p>
+  </div>
+</div>
+
+<% if (!establecimientos || establecimientos.length === 0) { %>
+  <div class="empty-state">
+    <span class="icon">🌾</span>
+    <p>No hay establecimientos creados aún.<br>Aprobá un registro pendiente para crear el primero.</p>
+  </div>
+<% } else { %>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Establecimiento</th>
+          <th>Base de datos</th>
+          <th>Ha total</th>
+          <th>Plan</th>
+          <th>Owner</th>
+          <th>Estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% establecimientos.forEach(e => { %>
+        <tr>
+          <td>
+            <div class="td-main"><%= e.nombre %></div>
+            <div class="td-dim"><%= e.provincia || '–' %></div>
+          </td>
+          <td class="td-mono" style="color:var(--lime)">orbitx_<%= e.slug %></td>
+          <td class="td-mono"><%= (e.ha_total||0).toLocaleString('es-AR') %> ha</td>
+          <td>
+            <span class="badge <%= e.plan === 'pro' ? 'badge-blue' : e.plan === 'enterprise' ? 'badge-lime' : 'badge-gray' %>">
+              <%= e.plan || 'free' %>
+            </span>
+          </td>
+          <td class="td-dim"><%= ownerNombre[e.owner_uid] || e.owner_uid || '–' %></td>
+          <td>
+            <span class="badge <%= e.activa !== false ? 'badge-lime' : 'badge-red' %>">
+              <%= e.activa !== false ? 'Activa' : 'Inactiva' %>
+            </span>
+          </td>
+          <td>
+            <button class="btn btn-sm btn-ghost"
+              onclick="verDetalle('<%= e.slug %>', '<%= e.nombre %>')">
+              Ver →
+            </button>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>
+
+<!-- Modal detalle -->
+<div class="modal-backdrop" id="modal-estab">
+  <div class="modal" style="width:480px">
+    <div class="modal-title" id="modal-e-nombre">–</div>
+    <div class="modal-sub"   id="modal-e-slug" style="font-family:var(--font-m);color:var(--lime)">–</div>
+    <div id="modal-e-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px"></div>
+    <div id="modal-e-miembros"></div>
+    <button class="btn btn-ghost" style="width:100%;margin-top:14px" onclick="closeModal('modal-estab')">Cerrar</button>
+  </div>
+</div>
+
+<script>
+async function verDetalle(slug, nombre) {
+  document.getElementById('modal-e-nombre').textContent = nombre;
+  document.getElementById('modal-e-slug').textContent   = `orbitx_${slug}`;
+  document.getElementById('modal-e-stats').innerHTML    = '<div class="loading">Cargando...</div>';
+  document.getElementById('modal-e-miembros').innerHTML = '';
+  openModal('modal-estab');
+
+  try {
+    // Stats de la org
+    const stats = await Auth.get('/api/admin/stats');
+    const org   = (stats.establecimientos || []).find(e => e.slug === slug);
+    if (org) {
+      document.getElementById('modal-e-stats').innerHTML = `
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:var(--lime)">${org.lotes}</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Lotes</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:${org.alertas>0?'var(--red)':'var(--lime)'}">${org.alertas}</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Alertas</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:20px;color:var(--blue)">${org.usuarios}</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px;text-transform:uppercase;letter-spacing:1px">Usuarios</div>
+        </div>`;
+    }
+  } catch(e) {
+    document.getElementById('modal-e-stats').innerHTML = `<div class="td-dim">${e.message}</div>`;
+  }
+}
+</script>

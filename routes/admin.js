@@ -50,12 +50,19 @@ router.post("/establecimiento", async (req, res) => {
 // GET /api/admin/usuarios  — listar todos los usuarios
 router.get("/usuarios", async (req, res) => {
   try {
-    const globalDB = db.getDB("global");
-    const result   = await globalDB.find({
-      selector: { tipo: "usuario" },
-      fields: ["_id", "nombre", "email", "rol", "establecimientos", "created_at"]
-    });
-    res.json(result.docs);
+    const gdb = db.getDB("global");
+    let docs = [];
+    // Intentar con find()
+    try {
+      const r = await gdb.find({ selector: { tipo: "usuario" }, limit: 500 });
+      docs = r.docs;
+    } catch {
+      // Fallback: list all
+      const all = await gdb.list({ include_docs: true });
+      docs = all.rows.map(r => r.doc).filter(d => d.tipo === "usuario");
+    }
+    // No exponer password_hash ni reset_token
+    res.json(docs.map(({ password_hash, reset_token, reset_token_exp, ...safe }) => safe));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

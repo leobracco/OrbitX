@@ -1,0 +1,52 @@
+<%# partials/sidebar.ejs — sidebar compartido %>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+      <circle cx="15" cy="15" r="3.5" fill="#B8FF3C"/>
+      <circle cx="15" cy="15" r="7" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
+      <ellipse cx="15" cy="15" rx="13" ry="5.5" stroke="#B8FF3C" stroke-width="1" opacity="0.65" transform="rotate(-25 15 15)"/>
+      <circle cx="22" cy="9" r="1.8" fill="#3C9EFF"/>
+    </svg>
+    <span class="logo-name">Orbit<em>X</em></span>
+    <span class="logo-badge">Cloud</span>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section">Principal</div>
+    <%- navItem('/dashboard',    '⊞', 'Dashboard',         activeNav) %>
+    <%- navItem('/dispositivos', '📡', 'Dispositivos',      activeNav) %>
+    <%- navItem('/establecimientos','◫','Establecimientos', activeNav) %>
+    <%- navItem('/lotes',        '🌾', 'Lotes',             activeNav) %>
+    <%- navItem('/alertas',      '⚠',  'Alertas',          activeNav, alertasBadge || 0) %>
+
+    <% if (user && user.rol_global === 'superadmin') { %>
+    <div class="nav-section">Usuarios</div>
+    <%- navItem('/registros', '📋', 'Registros', activeNav, regBadge || 0) %>
+    <%- navItem('/usuarios',  '👥', 'Usuarios',  activeNav) %>
+    <%- navItem('/roles',     '🔑', 'Roles',     activeNav) %>
+    <% } %>
+
+    <div class="nav-section">Sistema</div>
+    <% if (user && user.rol_global === 'superadmin') { %>
+    <%- navItem('/couchdb', '🗄', 'CouchDB', activeNav) %>
+    <% } %>
+    <%- navItem('/config', '⚙', 'Configuración', activeNav) %>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="user-row">
+      <div class="user-avatar"><%= user ? user.avatar_initials || '?' : '?' %></div>
+      <div class="user-info">
+        <div class="user-name"><%= user ? user.nombre : '–' %></div>
+        <div class="user-role"><%= user ? rolLabel(user.rol_global) : '–' %></div>
+      </div>
+    </div>
+    <div class="server-status">
+      <div class="status-dot"></div>
+      <span>Servidor activo</span>
+    </div>
+    <button class="logout-btn" onclick="confirmLogout()">⎋ Cerrar sesión</button>
+  </div>
+</aside>
+
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>

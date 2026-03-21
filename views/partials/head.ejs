@@ -1,0 +1,12 @@
+<%# partials/head.ejs — <head> compartido por todas las páginas %>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#050810"/>
+<title><%= title ? title + ' — OrbitX' : 'OrbitX Cloud' %></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600;700;800&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/variables.css">
+<link rel="stylesheet" href="/css/components.css">
+<% if (typeof extraCss !== 'undefined') { %>
+  <link rel="stylesheet" href="/css/<%= extraCss %>">
+<% } %>

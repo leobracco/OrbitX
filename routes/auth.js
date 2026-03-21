@@ -22,9 +22,8 @@ router.get("/verificar/:token", async (req, res) => {
 // ── Superadmin ───────────────────────────────────────────────
 router.get("/registros-pendientes", required, soloSuperadmin, async (req, res) => {
   try {
-    const db = req.app.locals.globalDB;
-    const r  = await db.view("auth","registros_pendientes",{ include_docs:true, reduce:false, descending:true });
-    res.json(r.rows.map(x=>x.doc));
+    const docs = await svc.getRegistrosPendientes();
+    res.json(docs);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 

@@ -1,0 +1,95 @@
+<%# pages/registros.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Registros pendientes</h2>
+    <p>Clientes que se registraron y esperan aprobación</p>
+  </div>
+  <a href="/registros" class="btn">↻ Actualizar</a>
+</div>
+
+<% if (!registros || registros.length === 0) { %>
+  <div class="empty-state">
+    <span class="icon">✅</span>
+    <p>No hay registros pendientes de aprobación</p>
+  </div>
+<% } else { %>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Solicitante</th>
+          <th>Establecimiento</th>
+          <th>Ha</th>
+          <th>Provincia</th>
+          <th>Fecha solicitud</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% registros.forEach(r => { %>
+        <tr id="reg-<%= r._id %>">
+          <td>
+            <div class="td-main"><%= r.nombre %></div>
+            <div class="td-dim"><%= r.email %></div>
+          </td>
+          <td>
+            <div class="td-main"><%= r.org_nombre %></div>
+            <div class="td-mono" style="font-size:10px;color:var(--lime)">orbitx_<%= r.org_slug %></div>
+          </td>
+          <td class="td-mono"><%= r.org_ha || '–' %></td>
+          <td class="td-dim"><%= r.org_provincia || '–' %></td>
+          <td class="td-dim" style="font-size:11px"><%= fmtDate(r.created_at) %></td>
+          <td>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-sm btn-lime-outline"
+                onclick="aprobarRegistro('<%= r._id.replace('reg_','') %>', '<%= r.nombre %>', this)">
+                ✓ Aprobar
+              </button>
+              <button class="btn btn-sm btn-danger"
+                onclick="rechazarRegistro('<%= r._id.replace('reg_','') %>', '<%= r.nombre %>', this)">
+                ✗
+              </button>
+            </div>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>
+
+<script>
+async function aprobarRegistro(token, nombre, btn) {
+  if (!confirm(`¿Aprobar a ${nombre}?\nSe creará su cuenta y base de datos.`)) return;
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await Auth.post(`/api/auth/aprobar/${token}`, {});
+    toast(`✓ ${nombre} aprobado`, 'Cuenta y DB creadas', 'lime');
+    document.getElementById(`reg-reg_${token}`)?.remove();
+    const tbody = document.querySelector('.data-table tbody');
+    if (tbody && !tbody.children.length) location.reload();
+  } catch(e) {
+    toast('✗ Error al aprobar', e.message, 'red');
+    btn.disabled = false; btn.textContent = '✓ Aprobar';
+  }
+}
+
+async function rechazarRegistro(token, nombre, btn) {
+  const motivo = prompt(`Motivo del rechazo para ${nombre} (opcional):`);
+  if (motivo === null) return;
+  btn.disabled = true;
+  try {
+    await Auth.post(`/api/auth/rechazar/${token}`, { motivo });
+    toast('Registro rechazado', nombre, 'amber');
+    document.getElementById(`reg-reg_${token}`)?.remove();
+  } catch(e) {
+    toast('✗ Error', e.message, 'red');
+    btn.disabled = false;
+  }
+}
+</script>

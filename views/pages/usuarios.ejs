@@ -1,0 +1,101 @@
+<%# pages/usuarios.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Usuarios</h2>
+    <p><%= usuarios.length %> usuarios en la plataforma</p>
+  </div>
+  <a href="/usuarios" class="btn">↻ Actualizar</a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Usuario</th>
+          <th>Rol global</th>
+          <th>Último login</th>
+          <th>Estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (!usuarios || usuarios.length === 0) { %>
+        <tr><td colspan="5" class="loading">Sin usuarios registrados</td></tr>
+        <% } else { %>
+        <% usuarios.forEach(u => { %>
+        <tr>
+          <td>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="width:30px;height:30px;border-radius:8px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--lime);flex-shrink:0">
+                <%= (u.nombre||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase() %>
+              </div>
+              <div>
+                <div class="td-main"><%= u.nombre || '–' %></div>
+                <div class="td-dim"><%= u.email %></div>
+              </div>
+            </div>
+          </td>
+          <td><%- rolBadge(u.rol_global) %></td>
+          <td class="td-dim" style="font-size:11px"><%= fmtDate(u.ultimo_login) %></td>
+          <td>
+            <span class="badge <%= u.activo !== false ? 'badge-lime' : 'badge-red' %>">
+              <%= u.activo !== false ? 'Activo' : 'Inactivo' %>
+            </span>
+          </td>
+          <td>
+            <% const uid = (u._id || '').replace('usr_',''); %>
+            <% if (u.rol_global !== 'superadmin') { %>
+            <button class="btn btn-sm btn-ghost"
+              onclick="openUserModal('<%= uid %>', '<%= u.nombre %>', '<%= u.email %>', <%= u.activo !== false %>)">
+              ⋯ Gestionar
+            </button>
+            <% } %>
+          </td>
+        </tr>
+        <% }) %>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal gestión usuario -->
+<div class="modal-backdrop" id="modal-usuario">
+  <div class="modal">
+    <div class="modal-title" id="modal-u-nombre">Usuario</div>
+    <div class="modal-sub"   id="modal-u-email">email</div>
+    <div id="modal-u-actions" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
+    <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-usuario')">Cancelar</button>
+  </div>
+</div>
+
+<script>
+function openUserModal(uid, nombre, email, activo) {
+  document.getElementById('modal-u-nombre').textContent = nombre;
+  document.getElementById('modal-u-email').textContent  = email;
+
+  const actions = document.getElementById('modal-u-actions');
+  actions.innerHTML = `
+    <button onclick="toggleUsuario('${uid}', ${activo}, this)"
+      style="width:100%;padding:10px;background:${activo ? 'var(--red-dim)':'var(--lime-dim)'};border:1px solid ${activo ? 'rgba(255,68,68,0.3)':'rgba(184,255,60,0.3)'};border-radius:8px;color:${activo ? 'var(--red)':'var(--lime)'};font-size:13px;cursor:pointer;text-align:left;font-family:var(--font-b)">
+      ${activo ? '⛔ Desactivar cuenta' : '✓ Activar cuenta'}
+    </button>`;
+
+  openModal('modal-usuario');
+}
+
+async function toggleUsuario(uid, activo, btn) {
+  btn.disabled = true;
+  try {
+    await Auth.del(`/api/admin/usuario/${uid}`);
+    toast(activo ? 'Usuario desactivado' : 'Usuario activado', '', 'lime');
+    closeModal('modal-usuario');
+    setTimeout(() => location.reload(), 800);
+  } catch(e) {
+    toast('✗ Error', e.message, 'red');
+    btn.disabled = false;
+  }
+}
+</script>

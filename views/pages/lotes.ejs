@@ -1,0 +1,139 @@
+<%# pages/lotes.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Lotes</h2>
+    <p><%= lotes.length %> lote<%= lotes.length !== 1 ? 's' : '' %> registrados</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/lotes" class="btn">↻ Actualizar</a>
+    <button class="btn btn-ghost" onclick="exportCSV()">↓ Exportar CSV</button>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+  <% const estados = ['todos','progreso','completado']; %>
+  <% estados.forEach(e => { %>
+  <a href="/lotes<%= e !== 'todos' ? '?estado='+e : '' %>"
+    class="btn btn-sm <%= filtroEstado === e || (!filtroEstado && e==='todos') ? 'btn-primary' : '' %>">
+    <%= e === 'todos' ? 'Todos' : e === 'progreso' ? 'En progreso' : 'Completados' %>
+  </a>
+  <% }) %>
+</div>
+
+<% if (!lotes || lotes.length === 0) { %>
+  <div class="empty-state">
+    <span class="icon">🌾</span>
+    <p>No hay lotes registrados aún.</p>
+  </div>
+<% } else { %>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table" id="lotes-table">
+      <thead>
+        <tr>
+          <th>Lote</th>
+          <th>Establecimiento</th>
+          <th>Ha</th>
+          <th>Densidad prom.</th>
+          <th>Alertas</th>
+          <th>Estado</th>
+          <th>Fecha</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% lotes.forEach(l => {
+          const densidad = l.resumen?.densidad_avg || 0;
+          const alertas  = l.alertas_count || 0;
+        %>
+        <tr>
+          <td class="td-main"><%= l.nombre || l._id %></td>
+          <td class="td-dim"><%= l.orgSlug || '–' %></td>
+          <td class="td-mono"><%= (l.ha_sembradas || 0).toLocaleString('es-AR') %></td>
+          <td class="td-mono" style="color:<%= densidad >= 68000 ? 'var(--lime)' : densidad > 0 ? 'var(--amber)' : 'var(--muted2)' %>">
+            <%= densidad > 0 ? (densidad/1000).toFixed(1) + 'k' : '–' %>
+          </td>
+          <td class="td-mono" style="color:<%= alertas > 0 ? 'var(--red)' : 'var(--lime)' %>">
+            <%= alertas > 0 ? '⚠ ' + alertas : '✓' %>
+          </td>
+          <td>
+            <span class="badge <%= l.estado === 'progreso' ? 'badge-blue' : l.estado === 'completado' ? 'badge-lime' : 'badge-gray' %>">
+              <%= l.estado === 'progreso' ? 'En progreso' : l.estado === 'completado' ? 'Completado' : l.estado || '–' %>
+            </span>
+          </td>
+          <td class="td-dim" style="font-size:11px"><%= fmtDate(l.fecha_inicio) %></td>
+          <td>
+            <button class="btn btn-sm btn-ghost" onclick="analizarLote('<%= l._id %>', '<%= l.orgSlug %>')">
+              🌿 Analizar
+            </button>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>
+
+<!-- Modal análisis agrarIA -->
+<div class="modal-backdrop" id="modal-lote">
+  <div class="modal" style="width:520px">
+    <div class="modal-title" id="modal-l-nombre">–</div>
+    <div class="modal-sub" style="color:var(--muted2)">Análisis agrarIA</div>
+    <div id="modal-l-content" style="margin:16px 0;font-size:13px;color:var(--text);line-height:1.7;min-height:80px">
+      <div class="loading">Consultando agrarIA...</div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-lote')">Cerrar</button>
+  </div>
+</div>
+
+<script>
+async function analizarLote(id, orgSlug) {
+  document.getElementById('modal-l-nombre').textContent = id;
+  document.getElementById('modal-l-content').innerHTML  = '<div class="loading"><span class="spinner"></span> Consultando agrarIA...</div>';
+  openModal('modal-lote');
+  try {
+    const d = await Auth.get(`/api/lotes/${encodeURIComponent(id)}/analisis`);
+    document.getElementById('modal-l-nombre').textContent = d.resumen?.nombre || id;
+    document.getElementById('modal-l-content').innerHTML = `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px;line-height:1.7;color:var(--text)">
+        ${d.analisis || 'Sin análisis disponible'}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:var(--lime)">${d.resumen?.ha_sembradas||0} ha</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Sembradas</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:var(--blue)">${d.resumen?.dur_min||0} min</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Duración</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:${d.resumen?.alertas_count>0?'var(--red)':'var(--lime)'}">
+            ${d.resumen?.alertas_count||0}
+          </div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Alertas</div>
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('modal-l-content').innerHTML = `<div class="alert error show">${e.message}</div>`;
+  }
+}
+
+function exportCSV() {
+  const rows = [['Lote','Ha','Densidad','Alertas','Estado','Fecha']];
+  document.querySelectorAll('#lotes-table tbody tr').forEach(r => {
+    const tds = r.querySelectorAll('td');
+    rows.push([tds[0]?.innerText, tds[2]?.innerText, tds[3]?.innerText, tds[4]?.innerText, tds[5]?.innerText, tds[6]?.innerText]);
+  });
+  const csv = rows.map(r => r.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a   = document.createElement('a');
+  a.href    = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download= `lotes_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+</script>
