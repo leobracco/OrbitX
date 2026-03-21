@@ -10,11 +10,12 @@ const path      = require("path");
 const cron      = require("node-cron");
 
 const db        = require("./services/couchdb");
-const auth      = require("./middleware/auth");
+const auth      = require("./auth/middleware/auth");   // auth module
 const agraria   = require("./services/agraria");
+const authSvc   = require("./auth/services/auth_service");
 
 // Routes
-const routeAuth    = require("./routes/auth");
+const routeAuth    = require("./auth/routes/auth");    // auth module
 const routeSync    = require("./routes/sync");
 const routeLotes   = require("./routes/lotes");
 const routeAlertas = require("./routes/alertas");
@@ -120,6 +121,8 @@ async function start() {
   try {
     await db.bootstrap();
     console.log("[DB] ✓ CouchDB conectado y listo");
+    authSvc.setDB(db);
+    app.locals.globalDB = db.getDB("global");
   } catch (e) {
     console.error("[DB] ✗ No se pudo conectar a CouchDB:", e.message);
     console.error("    Verificá que CouchDB esté corriendo en", process.env.COUCHDB_URL);

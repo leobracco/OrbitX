@@ -366,6 +366,156 @@ canvas.spark { width:100%; height:100%; display:block; }
 .toast-body  { flex:1; }
 .toast-title { font-size:13px; font-weight:500; color:#fff; }
 .toast-sub   { font-size:11px; color:var(--muted2); margin-top:1px; }
+
+/* ══ RESPONSIVE / MOBILE ══════════════════════════
+   Breakpoints:
+   < 768px  → mobile: sidebar drawer, bottom nav
+   768-1024 → tablet: sidebar colapsada (solo íconos)
+   > 1024   → desktop: layout completo
+   ═════════════════════════════════════════════════ */
+
+/* ── Hamburger button (solo mobile) ── */
+.hamburger {
+  display:none;
+  width:36px; height:36px;
+  background:var(--surface2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  align-items:center; justify-content:center;
+  cursor:pointer; font-size:16px;
+  flex-shrink:0;
+}
+
+/* ── Sidebar overlay (mobile) ── */
+.sidebar-overlay {
+  display:none;
+  position:fixed; inset:0;
+  background:rgba(0,0,0,0.6);
+  z-index:89;
+  backdrop-filter:blur(2px);
+}
+.sidebar-overlay.open { display:block; }
+
+/* ── Tablet: sidebar colapsada (solo íconos) ── */
+@media (max-width:1024px) and (min-width:769px) {
+  :root { --sidebar:64px; }
+
+  .sidebar-logo { padding:16px 0; justify-content:center; }
+  .logo-name, .logo-badge { display:none; }
+  .logo-orb { margin:0; }
+
+  .sidebar-section { display:none; }
+
+  .nav-item { justify-content:center; padding:12px 0; }
+  .nav-item span:not(.nav-icon):not(.nav-count) { display:none; }
+  .nav-count { position:absolute; top:4px; right:6px; }
+  .nav-icon { width:auto; font-size:17px; opacity:1; }
+
+  .sidebar-footer { padding:12px 0; display:flex; justify-content:center; }
+  .server-status span, #srv-uptime { display:none; }
+
+  .kpi-grid { grid-template-columns:repeat(2,1fr); }
+  .g2 { grid-template-columns:1fr; }
+  .g3 { grid-template-columns:1fr; }
+  .device-grid { grid-template-columns:repeat(2,1fr); }
+  .form-grid { grid-template-columns:1fr; }
+
+  .topbar-time { display:none; }
+  .btn:not(.btn-primary):not(.btn-sm) { display:none; }
+}
+
+/* ── Mobile: sidebar como drawer ── */
+@media (max-width:768px) {
+  :root { --sidebar:280px; }
+
+  html, body { overflow:auto; }
+
+  .shell { flex-direction:column; height:auto; min-height:100vh; }
+
+  /* Sidebar fuera de pantalla por defecto */
+  .sidebar {
+    position:fixed; top:0; left:0; bottom:0;
+    z-index:90;
+    transform:translateX(-100%);
+    transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    width:var(--sidebar);
+    box-shadow:none;
+  }
+  .sidebar.open {
+    transform:translateX(0);
+    box-shadow:8px 0 40px rgba(0,0,0,0.6);
+  }
+
+  /* Cerrar sidebar al tocar un nav-item */
+  .nav-item { padding:12px 20px; font-size:14px; }
+
+  .main { width:100%; min-height:100vh; }
+
+  /* Topbar mobile */
+  .topbar {
+    height:52px;
+    padding:0 16px;
+    position:sticky; top:0; z-index:40;
+  }
+  .hamburger { display:flex; }
+  .topbar-time { display:none; }
+  .topbar-right .btn:not(.btn-primary) { display:none; }
+  .btn-primary { font-size:11px; padding:6px 12px; }
+
+  /* Content */
+  .content { padding:16px; overflow-y:visible; flex:none; }
+
+  /* KPI: 2 columnas en mobile */
+  .kpi-grid { grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:14px; }
+  .kpi { padding:14px; }
+  .kpi-val { font-size:24px; }
+  .kpi-label { font-size:9px; }
+  .kpi-delta { font-size:10px; }
+
+  /* Grids → una columna */
+  .g2 { grid-template-columns:1fr; gap:12px; }
+  .g3 { grid-template-columns:1fr; gap:12px; }
+
+  /* Device grid → 1 columna */
+  .device-grid { grid-template-columns:1fr; }
+
+  /* Tablas: scroll horizontal */
+  .card { overflow:visible; }
+  .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .data-table { min-width:520px; }
+  .data-table th, .data-table td { padding:9px 10px; font-size:11px; }
+
+  /* Form grid → 1 columna */
+  .form-grid { grid-template-columns:1fr; }
+  .field-full { grid-column:1; }
+
+  /* Endpoints API */
+  .endpoint { flex-wrap:wrap; gap:6px; }
+  .ep-desc { width:100%; margin-top:2px; }
+
+  /* CouchDB stats */
+  .couch-stat-grid { grid-template-columns:repeat(3,1fr); gap:6px; }
+  .couch-stat-val { font-size:16px; }
+
+  /* Toast → full width mobile */
+  .toasts { top:auto; bottom:16px; left:12px; right:12px; }
+  .toast { min-width:auto; width:100%; }
+
+  /* Log items */
+  .log-item { flex-wrap:wrap; }
+  .log-ts { width:100%; margin-top:2px; margin-left:16px; }
+
+  /* Page animation más rápida en mobile */
+  .page.active { animation-duration:0.2s; }
+}
+
+/* ── Extra pequeño (≤ 380px) ── */
+@media (max-width:380px) {
+  .kpi-grid { grid-template-columns:1fr 1fr; gap:8px; }
+  .kpi-val { font-size:20px; }
+  .btn-primary { font-size:10px; padding:5px 10px; }
+  .topbar-title { font-size:13px; }
+}
 </style>
 </head>
 <body>
@@ -406,9 +556,13 @@ canvas.spark { width:100%; height:100%; display:block; }
     </div>
   </aside>
 
+  <!-- Sidebar overlay (mobile tap-to-close) -->
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
   <!-- ══ MAIN ══ -->
   <div class="main">
     <div class="topbar">
+      <div class="hamburger" id="hamburger-btn" onclick="toggleSidebar()">☰</div>
       <div class="topbar-title" id="topbar-title">Dashboard</div>
       <div class="topbar-right">
         <div class="topbar-time" id="topbar-time"></div>
@@ -1050,6 +1204,40 @@ setInterval(()=>{
 
 // ── Init ─────────────────────────────────────────────────
 renderDashboard();
+
+// ── Mobile sidebar ───────────────────────────────────────
+function toggleSidebar() {
+  document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
+// Cerrar sidebar al navegar (mobile)
+const _origNav = nav;
+window.nav = function(id, el) {
+  _origNav(id, el);
+  closeSidebar();
+};
+
+// Wrap tables en .table-wrap para scroll horizontal
+function wrapTables() {
+  document.querySelectorAll('.card .data-table').forEach(t => {
+    if (!t.parentElement.classList.contains('table-wrap')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      t.parentNode.insertBefore(wrap, t);
+      wrap.appendChild(t);
+    }
+  });
+}
+
+// Observer para wrappear tablas cuando se renderizan
+const tableObserver = new MutationObserver(wrapTables);
+tableObserver.observe(document.body, { childList:true, subtree:true });
+wrapTables();
 </script>
 </body>
 </html>
