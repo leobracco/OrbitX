@@ -1,0 +1,210 @@
+<%# pages/mapa.ejs — Mapa de lotes AOG %>
+
+<div class="page-header">
+  <div>
+    <h2>Mapa de lotes</h2>
+    <p>Boundaries y cobertura sincronizados desde AgOpenGPS</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <div id="mapa-estado" style="font-size:11px;color:var(--muted2)">Cargando...</div>
+    <button class="btn btn-ghost" onclick="cargarMapa()">↻ Actualizar</button>
+    <% if (user.rol_global === 'superadmin') { %>
+    <select id="filtro-estab" class="btn btn-ghost" style="padding:6px 10px;font-size:12px"
+      onchange="cargarMapa()">
+      <option value="">Todos los establecimientos</option>
+      <% establecimientos.forEach(e => { %>
+      <option value="<%= e.slug %>"><%= e.nombre %></option>
+      <% }) %>
+    </select>
+    <% } %>
+  </div>
+</div>
+
+<!-- Mapa -->
+<div style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
+  <div id="mapa" style="height:520px;width:100%;background:var(--surface2)"></div>
+
+  <!-- Leyenda -->
+  <div style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.75);border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;color:#fff;line-height:2">
+    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:14px;height:3px;background:#b8ff3c"></span> Boundary</div>
+    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:14px;height:10px;background:rgba(60,158,255,0.4);border:1px solid #3c9eff"></span> Cobertura aplicada</div>
+    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:8px;height:8px;background:#f59e0b;border-radius:50%"></span> Origen GPS</div>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="mapa-loading" style="position:absolute;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:2000">
+    <div style="color:#fff;font-size:14px">Cargando lotes...</div>
+  </div>
+</div>
+
+<!-- Lista de lotes debajo -->
+<div id="lotes-lista" style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<script>
+let mapa = null;
+let layers = [];
+
+function initMapa() {
+  if (mapa) return;
+  mapa = L.map("mapa", { zoomControl:true }).setView([-34.6, -60.0], 10);
+
+  // Capa satelital
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Esri World Imagery",
+    maxZoom: 20,
+  }).addTo(mapa);
+
+  // Capa de etiquetas encima
+  L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 20, opacity: 0.7,
+  }).addTo(mapa);
+}
+
+async function cargarMapa() {
+  initMapa();
+  document.getElementById('mapa-loading').style.display = 'flex';
+  document.getElementById('mapa-estado').textContent = 'Cargando...';
+
+  // Limpiar capas anteriores
+  layers.forEach(l => mapa.removeLayer(l));
+  layers = [];
+
+  try {
+    const estab  = document.getElementById('filtro-estab')?.value || '';
+    const url    = '/api/aog/mapa' + (estab ? '?estab='+estab : '');
+    const lotes  = await Auth.get(url);
+
+    if (!lotes.length) {
+      document.getElementById('mapa-estado').textContent = 'Sin lotes con boundary';
+      document.getElementById('mapa-loading').style.display = 'none';
+      return;
+    }
+
+    const bounds = [];
+    const listaHtml = [];
+
+    lotes.forEach((lote, i) => {
+      const nombre  = lote.nombre || '?';
+      const color   = '#b8ff3c';
+      let centroLat = null, centroLon = null;
+
+      // Polígono boundary
+      if (lote.boundary && lote.boundary.length > 2) {
+        const poly = L.polygon(lote.boundary, {
+          color,
+          weight:      2,
+          opacity:     0.9,
+          fillColor:   color,
+          fillOpacity: 0.08,
+        }).addTo(mapa);
+
+        poly.bindTooltip(`<b>${nombre}</b>`, { permanent:false, direction:'center' });
+        poly.on('click', () => destacarLote(i));
+        layers.push(poly);
+
+        lote.boundary.forEach(([lat,lon]) => bounds.push([lat,lon]));
+
+        // Centro del polígono
+        const center = poly.getBounds().getCenter();
+        centroLat = center.lat;
+        centroLon = center.lng;
+      }
+
+      // Cobertura (sections)
+      if (lote.sections) {
+        lote.sections.forEach(rect => {
+          const r = L.polygon(rect, {
+            color:       '#3c9eff',
+            weight:      0.5,
+            opacity:     0.6,
+            fillColor:   '#3c9eff',
+            fillOpacity: 0.35,
+          }).addTo(mapa);
+          layers.push(r);
+        });
+      }
+
+      // Marcador de origen
+      if (lote.origen) {
+        const marker = L.circleMarker([lote.origen.lat, lote.origen.lon], {
+          radius:      5,
+          color:       '#f59e0b',
+          fillColor:   '#f59e0b',
+          fillOpacity: 1,
+          weight:      1,
+        }).addTo(mapa);
+        marker.bindTooltip(`${nombre} — origen GPS`);
+        layers.push(marker);
+        centroLat = centroLat || lote.origen.lat;
+        centroLon = centroLon || lote.origen.lon;
+        bounds.push([lote.origen.lat, lote.origen.lon]);
+      }
+
+      // Etiqueta con nombre en el centro
+      if (centroLat && centroLon) {
+        const label = L.marker([centroLat, centroLon], {
+          icon: L.divIcon({
+            className: '',
+            html: `<div style="background:rgba(0,0,0,0.65);color:#b8ff3c;padding:2px 7px;border-radius:4px;font-size:11px;white-space:nowrap;font-family:monospace">${nombre}</div>`,
+            iconAnchor: [0, 0],
+          }),
+          interactive: false,
+        }).addTo(mapa);
+        layers.push(label);
+      }
+
+      // Card en la lista
+      const secciones = lote.sections ? lote.sections.length : 0;
+      listaHtml.push(`
+        <div id="lote-card-${i}" onclick="irALote(${i})"
+          style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s">
+          <div style="font-family:monospace;font-size:12px;color:var(--lime);margin-bottom:4px">${nombre}</div>
+          <div style="font-size:11px;color:var(--muted2)">
+            ${lote.boundary ? '⬡ Boundary' : '○ Sin boundary'} ·
+            ${secciones ? '▦ '+secciones+' sec.' : ''}
+            ${lote.origen ? '📍 GPS' : ''}
+          </div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px">${lote.estab_slug||'unassigned'}</div>
+        </div>`);
+    });
+
+    document.getElementById('lotes-lista').innerHTML = listaHtml.join('');
+
+    // Ajustar vista
+    if (bounds.length) mapa.fitBounds(bounds, { padding:[30,30], maxZoom:16 });
+
+    document.getElementById('mapa-estado').textContent = `${lotes.length} lote${lotes.length!==1?'s':''} cargado${lotes.length!==1?'s':''}`;
+
+    // Guardar lotes para navegación
+    window._lotesData = lotes;
+
+  } catch(e) {
+    document.getElementById('mapa-estado').textContent = 'Error: ' + e.message;
+  }
+
+  document.getElementById('mapa-loading').style.display = 'none';
+}
+
+function irALote(i) {
+  const lote = window._lotesData?.[i];
+  if (!lote) return;
+  if (lote.boundary?.length) {
+    mapa.fitBounds(lote.boundary, { padding:[40,40], maxZoom:17 });
+  } else if (lote.origen) {
+    mapa.setView([lote.origen.lat, lote.origen.lon], 15);
+  }
+  // Destacar card
+  document.querySelectorAll('[id^="lote-card-"]').forEach(c => c.style.borderColor = 'var(--border)');
+  const card = document.getElementById('lote-card-'+i);
+  if (card) { card.style.borderColor = 'var(--lime)'; card.scrollIntoView({ behavior:'smooth', block:'nearest' }); }
+}
+
+function destacarLote(i) { irALote(i); }
+
+// Cargar al abrir la página
+document.addEventListener('DOMContentLoaded', cargarMapa);
+</script>

@@ -19,6 +19,8 @@ const routeAlertas = require("./routes/alertas");
 const routeConfig  = require("./routes/config");
 const routeAdmin   = require("./routes/admin");
 const routePanel   = require("./routes/panel");   // SSR panel
+const routeAOG     = require("./routes/aog");
+const { router: routeDevices } = require("./routes/devices");
 
 const app    = express();
 const server = http.createServer(app);
@@ -75,6 +77,23 @@ app.use("/api/lotes",   auth.required, routeLotes);
 app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config",  auth.required, routeConfig);
 app.use("/api/admin",   auth.required, auth.adminOnly, routeAdmin);
+// /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
+// resto con JWT (panel web)
+app.use("/api/aog", (req, res, next) => {
+  const sinJWT = (req.method === "POST" && req.path === "/sync") ||
+                 (req.method === "GET"  && req.path.startsWith("/pendientes-descarga"));
+  if (sinJWT) return next();
+  return auth.required(req, res, next);
+}, routeAOG);
+// Rutas del agente (sin JWT — usan X-Auth-Token de dispositivo)
+// /api/devices: heartbeat sin JWT, resto con JWT
+// El router de devices maneja internamente deviceAuth para el heartbeat
+app.use("/api/devices", (req, res, next) => {
+  // Heartbeat no requiere JWT — tiene su propio auth (deviceAuth) dentro del router
+  if (req.method === "POST" && req.path === "/heartbeat") return next();
+  // Sync AOG tampoco requiere JWT
+  return auth.required(req, res, next);
+}, routeDevices);
 
 app.get("/health", async (req, res) => {
   const couchOk = await db.ping();
@@ -111,6 +130,7 @@ async function start() {
     console.log("[DB] ✓ CouchDB conectado");
     authSvc.setDB(db);
     app.locals.globalDB = db.getDB("global");
+
   } catch(e) {
     console.error("[DB] ✗", e.message);
     process.exit(1);

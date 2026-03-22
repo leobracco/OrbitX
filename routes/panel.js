@@ -22,6 +22,15 @@ function requireSuperadmin(req, res, next) {
   next();
 }
 
+// Formatea nombre de lote: "2025-06-12 13-58" → "12/06/2025 13:58"
+function fmtLoteNombre(nombre) {
+  if (!nombre) return "–";
+  // Formato fecha AOG: "YYYY-MM-DD HH-mm"
+  const m = nombre.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2})-(\d{2})$/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  return nombre;
+}
+
 function base(req, extra = {}) {
   return { user: req.jwtUser, activeNav: req.path, regBadge: 0, alertasBadge: 0, ...extra };
 }
@@ -165,20 +174,17 @@ router.get("/alertas", requireAuth, async (req, res) => {
 // ── DISPOSITIVOS ─────────────────────────────────────────
 router.get("/dispositivos", requireAuth, async (req, res) => {
   const db = req.app.locals.globalDB;
-  let dispositivos = [];
+  let dispositivos = [], establecimientos = [];
   try {
-    const orgs = (await getAllDocs(db)).filter(d => d.tipo==="org");
-    const nano = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
-    for (const org of orgs) {
-      try {
-        const estabDB = nano.db.use(`orbitx_${org.slug}`);
-        const r = await estabDB.find({ selector:{ tipo:"nodo" }, limit:50 });
-        r.docs.forEach(d => { d.orgSlug = org.slug; d.estab_nombre = org.nombre; dispositivos.push(d); });
-      } catch {}
-    }
+    const docs   = await getAllDocs(db);
+    const ahora  = Date.now();
+    dispositivos = docs
+      .filter(d => d.tipo === "device")
+      .map(d => ({ ...d, online: d.ultimo_visto && (ahora - d.ultimo_visto) < 2*60*1000 }));
+    establecimientos = docs.filter(d => d.tipo === "org").map(e => ({ slug:e.slug, nombre:e.nombre }));
   } catch(e) { console.error("[Panel/dispositivos]", e.message); }
   const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos });
+  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos });
 });
 
 // ── COUCHDB ──────────────────────────────────────────────
@@ -200,6 +206,100 @@ router.get("/couchdb", requireAuth, requireSuperadmin, async (req, res) => {
     couchInfo.docs = total.toLocaleString("es-AR");
   } catch(e) { console.error("[Panel/couchdb]", e.message); }
   res.render("layout", { ...base(req), title:"CouchDB", page:"couchdb", couchInfo });
+});
+
+// ── VEHICULOS ────────────────────────────────────────────────
+router.get("/vehiculos", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const { parseVehicleXML, formatearVehiculo } = require("../services/aog_vehicle_parser");
+  let vehiculos = [], vehiculosRaw = [];
+
+  try {
+    const nano   = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
+    const allDBs = await nano.db.list();
+    const slugs  = allDBs
+      .filter(n => n.startsWith("orbitx_"))
+      .map(n => n.replace("orbitx_",""));
+
+    for (const slug of slugs) {
+      try {
+        const estabDB = nano.db.use(`orbitx_${slug}`);
+        let docs = [];
+        try {
+          const r = await estabDB.find({ selector:{ tipo:"aog_archivo", subtipo:"vehicle_config" }, limit:20 });
+          docs = r.docs;
+        } catch {
+          const all = await estabDB.list({ include_docs:true });
+          docs = all.rows.map(r=>r.doc).filter(d=>d.tipo==="aog_archivo"&&d.subtipo==="vehicle_config");
+        }
+        docs.forEach(d => {
+          const raw    = parseVehicleXML(d.contenido);
+          const grupos = formatearVehiculo(raw);
+          vehiculos.push({ nombre:raw?.name||raw?.Name||d.nombre, nombre_archivo:d.nombre, device_id:d.device_id, estab_slug:slug, ts:d.ts, grupos, ruta_rel:d.ruta_rel });
+          vehiculosRaw.push({ nombre_archivo:d.nombre, ruta_rel:d.ruta_rel||"" });
+        });
+      } catch {}
+    }
+  } catch(e) { console.error("[Panel/vehiculos]", e.message); }
+
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", { ...base(req, { regBadge }), title:"Vehículos", page:"vehiculos", vehiculos, vehiculosRaw });
+});
+
+// ── MAPA ─────────────────────────────────────────────────────
+router.get("/mapa", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  let establecimientos = [];
+  try {
+    const docs = await getAllDocs(db);
+    establecimientos = docs.filter(d => d.tipo==="org").map(e => ({ slug:e.slug, nombre:e.nombre }));
+  } catch {}
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", { ...base(req, { regBadge }), title:"Mapa de lotes", page:"mapa", establecimientos });
+});
+
+// ── AOG ─────────────────────────────────────────────────────
+router.get("/aog", requireAuth, async (req, res) => {
+  const estabSlug = req.jwtUser?.estabSlug;
+  let stats = { total_archivos:0, lotes_count:0, lotes:[], ultimo_sync:0, tiene_vehicle:false, tipos:{} };
+  let lotes = [];
+
+  if (estabSlug && estabSlug !== "null") {
+    try {
+      const nano    = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
+      const estabDB = nano.db.use(`orbitx_${estabSlug}`);
+      let docs = [];
+      try {
+        const r = await estabDB.find({ selector:{ tipo:"aog_archivo" }, limit:1000 });
+        docs = r.docs;
+      } catch {
+        const all = await estabDB.list({ include_docs:true });
+        docs = all.rows.map(r=>r.doc).filter(d=>d.tipo==="aog_archivo");
+      }
+      const lotesMap = {};
+      docs.forEach(d => {
+        if (d.es_lote) {
+          const n = d.lote_nombre||"?";
+          if (!lotesMap[n]) lotesMap[n] = { nombre:n, archivos:[], tiene_boundary:false, tiene_field:false, ts_ultimo:0 };
+          lotesMap[n].archivos.push({ tipo:d.subtipo, nombre:d.nombre, ts:d.ts, tamaño:d.tamaño });
+          if (d.subtipo==="boundary"||d.subtipo==="boundary_kml") lotesMap[n].tiene_boundary = true;
+          if (d.subtipo==="field_origin"&&d.parsed) { lotesMap[n].tiene_field=true; lotesMap[n].origen=d.parsed; }
+          if (d.ts>lotesMap[n].ts_ultimo) lotesMap[n].ts_ultimo=d.ts;
+        }
+        if (d.ts > stats.ultimo_sync) stats.ultimo_sync = d.ts;
+        stats.tipos[d.subtipo] = (stats.tipos[d.subtipo]||0)+1;
+      });
+      lotes = Object.values(lotesMap).sort((a,b)=>b.ts_ultimo-a.ts_ultimo);
+      stats.total_archivos = docs.length;
+      stats.lotes_count    = lotes.length;
+      stats.lotes          = lotes.map(l=>l.nombre);
+      stats.tiene_vehicle  = docs.some(d=>d.subtipo==="vehicle_config");
+    } catch(e) { console.error("[Panel/aog]", e.message); }
+  }
+
+  const aogPath = process.env.AOG_PATH || "C:/AgOpenGPS";
+  const regBadge = await getRegBadge(req.app.locals.globalDB).catch(()=>0);
+  res.render("layout", { ...base(req, { regBadge }), title:"AgOpenGPS", page:"aog", stats, lotes, aogPath, fmtLoteNombre });
 });
 
 // ── CONFIG ───────────────────────────────────────────────

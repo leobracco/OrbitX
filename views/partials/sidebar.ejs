@@ -30,6 +30,9 @@
     <% if (user && user.rol_global === 'superadmin') { %>
     <%- navItem('/couchdb', '🗄', 'CouchDB', activeNav) %>
     <% } %>
+    <%- navItem('/mapa',   '🗺', 'Mapa',          activeNav) %>
+    <%- navItem('/vehiculos','🚜','Vehículos',     activeNav) %>
+    <%- navItem('/aog',    '🛰', 'AgOpenGPS',     activeNav) %>
     <%- navItem('/config', '⚙', 'Configuración', activeNav) %>
   </nav>
 
