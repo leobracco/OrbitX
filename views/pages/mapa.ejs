@@ -69,98 +69,17 @@ async function cargarMapa() {
   document.getElementById('mapa-loading').style.display = 'flex';
   document.getElementById('mapa-estado').textContent = 'Cargando...';
 
-  // Limpiar capas anteriores
-  layers.forEach(l => mapa.removeLayer(l));
-  layers = [];
-
   try {
-    const estab  = document.getElementById('filtro-estab')?.value || '';
-    const url    = '/api/aog/mapa' + (estab ? '?estab='+estab : '');
-    const lotes  = await Auth.get(url);
+    const estab = document.getElementById('filtro-estab')?.value || '';
+    const url   = '/api/aog/mapa' + (estab ? '?estab='+estab : '');
+    const lotes = await Auth.get(url);
 
-    if (!lotes.length) {
-      document.getElementById('mapa-estado').textContent = 'Sin lotes con boundary';
-      document.getElementById('mapa-loading').style.display = 'none';
-      return;
-    }
-
-    const bounds = [];
     const listaHtml = [];
-
     lotes.forEach((lote, i) => {
-      const nombre  = lote.nombre || '?';
-      const color   = '#b8ff3c';
-      let centroLat = null, centroLon = null;
-
-      // Polígono boundary
-      if (lote.boundary && lote.boundary.length > 2) {
-        const poly = L.polygon(lote.boundary, {
-          color,
-          weight:      2,
-          opacity:     0.9,
-          fillColor:   color,
-          fillOpacity: 0.08,
-        }).addTo(mapa);
-
-        poly.bindTooltip(`<b>${nombre}</b>`, { permanent:false, direction:'center' });
-        poly.on('click', () => destacarLote(i));
-        layers.push(poly);
-
-        lote.boundary.forEach(([lat,lon]) => bounds.push([lat,lon]));
-
-        // Centro del polígono
-        const center = poly.getBounds().getCenter();
-        centroLat = center.lat;
-        centroLon = center.lng;
-      }
-
-      // Cobertura (sections)
-      if (lote.sections) {
-        lote.sections.forEach(rect => {
-          const r = L.polygon(rect, {
-            color:       '#3c9eff',
-            weight:      0.5,
-            opacity:     0.6,
-            fillColor:   '#3c9eff',
-            fillOpacity: 0.35,
-          }).addTo(mapa);
-          layers.push(r);
-        });
-      }
-
-      // Marcador de origen
-      if (lote.origen) {
-        const marker = L.circleMarker([lote.origen.lat, lote.origen.lon], {
-          radius:      5,
-          color:       '#f59e0b',
-          fillColor:   '#f59e0b',
-          fillOpacity: 1,
-          weight:      1,
-        }).addTo(mapa);
-        marker.bindTooltip(`${nombre} — origen GPS`);
-        layers.push(marker);
-        centroLat = centroLat || lote.origen.lat;
-        centroLon = centroLon || lote.origen.lon;
-        bounds.push([lote.origen.lat, lote.origen.lon]);
-      }
-
-      // Etiqueta con nombre en el centro
-      if (centroLat && centroLon) {
-        const label = L.marker([centroLat, centroLon], {
-          icon: L.divIcon({
-            className: '',
-            html: `<div style="background:rgba(0,0,0,0.65);color:#b8ff3c;padding:2px 7px;border-radius:4px;font-size:11px;white-space:nowrap;font-family:monospace">${nombre}</div>`,
-            iconAnchor: [0, 0],
-          }),
-          interactive: false,
-        }).addTo(mapa);
-        layers.push(label);
-      }
-
-      // Card en la lista
+      const nombre   = lote.nombre || '?';
       const secciones = lote.sections ? lote.sections.length : 0;
       listaHtml.push(`
-        <div id="lote-card-${i}" onclick="irALote(${i})"
+        <div id="lote-card-${i}" onclick="cargarLote(${i})"
           style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s">
           <div style="font-family:monospace;font-size:12px;color:var(--lime);margin-bottom:4px">${nombre}</div>
           <div style="font-size:11px;color:var(--muted2)">
@@ -173,13 +92,7 @@ async function cargarMapa() {
     });
 
     document.getElementById('lotes-lista').innerHTML = listaHtml.join('');
-
-    // Ajustar vista
-    if (bounds.length) mapa.fitBounds(bounds, { padding:[30,30], maxZoom:16 });
-
-    document.getElementById('mapa-estado').textContent = `${lotes.length} lote${lotes.length!==1?'s':''} cargado${lotes.length!==1?'s':''}`;
-
-    // Guardar lotes para navegación
+    document.getElementById('mapa-estado').textContent = `${lotes.length} lote${lotes.length!==1?'s':''}`;
     window._lotesData = lotes;
 
   } catch(e) {
@@ -189,6 +102,72 @@ async function cargarMapa() {
   document.getElementById('mapa-loading').style.display = 'none';
 }
 
+function cargarLote(i) {
+  const lote = window._lotesData?.[i];
+  if (!lote) return;
+
+  // Destacar card
+  document.querySelectorAll('[id^="lote-card-"]').forEach(c => c.style.borderColor = 'var(--border)');
+  document.getElementById('lote-card-'+i).style.borderColor = 'var(--lime)';
+
+  // Limpiar capas anteriores
+  layers.forEach(l => mapa.removeLayer(l));
+  layers = [];
+
+  const nombre = lote.nombre || '?';
+  const color  = '#b8ff3c';
+  const bounds = [];
+  let centroLat = null, centroLon = null;
+
+  // Boundary
+  if (lote.boundary?.length > 2) {
+    const poly = L.polygon(lote.boundary, {
+      color, weight:2, opacity:0.9, fillColor:color, fillOpacity:0.08,
+    }).addTo(mapa);
+    poly.bindTooltip(`<b>${nombre}</b>`, { permanent:false, direction:'center' });
+    layers.push(poly);
+    lote.boundary.forEach(([lat,lon]) => bounds.push([lat,lon]));
+    const center = poly.getBounds().getCenter();
+    centroLat = center.lat; centroLon = center.lng;
+  }
+
+  // Sections
+  if (lote.sections) {
+    lote.sections.forEach(rect => {
+      const r = L.polygon(rect, {
+        color:'#3c9eff', weight:0.5, opacity:0.6, fillColor:'#3c9eff', fillOpacity:0.35,
+      }).addTo(mapa);
+      layers.push(r);
+    });
+  }
+
+  // Origen
+  if (lote.origen) {
+    const marker = L.circleMarker([lote.origen.lat, lote.origen.lon], {
+      radius:5, color:'#f59e0b', fillColor:'#f59e0b', fillOpacity:1, weight:1,
+    }).addTo(mapa);
+    marker.bindTooltip(`${nombre} — origen GPS`);
+    layers.push(marker);
+    bounds.push([lote.origen.lat, lote.origen.lon]);
+    centroLat = centroLat || lote.origen.lat;
+    centroLon = centroLon || lote.origen.lon;
+  }
+
+  // Etiqueta
+  if (centroLat && centroLon) {
+    const label = L.marker([centroLat, centroLon], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="background:rgba(0,0,0,0.65);color:#b8ff3c;padding:2px 7px;border-radius:4px;font-size:11px;white-space:nowrap;font-family:monospace">${nombre}</div>`,
+        iconAnchor:[0,0],
+      }), interactive:false,
+    }).addTo(mapa);
+    layers.push(label);
+  }
+
+  if (bounds.length) mapa.fitBounds(bounds, { padding:[30,30], maxZoom:17 });
+  document.getElementById('mapa-estado').textContent = nombre;
+}
 function irALote(i) {
   const lote = window._lotesData?.[i];
   if (!lote) return;
