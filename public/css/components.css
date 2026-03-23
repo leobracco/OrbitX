@@ -1,5 +1,8 @@
 /* components.css — Componentes UI reutilizables OrbitX */
-
+/* ══ MAPA ════════════════════════════════════════════════ */
+.leaflet-container {
+  background: #050810 !important;
+}
 /* ══ LAYOUT ════════════════════════════════════════════════ */
 .shell  { display: flex; height: 100vh; position: relative; z-index: 1; }
 .main   { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
