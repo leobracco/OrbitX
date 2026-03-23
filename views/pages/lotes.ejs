@@ -1,0 +1,63 @@
+<%# pages/lotes.ejs — Lotes de Piloto Agro Parallel %>
+
+<div class="page-header">
+  <div>
+    <h2>Lotes</h2>
+    <p><%= lotes.length %> lote<%= lotes.length !== 1 ? 's' : '' %> sincronizados desde el Piloto</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/lotes" class="btn">↻ Actualizar</a>
+    <a href="/mapa" class="btn btn-ghost">🗺 Ver en mapa</a>
+  </div>
+</div>
+
+<% if (!lotes || !lotes.length) { %>
+  <div class="empty-state">
+    <span class="icon">🌾</span>
+    <p>No hay lotes sincronizados.<br>
+    Instalá el agente en el tractor y asignalo a un establecimiento.</p>
+  </div>
+<% } else { %>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Lote</th>
+          <th>Establecimiento</th>
+          <th>Boundary</th>
+          <th>Cobertura</th>
+          <th>Archivos</th>
+          <th>Último sync</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% lotes.forEach(l => { %>
+        <tr>
+          <td class="td-main"><%= l.nombre %></td>
+          <td><span class="badge badge-blue"><%= l.orgSlug %></span></td>
+          <td>
+            <span class="badge <%= l.tiene_boundary ? 'badge-lime' : 'badge-gray' %>">
+              <%= l.tiene_boundary ? '✓ Sí' : '✗ No' %>
+            </span>
+          </td>
+          <td>
+            <span class="badge <%= l.tiene_sections ? 'badge-blue' : 'badge-gray' %>">
+              <%= l.tiene_sections ? '✓ Sí' : '–' %>
+            </span>
+          </td>
+          <td class="td-mono" style="color:var(--muted2)"><%= l.archivos.length %></td>
+          <td class="td-dim" style="font-size:11px"><%= fmtDate(l.ts_ultimo) %></td>
+          <td>
+            <a href="/mapa" class="btn btn-sm btn-ghost">🗺 Ver</a>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>

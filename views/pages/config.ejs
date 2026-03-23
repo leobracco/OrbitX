@@ -1,0 +1,95 @@
+<%# pages/config.ejs %>
+
+<div class="page-header">
+  <div><h2>Configuración</h2><p>Parámetros del servidor OrbitX</p></div>
+</div>
+
+<div class="g2">
+
+  <div class="card">
+    <div class="card-head"><span class="card-title">Servidor</span></div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="field"><label>Puerto</label><input value="<%= config.port || 4000 %>" readonly/></div>
+        <div class="field"><label>Entorno</label>
+          <input value="<%= config.nodeEnv || 'production' %>" readonly/>
+        </div>
+        <div class="field field-full"><label>CORS Origin</label>
+          <input value="<%= config.corsOrigin || '*' %>" readonly/>
+        </div>
+        <div class="field field-full"><label>JWT Secret</label>
+          <input type="password" value="••••••••••••••••" readonly/>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="card-title">CouchDB</span></div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="field field-full"><label>URL</label>
+          <input value="<%= config.couchUrl || 'http://localhost:5984' %>" readonly/>
+        </div>
+        <div class="field"><label>Prefijo de DBs</label><input value="orbitx_" readonly/></div>
+        <div class="field"><label>DB Global</label><input value="orbitx_global" readonly/></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="card-title">agrarIA (Anthropic)</span></div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="field field-full"><label>API Key</label>
+          <input type="password" value="<%= config.hasAnthropicKey ? '••••••••••••sk-ant-••••' : 'No configurada' %>" readonly
+            style="<%= !config.hasAnthropicKey ? 'border-color:rgba(255,68,68,0.4);color:var(--red)' : '' %>"/>
+        </div>
+        <div class="field"><label>Modelo</label>
+          <input value="claude-sonnet-4-20250514" readonly/>
+        </div>
+        <div class="field"><label>Resumen diario</label>
+          <input value="19:00 (America/Argentina/Cordoba)" readonly/>
+        </div>
+      </div>
+      <% if (!config.hasAnthropicKey) { %>
+      <div class="alert info show" style="margin-top:12px">
+        Agregá ANTHROPIC_API_KEY al archivo .env para habilitar agrarIA
+      </div>
+      <% } %>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="card-title">Autenticación de dispositivos</span></div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="field field-full"><label>Device Master Token</label>
+          <input type="password" value="••••••••••••••••" readonly/>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;color:var(--muted2);line-height:1.8">
+        💡 Los tractores se autentican con
+        <span style="color:var(--lime);font-family:var(--font-m)">X-Device-ID</span> +
+        <span style="color:var(--lime);font-family:var(--font-m)">X-Auth-Token</span>.
+        No necesitan JWT.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-top:4px">
+  <div style="font-family:var(--font-h);font-size:13px;color:#fff;margin-bottom:10px">Variables de entorno (.env)</div>
+  <div style="font-family:var(--font-m);font-size:11px;color:var(--muted2);line-height:2">
+    <% const envVars = ['PORT','COUCHDB_URL','JWT_SECRET','DEVICE_MASTER_TOKEN','ANTHROPIC_API_KEY','CORS_ORIGIN','BASE_URL']; %>
+    <% envVars.forEach(v => { %>
+    <div style="display:flex;gap:12px">
+      <span style="color:var(--lime);min-width:180px"><%= v %></span>
+      <span style="color:<%= config.envSet && config.envSet[v] ? 'var(--lime)' : 'var(--red)' %>">
+        <%= config.envSet && config.envSet[v] ? '✓ Configurada' : '✗ No configurada' %>
+      </span>
+    </div>
+    <% }) %>
+  </div>
+</div>

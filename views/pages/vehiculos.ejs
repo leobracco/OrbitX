@@ -1,0 +1,123 @@
+<%# pages/vehiculos.ejs — Vehículos del Piloto %>
+
+<div class="page-header">
+  <div>
+    <h2>Vehículos</h2>
+    <p>Configuración sincronizada desde el Piloto</p>
+  </div>
+  <a href="/vehiculos" class="btn">↻ Actualizar</a>
+</div>
+
+<% if (!vehiculos || !vehiculos.length) { %>
+  <div class="empty-state">
+    <span class="icon">🚜</span>
+    <p>No hay vehículos sincronizados.<br>
+    Guardá la configuración del vehículo en el Piloto<br>
+    y el agente la subirá automáticamente.</p>
+  </div>
+<% } else { %>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+  <% vehiculos.forEach((v, vi) => { %>
+  <div class="card" style="display:flex;flex-direction:column">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="width:40px;height:40px;border-radius:10px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🚜</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-h);font-size:14px;color:#fff"><%= v.nombre || v.nombre_archivo %></div>
+        <div style="font-size:11px;color:var(--muted2);margin-top:2px">
+          <%= v.estab_slug %> · <%= v.device_id || '–' %> · <%= fmtDate(v.ts) %>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-ghost" onclick="toggleDetalle(<%= vi %>)">Ver todo</button>
+    </div>
+
+    <!-- Grupos de parámetros -->
+    <div style="padding:12px 16px;flex:1">
+      <% v.grupos.forEach((g, gi) => { %>
+        <% if (gi === 0 || gi < 3) { %>
+        <div style="margin-bottom:10px" id="grupo-<%= vi %>-<%= gi %>">
+          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px"><%= g.grupo %></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <% g.filas.forEach(f => { %>
+            <div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border-radius:6px;padding:5px 8px;gap:6px">
+              <span style="font-size:11px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><%= f.label %></span>
+              <span style="font-family:var(--font-m);font-size:12px;color:var(--lime);flex-shrink:0">
+                <%= typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : f.valor %>
+                <% if (f.unidad) { %><span style="color:var(--muted2);font-size:10px"><%= f.unidad %></span><% } %>
+              </span>
+            </div>
+            <% }) %>
+          </div>
+        </div>
+        <% } %>
+        <% if (gi >= 3) { %>
+        <div class="detalle-extra-<%= vi %>" style="display:none;margin-bottom:10px">
+          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px"><%= g.grupo %></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <% g.filas.forEach(f => { %>
+            <div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border-radius:6px;padding:5px 8px;gap:6px">
+              <span style="font-size:11px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><%= f.label %></span>
+              <span style="font-family:var(--font-m);font-size:12px;color:var(--lime);flex-shrink:0">
+                <%= typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : f.valor %>
+                <% if (f.unidad) { %><span style="color:var(--muted2);font-size:10px"><%= f.unidad %></span><% } %>
+              </span>
+            </div>
+            <% }) %>
+          </div>
+        </div>
+        <% } %>
+      <% }) %>
+    </div>
+
+    <!-- Footer: XML crudo -->
+    <div style="padding:0 16px 14px">
+      <button class="btn btn-ghost" style="width:100%;font-size:11px"
+        onclick="verXML('<%= vi %>')">
+        Ver XML completo
+      </button>
+    </div>
+
+  </div>
+  <% }) %>
+</div>
+
+<% } %>
+
+<!-- Modal XML -->
+<div class="modal-backdrop" id="modal-xml">
+  <div class="modal" style="width:680px;max-height:88vh;display:flex;flex-direction:column">
+    <div class="modal-title" id="modal-xml-nombre">–</div>
+    <div class="modal-sub">Archivo XML del Piloto</div>
+    <pre id="modal-xml-content"
+      style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--font-m);font-size:11px;color:var(--text);overflow:auto;flex:1;white-space:pre-wrap;word-break:break-all;min-height:120px">
+    </pre>
+    <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-xml')">Cerrar</button>
+  </div>
+</div>
+
+<script>
+const _vehiculosData = <%- JSON.stringify(vehiculosRaw) %>;
+
+function toggleDetalle(vi) {
+  const extras = document.querySelectorAll(`.detalle-extra-${vi}`);
+  const btn    = event.target;
+  const oculto = extras[0]?.style.display === 'none';
+  extras.forEach(e => e.style.display = oculto ? 'block' : 'none');
+  btn.textContent = oculto ? 'Menos' : 'Ver todo';
+}
+
+async function verXML(vi) {
+  const v = _vehiculosData[vi];
+  if (!v) return;
+  document.getElementById('modal-xml-nombre').textContent = v.nombre_archivo;
+  openModal('modal-xml');
+  try {
+    const d = await Auth.get('/api/aog/archivo?ruta=' + encodeURIComponent(v.ruta_rel));
+    document.getElementById('modal-xml-content').textContent = d.contenido || '(vacío)';
+  } catch(e) {
+    document.getElementById('modal-xml-content').textContent = 'Error: ' + e.message;
+  }
+}
+</script>

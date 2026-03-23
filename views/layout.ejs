@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <%- include('partials/head', { title, extraCss: typeof extraCss !== 'undefined' ? extraCss : undefined }) %>
+  <%# Scripts globales en el head para que estén disponibles en onclick inline %>
+  <script src="/js/auth.js"></script>
+  <script src="/js/app.js"></script>
+</head>
+<body>
+
+<div class="shell">
+  <%- include('partials/sidebar', { user, activeNav, regBadge: typeof regBadge !== 'undefined' ? regBadge : 0, alertasBadge: typeof alertasBadge !== 'undefined' ? alertasBadge : 0 }) %>
+
+  <div class="main">
+    <%- include('partials/topbar', { title, topbarActions: typeof topbarActions !== 'undefined' ? topbarActions : '' }) %>
+
+    <div class="content">
+      <%- include('pages/' + page, locals) %>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<% if (typeof extraJs !== 'undefined') { %>
+  <script src="/js/<%= extraJs %>"></script>
+<% } %>
+
+</body>
+</html>

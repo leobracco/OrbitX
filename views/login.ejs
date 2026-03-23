@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <%- include('partials/head', { title:'Ingresar' }) %>
+</head>
+<body>
+
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;position:relative;z-index:1">
+  <div style="width:100%;max-width:420px;background:rgba(13,18,32,0.9);border:1px solid var(--border2);border-radius:20px;padding:34px 30px;backdrop-filter:blur(20px)">
+
+    <!-- Logo -->
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:28px">
+      <svg width="32" height="32" viewBox="0 0 30 30" fill="none">
+        <circle cx="15" cy="15" r="3.5" fill="#B8FF3C"/>
+        <circle cx="15" cy="15" r="7" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
+        <ellipse cx="15" cy="15" rx="13" ry="5.5" stroke="#B8FF3C" stroke-width="1" opacity="0.65" transform="rotate(-25 15 15)"/>
+        <circle cx="22" cy="9" r="1.8" fill="#3C9EFF"/>
+      </svg>
+      <span style="font-family:var(--font-h);font-size:20px;font-weight:800;color:#fff">Orbit<em style="color:#B8FF3C;font-style:normal">X</em></span>
+      <span style="margin-left:auto;font-size:8px;padding:2px 6px;background:var(--lime-dim);color:var(--lime);border:1px solid rgba(184,255,60,0.2);border-radius:20px;font-family:var(--font-m);text-transform:uppercase;letter-spacing:1px">Cloud</span>
+    </div>
+
+    <!-- Tabs -->
+    <div id="tabs" style="display:flex;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:3px;margin-bottom:22px">
+      <button id="tab-login" class="tab-btn active" onclick="switchTab('login')">Ingresar</button>
+      <button id="tab-reg"   class="tab-btn"        onclick="switchTab('register')">Registrarse</button>
+    </div>
+
+    <!-- Alert global -->
+    <div id="main-alert" class="alert" style="margin-bottom:14px"></div>
+
+    <!-- ── LOGIN ── -->
+    <div id="view-login">
+      <div style="margin-bottom:18px">
+        <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:3px">Bienvenido</h2>
+        <p style="font-size:13px;color:var(--muted2)">Ingresá con tu cuenta de OrbitX</p>
+      </div>
+      <div class="field" style="margin-bottom:13px"><label>Email</label>
+        <input type="email" id="l-email" placeholder="tu@campo.com" autocomplete="email"/>
+      </div>
+      <div class="field" style="margin-bottom:13px"><label>Contraseña</label>
+        <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')doLogin()"/>
+      </div>
+      <button id="btn-login" class="submit-btn" onclick="doLogin()">Ingresar</button>
+      <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:12px">
+        ¿Olvidaste tu contraseña? <a onclick="switchView('reset')" style="color:var(--lime);cursor:pointer">Recuperar</a>
+      </p>
+    </div>
+
+    <!-- ── REGISTRO paso 1 ── -->
+    <div id="view-reg-1" style="display:none">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <div class="sdot active" id="dot1"></div><div class="sdot" id="dot2"></div>
+        <span style="font-size:11px;color:var(--muted2);font-family:var(--font-m)">Paso 1 de 2 — Tu cuenta</span>
+      </div>
+      <div style="margin-bottom:14px">
+        <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:3px">Crear cuenta</h2>
+        <p style="font-size:13px;color:var(--muted2)">Registrá tu establecimiento en OrbitX</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="field"><label>Nombre</label><input type="text" id="r-nombre" placeholder="Juan"/></div>
+        <div class="field"><label>Apellido</label><input type="text" id="r-apellido" placeholder="García"/></div>
+      </div>
+      <div class="field" style="margin-bottom:12px"><label>Email</label><input type="email" id="r-email" placeholder="tu@campo.com"/></div>
+      <div class="field" style="margin-bottom:12px"><label>Contraseña</label><input type="password" id="r-pass" placeholder="Mínimo 8 caracteres"/></div>
+      <div class="field" style="margin-bottom:12px"><label>Teléfono (opcional)</label><input type="tel" id="r-tel" placeholder="+54 9 351 000 0000"/></div>
+      <button class="submit-btn" onclick="goStep2()">Continuar →</button>
+    </div>
+
+    <!-- ── REGISTRO paso 2 ── -->
+    <div id="view-reg-2" style="display:none">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <div class="sdot done" id="dot1b"></div><div class="sdot active" id="dot2b"></div>
+        <span style="font-size:11px;color:var(--muted2);font-family:var(--font-m)">Paso 2 de 2 — Tu campo</span>
+      </div>
+      <div style="margin-bottom:14px">
+        <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:3px">Tu establecimiento</h2>
+        <p style="font-size:13px;color:var(--muted2)">Datos del campo a gestionar con OrbitX</p>
+      </div>
+      <div class="field" style="margin-bottom:12px"><label>Nombre del campo</label><input type="text" id="r-org" placeholder="La Esperanza"/></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="field"><label>Hectáreas</label><input type="number" id="r-ha" placeholder="3420" min="1"/></div>
+        <div class="field"><label>Provincia</label>
+          <select id="r-prov">
+            <option value="">Seleccioná...</option>
+            <% ['Buenos Aires','Córdoba','Santa Fe','Entre Ríos','La Pampa','Santiago del Estero','Chaco','Tucumán','Salta','Mendoza','San Luis','Formosa','Corrientes','Misiones','Catamarca','Jujuy','La Rioja','Neuquén','Río Negro','Chubut','Santa Cruz','Tierra del Fuego','Otra'].forEach(p => { %>
+            <option><%= p %></option>
+            <% }) %>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="back-btn" onclick="goStep1()">← Atrás</button>
+        <button id="btn-register" class="submit-btn" style="flex:1" onclick="doRegister()">Crear mi cuenta</button>
+      </div>
+    </div>
+
+    <!-- ── PENDIENTE ── -->
+    <div id="view-pending" style="display:none;text-align:center;padding:8px 0">
+      <div style="font-size:44px;margin-bottom:14px">📬</div>
+      <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:10px">¡Registro enviado!</h2>
+      <p style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px">
+        Tu solicitud está siendo revisada por Agro Parallel.<br>
+        Te habilitaremos el acceso en menos de 24 horas.
+      </p>
+      <button class="submit-btn" onclick="switchTab('login')">Volver al login</button>
+    </div>
+
+    <!-- ── RESET ── -->
+    <div id="view-reset" style="display:none">
+      <div style="margin-bottom:18px">
+        <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:3px">Recuperar acceso</h2>
+        <p style="font-size:13px;color:var(--muted2)">Te enviamos un link al email</p>
+      </div>
+      <div class="field" style="margin-bottom:13px"><label>Email</label><input type="email" id="reset-email" placeholder="tu@campo.com"/></div>
+      <button id="btn-reset" class="submit-btn" onclick="doReset()">Enviar link</button>
+      <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:12px">
+        <a onclick="switchView('login')" style="color:var(--lime);cursor:pointer">← Volver al login</a>
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<style>
+.tab-btn { flex:1;padding:8px;font-size:13px;font-weight:500;color:var(--muted2);cursor:pointer;border-radius:8px;border:none;background:none;transition:all 0.2s;font-family:var(--font-b); }
+.tab-btn.active { background:var(--surface2);color:#fff;border:1px solid var(--border2); }
+.field { display:flex;flex-direction:column;gap:5px; }
+.field label { font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted2);font-weight:500; }
+.field input,.field select { background:rgba(255,255,255,0.04);border:1px solid var(--border2);color:var(--text);padding:10px 13px;border-radius:9px;font-family:var(--font-b);font-size:14px;outline:none;transition:border-color 0.15s;-webkit-appearance:none; }
+.field input:focus,.field select:focus { border-color:rgba(184,255,60,0.5); }
+.field input::placeholder { color:var(--muted); }
+.submit-btn { width:100%;padding:12px;background:var(--lime);color:#050810;border:none;border-radius:9px;font-family:var(--font-h);font-size:14px;font-weight:700;cursor:pointer;transition:all 0.15s; }
+.submit-btn:hover { background:#c8ff50;transform:translateY(-1px); }
+.submit-btn:disabled { opacity:0.5;cursor:not-allowed;transform:none; }
+.back-btn { padding:12px 16px;background:transparent;border:1px solid var(--border2);color:var(--muted2);border-radius:9px;font-size:13px;cursor:pointer;font-family:var(--font-b); }
+.sdot { width:8px;height:8px;border-radius:50%;background:var(--border2);transition:background 0.2s; }
+.sdot.active { background:var(--lime);box-shadow:0 0 6px rgba(184,255,60,0.5); }
+.sdot.done   { background:var(--lime);opacity:0.5; }
+.alert { padding:10px 13px;border-radius:8px;font-size:13px;display:none; }
+.alert.show  { display:block; }
+.alert.error { background:var(--red-dim);border:1px solid rgba(255,68,68,0.3);color:#ff8080; }
+.alert.success { background:var(--lime-dim);border:1px solid rgba(184,255,60,0.25);color:var(--lime); }
+</style>
+
+<script src="/js/app.js"></script>
+<script>
+const VIEWS = ['login','reg-1','reg-2','pending','reset'];
+function showView(id) { VIEWS.forEach(v => document.getElementById(`view-${v}`).style.display = v===id?'block':'none'); }
+function switchView(id) { showView(id); hideAlert(); }
+
+function switchTab(tab) {
+  document.getElementById('tab-login').classList.toggle('active', tab==='login');
+  document.getElementById('tab-reg').classList.toggle('active',   tab==='register');
+  if (tab==='login')    { showView('login'); }
+  else                  { showView('reg-1'); }
+  hideAlert();
+}
+
+function goStep1() { showView('reg-1'); hideAlert(); }
+function goStep2() {
+  hideAlert();
+  const nombre   = document.getElementById('r-nombre').value.trim();
+  const email    = document.getElementById('r-email').value.trim();
+  const pass     = document.getElementById('r-pass').value;
+  if (!nombre)                        return showAlert('Ingresá tu nombre');
+  if (!email || !email.includes('@')) return showAlert('Email inválido');
+  if (pass.length < 8)                return showAlert('La contraseña debe tener al menos 8 caracteres');
+  showView('reg-2');
+}
+
+async function doLogin() {
+  hideAlert();
+  const email    = document.getElementById('l-email').value.trim();
+  const password = document.getElementById('l-pass').value;
+  if (!email || !password) return showAlert('Completá email y contraseña');
+  const btn = document.getElementById('btn-login');
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password })
+    });
+    const d = await r.json();
+    if (!r.ok) { showAlert(d.error || 'Error al ingresar'); return; }
+    // Guardar token y redirigir
+    localStorage.setItem('orbitx_token', d.token);
+    localStorage.setItem('orbitx_user',  JSON.stringify(d.user));
+    // También guardar en cookie para SSR
+    document.cookie = `orbitx_token=${d.token};path=/;max-age=${30*24*3600};SameSite=Strict`;
+    window.location.href = '/dashboard';
+  } catch { showAlert('Error de conexión. Verificá que el servidor esté activo.'); }
+  finally { btn.disabled = false; btn.textContent = 'Ingresar'; }
+}
+
+async function doRegister() {
+  hideAlert();
+  const org     = document.getElementById('r-org').value.trim();
+  const prov    = document.getElementById('r-prov').value;
+  if (!org)  return showAlert('Ingresá el nombre del campo');
+  if (!prov) return showAlert('Seleccioná la provincia');
+  const btn = document.getElementById('btn-register');
+  btn.disabled = true; btn.textContent = '...';
+  const nombre = `${document.getElementById('r-nombre').value.trim()} ${document.getElementById('r-apellido').value.trim()}`.trim();
+  try {
+    const r = await fetch('/api/auth/registro', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        nombre, email:document.getElementById('r-email').value.trim(),
+        password:document.getElementById('r-pass').value,
+        telefono:document.getElementById('r-tel').value.trim(),
+        org_nombre:org, org_ha:document.getElementById('r-ha').value,
+        org_provincia:prov
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) { showAlert(d.error || 'Error al registrarse'); return; }
+    showView('pending');
+  } catch { showAlert('Error de conexión. Intentá de nuevo.'); }
+  finally { btn.disabled = false; btn.textContent = 'Crear mi cuenta'; }
+}
+
+async function doReset() {
+  const email = document.getElementById('reset-email').value.trim();
+  if (!email) return showAlert('Ingresá tu email');
+  const btn = document.getElementById('btn-reset');
+  btn.disabled = true;
+  await fetch('/api/auth/reset-password', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) }).catch(()=>{});
+  showAlert('Si el email existe, recibirás el link en minutos.', 'success');
+  btn.disabled = false;
+}
+
+function showAlert(msg, type='error') {
+  const el = document.getElementById('main-alert');
+  el.textContent = msg; el.className = `alert ${type} show`;
+}
+function hideAlert() {
+  const el = document.getElementById('main-alert');
+  if (el) el.classList.remove('show');
+}
+</script>
+</body>
+</html>

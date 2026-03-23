@@ -1,0 +1,94 @@
+<%# pages/roles.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Roles y permisos</h2>
+    <p>Referencia del sistema de accesos de OrbitX</p>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+
+  <% const rolesDef = [
+    { rol:'superadmin', label:'Super Admin',         color:'#B8FF3C', nivel:100,
+      desc:'Acceso total a OrbitX. Aprueba registros, gestiona toda la plataforma.',
+      permisos:['Todo el sistema','Aprobar/rechazar clientes','Ver todas las orgs','Gestión global de usuarios'] },
+    { rol:'owner', label:'Dueño del campo',           color:'#3C9EFF', nivel:80,
+      desc:'Dueño de su establecimiento. Invita a su equipo y gestiona sus lotes.',
+      permisos:['Invitar usuarios','Asignar roles','Ver todos sus lotes','Configurar dispositivos','Audit log'] },
+    { rol:'admin_org', label:'Admin de organización', color:'#3CFFCF', nivel:70,
+      desc:'Admin delegado por el owner. Puede invitar usuarios con roles menores.',
+      permisos:['Invitar agrónomos/operadores','Editar lotes','Ver alertas','Sin facturación'] },
+    { rol:'agronomo', label:'Agrónomo asesor',         color:'#A78BFA', nivel:50,
+      desc:'Acceso a análisis y mapas. Puede trabajar en múltiples establecimientos.',
+      permisos:['Ver lotes y densidades','Mapas de siembra','agrarIA','Multi-org'] },
+    { rol:'contratista', label:'Contratista',          color:'#FFB03C', nivel:40,
+      desc:'Acceso a los lotes que le asignaron. Ve sus propios dispositivos.',
+      permisos:['Ver lotes asignados','Resolver alertas','Sus dispositivos'] },
+    { rol:'operador', label:'Operador / Maquinista',   color:'#FB923C', nivel:30,
+      desc:'Ve alertas en tiempo real de su máquina. Acceso limitado.',
+      permisos:['Alertas en tiempo real','Su máquina','Lote activo'] },
+    { rol:'viewer', label:'Solo lectura',              color:'#94A3B8', nivel:10,
+      desc:'Solo puede ver reportes y datos históricos. Sin edición.',
+      permisos:['Ver lotes','Ver densidades','Ver alertas','Sin edición'] },
+  ]; %>
+
+  <% rolesDef.forEach(r => { %>
+  <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid <%= r.color %>;border-radius:var(--radius);padding:18px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div style="width:8px;height:8px;border-radius:50%;background:<%= r.color %>;box-shadow:0 0 8px <%= r.color %>66;flex-shrink:0"></div>
+      <div style="font-family:var(--font-h);font-size:14px;font-weight:600;color:#fff"><%= r.label %></div>
+      <div style="margin-left:auto;font-size:10px;color:var(--muted);font-family:var(--font-m)">nivel <%= r.nivel %></div>
+    </div>
+    <div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.5"><%= r.desc %></div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">
+      <% r.permisos.forEach(p => { %>
+      <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:<%= r.color %>15;color:<%= r.color %>;border:1px solid <%= r.color %>25">
+        <%= p %>
+      </span>
+      <% }) %>
+    </div>
+  </div>
+  <% }) %>
+
+</div>
+
+<!-- Tabla de permisos por recurso -->
+<div style="margin-top:24px">
+  <div class="card">
+    <div class="card-head"><span class="card-title">Matriz de permisos por recurso</span></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Recurso</th>
+            <th>Superadmin</th><th>Owner</th><th>Admin</th>
+            <th>Agrónomo</th><th>Contratista</th><th>Operador</th><th>Viewer</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% const matrix = [
+            ['Lotes',         'R W D','R W D','R W',  'R',    'R',    'R',  'R'],
+            ['Densidades',    'R',    'R',    'R',    'R',    'R',    'R',  'R'],
+            ['Alertas',       'R W D','R W',  'R W',  'R',    'R W',  'R W','R'],
+            ['Dispositivos',  'R W D','R W',  'R W',  'R',    'R',    'R',  '–'],
+            ['Usuarios',      'R W D','R W D','R W',  '–',    '–',    '–',  '–'],
+            ['agrarIA',       'R',    'R',    'R',    'R',    'R',    'R',  'R'],
+            ['Audit log',     'R',    'R',    'R',    '–',    '–',    '–',  '–'],
+            ['Facturación',   'R W',  'R',    '–',    '–',    '–',    '–',  '–'],
+          ]; %>
+          <% matrix.forEach(row => { %>
+          <tr>
+            <td class="td-main" style="font-size:12px"><%= row[0] %></td>
+            <% row.slice(1).forEach(cell => { %>
+            <td style="font-family:var(--font-m);font-size:11px;color:<%= cell === '–' ? 'var(--muted)' : 'var(--lime)' %>">
+              <%= cell %>
+            </td>
+            <% }) %>
+          </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

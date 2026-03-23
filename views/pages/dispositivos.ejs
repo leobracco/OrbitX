@@ -1,0 +1,380 @@
+<%# pages/dispositivos.ejs %>
+
+<div class="page-header">
+  <div>
+    <h2>Dispositivos</h2>
+    <p>Tractores registrados · Tokens únicos · Asignación</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/dispositivos" class="btn">↻ Actualizar</a>
+    <button class="btn btn-primary" onclick="openModal('modal-nuevo')">+ Nuevo dispositivo</button>
+  </div>
+</div>
+
+<%
+const sinAsignar = dispositivos.filter(d => !d.estab_slug);
+const asignados  = dispositivos.filter(d =>  d.estab_slug);
+const ahora      = Date.now();
+const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 1000;
+%>
+
+<!-- KPIs rápidos -->
+<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+  <div class="kpi lime">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Total dispositivos</div>
+    <div class="kpi-val"><%= dispositivos.length %></div>
+    <div class="kpi-delta">registrados</div>
+  </div>
+  <div class="kpi <%= sinAsignar.length > 0 ? 'red' : 'lime' %>">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Sin asignar</div>
+    <div class="kpi-val" style="<%= sinAsignar.length > 0 ? 'color:var(--red)' : '' %>"><%= sinAsignar.length %></div>
+    <div class="kpi-delta"><%= sinAsignar.length > 0 ? '⚠ requieren asignación' : '✓ todos asignados' %></div>
+  </div>
+  <div class="kpi blue">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Online ahora</div>
+    <div class="kpi-val"><%= dispositivos.filter(d => esOnline(d)).length %></div>
+    <div class="kpi-delta">último heartbeat &lt;2min</div>
+  </div>
+</div>
+
+<!-- Sin asignar -->
+<% if (sinAsignar.length > 0) { %>
+<div style="background:rgba(255,68,68,0.05);border:1px solid rgba(255,68,68,0.2);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <span style="font-size:16px">⚠</span>
+    <span style="font-family:var(--font-h);font-size:14px;color:var(--red)">Dispositivos sin asignar (<%= sinAsignar.length %>)</span>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <% sinAsignar.forEach(d => { %>
+    <div style="display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      <div style="width:36px;height:36px;border-radius:8px;background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🚜</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-m);font-size:13px;font-weight:500;color:#fff"><%= d.device_id %></div>
+        <div style="font-size:11px;color:var(--muted2);margin-top:2px">
+          <%= d.hostname || '–' %> ·
+          Visto: <%= d.ultimo_visto ? fmtDate(d.ultimo_visto) : 'Nunca' %> ·
+          <span style="color:<%= esOnline(d)?'var(--lime)':'var(--muted2)' %>"><%= esOnline(d)?'● Online':'○ Offline' %></span>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-lime-outline"
+        onclick="abrirAsignacion('<%= d.device_id %>', '<%= d.hostname||d.device_id %>')">
+        Asignar →
+      </button>
+    </div>
+    <% }) %>
+  </div>
+</div>
+<% } %>
+
+<!-- Asignados -->
+<% if (asignados.length > 0) { %>
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">Dispositivos asignados</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Dispositivo</th><th>Nombre</th><th>Establecimiento</th><th>Última vez visto</th><th>Estado</th><th></th></tr>
+      </thead>
+      <tbody>
+        <% asignados.forEach(d => { %>
+        <tr>
+          <td>
+            <div class="td-mono" style="color:var(--lime)"><%= d.device_id %></div>
+            <div class="td-dim"><%= d.hostname || '–' %> · <%= d.mac || '–' %></div>
+          </td>
+          <td class="td-main"><%= d.nombre || d.device_id %></td>
+          <td>
+            <span class="badge badge-blue"><%= d.estab_slug %></span>
+          </td>
+          <td class="td-dim" style="font-size:11px"><%= d.ultimo_visto ? fmtDate(d.ultimo_visto) : '–' %></td>
+          <td>
+            <span class="badge <%= esOnline(d) ? 'badge-lime' : 'badge-gray' %>">
+              <%= esOnline(d) ? '● Online' : '○ Offline' %>
+            </span>
+          </td>
+          <td>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-sm btn-ghost"
+                onclick="abrirRenombrar('<%= d.device_id %>', '<%= d.nombre||d.device_id %>')">
+                ✏
+              </button>
+              <button class="btn btn-sm btn-ghost"
+                onclick="abrirAsignacion('<%= d.device_id %>', '<%= d.nombre||d.device_id %>', '<%= d.estab_slug %>')">
+                Reasignar
+              </button>
+              <button class="btn btn-sm btn-ghost"
+                onclick="abrirRegen('<%= d.device_id %>', '<%= d.nombre||d.device_id %>')"
+                title="Regenerar token">
+                🔑
+              </button>
+              <button class="btn btn-sm btn-ghost" style="color:var(--red)"
+                onclick="borrarDevice('<%= d.device_id %>', '<%= d.nombre||d.device_id %>')"
+                title="Borrar dispositivo">
+                ✕
+              </button>
+            </div>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+<% } %>
+
+<% if (!dispositivos.length) { %>
+<div class="empty-state">
+  <span class="icon">📡</span>
+  <p>Ningún dispositivo registrado aún.<br>
+  Instalá el agente OrbitX en el tractor y arrancalo.<br>
+  Aparecerá acá automáticamente.</p>
+</div>
+<% } %>
+
+<!-- Modal asignar -->
+<div class="modal-backdrop" id="modal-asignar">
+  <div class="modal">
+    <div class="modal-title">Asignar dispositivo</div>
+    <div class="modal-sub" id="modal-a-device" style="font-family:var(--font-m);color:var(--lime)">–</div>
+
+    <div style="margin:16px 0;display:flex;flex-direction:column;gap:12px">
+      <div class="field">
+        <label>Nombre del tractor / dispositivo</label>
+        <input type="text" id="asignar-nombre" placeholder="Ej: Tractor Deutz 5718"/>
+      </div>
+      <div class="field">
+        <label>Establecimiento</label>
+        <select id="asignar-estab">
+          <option value="">Seleccioná un establecimiento...</option>
+          <% establecimientos.forEach(e => { %>
+          <option value="<%= e.slug %>"><%= e.nombre %> (<%= e.slug %>)</option>
+          <% }) %>
+        </select>
+      </div>
+    </div>
+
+    <div id="asignar-alert" class="alert error"></div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-asignar')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" id="btn-confirmar-asignar" onclick="confirmarAsignacion()">
+        Asignar
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal renombrar -->
+<div class="modal-backdrop" id="modal-renombrar">
+  <div class="modal">
+    <div class="modal-title">Renombrar dispositivo</div>
+    <div class="modal-sub" id="modal-r-device" style="font-family:var(--font-m);color:var(--lime)">–</div>
+    <div class="field" style="margin:16px 0">
+      <label>Nombre</label>
+      <input type="text" id="renombrar-nombre" placeholder="Ej: Tractor JD 6140"
+        onkeydown="if(event.key==='Enter') confirmarRenombrar()"/>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-renombrar')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmarRenombrar()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _deviceActual = null;
+
+function abrirAsignacion(deviceId, label, estabActual) {
+  _deviceActual = deviceId;
+  document.getElementById('modal-a-device').textContent  = deviceId + ' · ' + label;
+  document.getElementById('asignar-nombre').value        = label !== deviceId ? label : '';
+  document.getElementById('asignar-estab').value         = estabActual || '';
+  document.getElementById('asignar-alert').classList.remove('show');
+  openModal('modal-asignar');
+}
+
+async function confirmarAsignacion() {
+  const estab  = document.getElementById('asignar-estab').value;
+  const nombre = document.getElementById('asignar-nombre').value.trim();
+  if (!estab) {
+    document.getElementById('asignar-alert').textContent = 'Seleccioná un establecimiento';
+    document.getElementById('asignar-alert').className = 'alert error show';
+    return;
+  }
+  const btn = document.getElementById('btn-confirmar-asignar');
+  btn.disabled = true; btn.textContent = 'Asignando...';
+  try {
+    await Auth.post('/api/devices/' + _deviceActual + '/asignar', { estab_slug:estab, nombre });
+    toast('✓ Dispositivo asignado', _deviceActual + ' → ' + estab, 'lime');
+    closeModal('modal-asignar');
+    setTimeout(() => location.reload(), 800);
+  } catch(e) {
+    document.getElementById('asignar-alert').textContent = e.message;
+    document.getElementById('asignar-alert').className = 'alert error show';
+    btn.disabled = false; btn.textContent = 'Asignar';
+  }
+}
+
+function abrirRenombrar(deviceId, nombreActual) {
+  _deviceActual = deviceId;
+  document.getElementById('modal-r-device').textContent = deviceId;
+  document.getElementById('renombrar-nombre').value     = nombreActual !== deviceId ? nombreActual : '';
+  openModal('modal-renombrar');
+  setTimeout(() => document.getElementById('renombrar-nombre').focus(), 100);
+}
+
+async function borrarDevice(deviceId, nombre) {
+  if (!confirm(`¿Borrar "${nombre}"?
+
+El agente del tractor dejará de conectarse.`)) return;
+  try {
+    await Auth.del('/api/devices/' + deviceId);
+    toast('✓ Dispositivo borrado', nombre, 'lime');
+    document.querySelector(`tr:has(td .td-mono[data-id="${deviceId}"])`)?.remove();
+    setTimeout(() => location.reload(), 600);
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+
+async function confirmarRenombrar() {
+  const nombre = document.getElementById('renombrar-nombre').value.trim();
+  if (!nombre) return;
+  try {
+    await Auth.post('/api/devices/' + _deviceActual + '/renombrar', { nombre });
+    toast('✓ Renombrado', nombre, 'lime');
+    closeModal('modal-renombrar');
+    setTimeout(() => location.reload(), 600);
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+</script>
+
+<!-- Modal nuevo dispositivo -->
+<div class="modal-backdrop" id="modal-nuevo">
+  <div class="modal">
+    <div class="modal-title">Registrar nuevo dispositivo</div>
+    <div class="modal-sub">Se generará un token único para este tractor</div>
+    <div id="nuevo-form" style="margin:16px 0;display:flex;flex-direction:column;gap:12px">
+      <div class="field">
+        <label>Nombre del tractor</label>
+        <input type="text" id="nuevo-nombre" placeholder="Ej: Tractor Deutz 5718"
+          onkeydown="if(event.key==='Enter') crearDispositivo()"/>
+      </div>
+      <div class="field">
+        <label>ID personalizado (opcional)</label>
+        <input type="text" id="nuevo-device-id" placeholder="Ej: VX-DEUTZ-01 (dejar vacío para auto)"/>
+      </div>
+    </div>
+    <div id="nuevo-alert" class="alert error"></div>
+    <div id="nuevo-resultado" style="display:none">
+      <div style="background:var(--surface2);border:1px solid rgba(184,255,60,0.2);border-radius:8px;padding:14px;margin-bottom:14px">
+        <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Copiá esto al .env del tractor</div>
+        <pre id="nuevo-env-snippet" style="font-family:var(--font-m);font-size:12px;color:var(--lime);white-space:pre-wrap;word-break:break-all"></pre>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);line-height:1.6">
+        ⚠ El token solo se muestra <strong>una vez</strong>. Copialo ahora al archivo .env del tractor antes de cerrar.
+      </div>
+    </div>
+    <div id="nuevo-btns" style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-nuevo');resetNuevo()">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" id="btn-crear" onclick="crearDispositivo()">Crear y generar token</button>
+    </div>
+    <button id="btn-nuevo-cerrar" style="display:none;width:100%;margin-top:8px" class="btn btn-primary" onclick="closeModal('modal-nuevo');resetNuevo();location.reload()">Listo — cerrar</button>
+  </div>
+</div>
+
+<!-- Modal regenerar token -->
+<div class="modal-backdrop" id="modal-regen">
+  <div class="modal">
+    <div class="modal-title">Regenerar token</div>
+    <div class="modal-sub" id="modal-regen-device" style="font-family:var(--font-m);color:var(--lime)">–</div>
+    <div style="margin:14px 0;font-size:13px;color:var(--muted2);line-height:1.6">
+      ⚠ El token actual dejará de funcionar. El agente del tractor no se podrá conectar hasta que actualices su .env con el nuevo token.
+    </div>
+    <div id="regen-resultado" style="display:none;margin-bottom:14px">
+      <div style="background:var(--surface2);border:1px solid rgba(184,255,60,0.2);border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Nuevo .env para el tractor</div>
+        <pre id="regen-env-snippet" style="font-family:var(--font-m);font-size:12px;color:var(--lime);white-space:pre-wrap;word-break:break-all"></pre>
+      </div>
+    </div>
+    <div id="regen-btns" style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-regen')">Cancelar</button>
+      <button class="btn btn-danger" style="flex:1" id="btn-regen" onclick="confirmarRegen()">Regenerar token</button>
+    </div>
+    <button id="btn-regen-cerrar" style="display:none;width:100%;margin-top:8px" class="btn btn-primary" onclick="closeModal('modal-regen');location.reload()">Listo — cerrar</button>
+  </div>
+</div>
+
+<script>
+async function crearDispositivo() {
+  const nombre   = document.getElementById('nuevo-nombre').value.trim();
+  const deviceId = document.getElementById('nuevo-device-id').value.trim();
+  if (!nombre) {
+    showAlert('nuevo-alert', 'Ingresá un nombre para el tractor');
+    return;
+  }
+  const btn = document.getElementById('btn-crear');
+  btn.disabled = true; btn.textContent = 'Creando...';
+  try {
+    const d = await Auth.post('/api/devices/nuevo', { nombre, device_id_personalizado: deviceId||undefined });
+    document.getElementById('nuevo-env-snippet').textContent = d.env_snippet;
+    document.getElementById('nuevo-resultado').style.display = 'block';
+    document.getElementById('nuevo-form').style.display = 'none';
+    document.getElementById('nuevo-btns').style.display = 'none';
+    document.getElementById('btn-nuevo-cerrar').style.display = 'block';
+    toast('✓ Dispositivo creado', d.device_id, 'lime');
+  } catch(e) {
+    showAlert('nuevo-alert', e.message);
+    btn.disabled = false; btn.textContent = 'Crear y generar token';
+  }
+}
+
+function resetNuevo() {
+  document.getElementById('nuevo-nombre').value = '';
+  document.getElementById('nuevo-device-id').value = '';
+  document.getElementById('nuevo-resultado').style.display = 'none';
+  document.getElementById('nuevo-form').style.display = 'flex';
+  document.getElementById('nuevo-btns').style.display = 'flex';
+  document.getElementById('btn-nuevo-cerrar').style.display = 'none';
+  document.getElementById('btn-crear').disabled = false;
+  document.getElementById('btn-crear').textContent = 'Crear y generar token';
+  hideAlert('nuevo-alert');
+}
+
+function abrirRegen(deviceId, nombre) {
+  _deviceActual = deviceId;
+  document.getElementById('modal-regen-device').textContent = deviceId + ' · ' + nombre;
+  document.getElementById('regen-resultado').style.display = 'none';
+  document.getElementById('regen-btns').style.display = 'flex';
+  document.getElementById('btn-regen-cerrar').style.display = 'none';
+  openModal('modal-regen');
+}
+
+async function confirmarRegen() {
+  const btn = document.getElementById('btn-regen');
+  btn.disabled = true; btn.textContent = 'Regenerando...';
+  try {
+    const d = await Auth.post('/api/devices/' + _deviceActual + '/regenerar-token', {});
+    document.getElementById('regen-env-snippet').textContent = d.env_snippet;
+    document.getElementById('regen-resultado').style.display = 'block';
+    document.getElementById('regen-btns').style.display = 'none';
+    document.getElementById('btn-regen-cerrar').style.display = 'block';
+    toast('✓ Token regenerado', 'Actualizá el .env del tractor', 'lime');
+  } catch(e) {
+    toast('✗ Error', e.message, 'red');
+    btn.disabled = false; btn.textContent = 'Regenerar token';
+  }
+}
+
+function showAlert(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg; el.className = 'alert error show';
+}
+function hideAlert(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('show');
+}
+</script>
