@@ -51,28 +51,46 @@ let layers = [];
 function initMapa() {
   if (mapa) return;
 
- mapa = L.map("mapa", { 
-  zoomControl: true,
-  maxZoom: 18,        // ← el usuario no puede hacer zoom más allá
-}).setView([-34.6, -60.0], 10);
+  mapa = L.map("mapa", { zoomControl:true, maxZoom:22 }).setView([-34.6, -60.0], 10);
 
-  // Capa base oscura (siempre disponible, fondo negro)
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
-    attribution: "CartoDB",
-    maxZoom: 20,
-    subdomains: 'abcd',
+  // Capa base oscura siempre presente
+  const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
+    attribution: "CartoDB", maxZoom: 22, subdomains: 'abcd', opacity: 0,
   }).addTo(mapa);
 
-  // Satelital encima — solo donde hay datos
-  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-  attribution: "Esri World Imagery",
-  maxZoom: 18,
-  maxNativeZoom: 17,  // ← no pide tiles más allá del zoom 17
-}).addTo(mapa);
+  // Satelital
+  const satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Esri", maxNativeZoom: 17, maxZoom: 22,
+  }).addTo(mapa);
+
   // Etiquetas
-  L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 19, opacity: 0.7,
+  const labelLayer = L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
+    maxNativeZoom: 17, maxZoom: 22, opacity: 0.7,
   }).addTo(mapa);
+
+  // Badge "Modo offline"
+  const badge = document.createElement('div');
+  badge.id = 'offline-badge';
+  badge.innerHTML = '📡 Modo sin conexión';
+  badge.style.cssText = 'display:none;position:absolute;top:10px;right:10px;z-index:1000;background:rgba(0,0,0,0.75);color:#718096;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);font-family:monospace';
+  document.getElementById('mapa').appendChild(badge);
+
+  // Al cambiar zoom — si supera 17 activar modo oscuro
+  mapa.on('zoomend', () => {
+    const z = mapa.getZoom();
+    if (z > 17) {
+      darkLayer.setOpacity(1);
+      satLayer.setOpacity(0);
+      labelLayer.setOpacity(0);
+      badge.style.display = 'block';
+      document.querySelector('.leaflet-container').style.background = '#050810';
+    } else {
+      darkLayer.setOpacity(0);
+      satLayer.setOpacity(1);
+      labelLayer.setOpacity(0.7);
+      badge.style.display = 'none';
+    }
+  });
 }
 
 async function cargarMapa() {
