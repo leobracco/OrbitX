@@ -50,17 +50,24 @@ let layers = [];
 
 function initMapa() {
   if (mapa) return;
-  mapa = L.map("mapa", { zoomControl:true }).setView([-34.6, -60.0], 10);
+  
+  // Fondo negro cuando no hay tiles
+  document.getElementById('mapa').style.background = '#050810';
+  
+  mapa = L.map("mapa", { 
+    zoomControl: true,
+    background: '#050810',
+  }).setView([-34.6, -60.0], 10);
 
-  // Capa satelital
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
     attribution: "Esri World Imagery",
     maxZoom: 20,
+    errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
   }).addTo(mapa);
 
-  // Capa de etiquetas encima
   L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
     maxZoom: 20, opacity: 0.7,
+    errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
   }).addTo(mapa);
 }
 
