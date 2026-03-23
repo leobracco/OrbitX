@@ -4,12 +4,17 @@
 // ── Field.txt → lat/lon de origen ────────────────────────
 function parseFieldTxt(contenido) {
   try {
-    const lines = (contenido||"").trim().split(/\r?\n/);
+    const lines = (contenido || "").trim().split(/\r?\n/);
     const parts = lines[0].trim().split(/\s+/);
     if (parts.length >= 2) {
       const lat = parseFloat(parts[0]);
       const lon = parseFloat(parts[1]);
-      if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)
+      if (
+        !isNaN(lat) &&
+        !isNaN(lon) &&
+        Math.abs(lat) <= 90 &&
+        Math.abs(lon) <= 180
+      )
         return { lat, lon };
     }
   } catch {}
@@ -19,11 +24,8 @@ function parseFieldTxt(contenido) {
 // ── Metros relativos → lat/lon ────────────────────────────
 function relToLatLon(origen, x, y) {
   const mPerLat = 111320;
-  const mPerLon = 111320 * Math.cos(origen.lat * Math.PI / 180);
-  return [
-    origen.lat + y / mPerLat,
-    origen.lon + x / mPerLon,
-  ];
+  const mPerLon = 111320 * Math.cos((origen.lat * Math.PI) / 180);
+  return [origen.lat + y / mPerLat, origen.lon + x / mPerLon];
 }
 
 // ── Boundary.txt → polígono ───────────────────────────────
@@ -31,7 +33,7 @@ function relToLatLon(origen, x, y) {
 // x,y,heading  (metros relativos al origen)
 function parseBoundaryTxt(contenido, origen) {
   try {
-    const lines  = (contenido||"").trim().split(/\r?\n/);
+    const lines = (contenido || "").trim().split(/\r?\n/);
     const header = lines[0].trim().split(/\s+/);
     if (!header[0]?.startsWith("$Boundary")) return null;
 
@@ -56,51 +58,88 @@ function parseBoundaryTxt(contenido, origen) {
     if (!latLons.length) return null;
     latLons.push(latLons[0]); // cerrar polígono
     return latLons;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ── KML → coordenadas WGS84 ───────────────────────────────
 function parseKML(contenido) {
   try {
-    const match = (contenido||"").match(/<coordinates>([\s\S]*?)<\/coordinates>/i);
+    const match = (contenido || "").match(
+      /<coordinates>([\s\S]*?)<\/coordinates>/i,
+    );
     if (!match) return null;
-    const points = match[1].trim().split(/\s+/).map(c => {
-      const [lon, lat] = c.split(",").map(parseFloat);
-      return [lat, lon];
-    }).filter(([lat, lon]) => !isNaN(lat) && !isNaN(lon));
+    const points = match[1]
+      .trim()
+      .split(/\s+/)
+      .map((c) => {
+        const [lon, lat] = c.split(",").map(parseFloat);
+        return [lat, lon];
+      })
+      .filter(([lat, lon]) => !isNaN(lat) && !isNaN(lon));
     if (!points.length) return null;
     points.push(points[0]);
     return points;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ── Sections.txt → rectángulos de cobertura ──────────────
 function parseSections(contenido, origen) {
   try {
     if (!origen) return null;
-    const lines = (contenido||"").trim().split(/\r?\n/).filter(l=>l.trim());
+    const lines = (contenido || "")
+      .trim()
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
     if (!lines.length) return null;
-    const rects = [];
-    for (const line of lines) {
-      const p = line.trim().split(",").map(parseFloat);
-      if (p.length < 4 || p.some(isNaN)) continue;
-      const [x1, y1, x2, y2] = p;
-      rects.push([
-        relToLatLon(origen, x1, y1),
-        relToLatLon(origen, x2, y1),
-        relToLatLon(origen, x2, y2),
-        relToLatLon(origen, x1, y2),
-      ]);
+
+    const polys = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      // Encabezado: un solo entero sin coma
+      const nPts = parseInt(lines[i]);
+      if (isNaN(nPts) || lines[i].includes(",")) {
+        i++;
+        continue;
+      }
+      i++;
+
+      // Línea metadata (anchoIzq,anchoDer,heading)
+      if (i < lines.length && lines[i].split(",").length === 3) i++;
+
+      // Leer nPts puntos alternados izq/der
+      const ptsIzq = [],
+        ptsDer = [];
+      for (let j = 0; j < nPts && i < lines.length; j++, i++) {
+        const p = lines[i].split(",").map(parseFloat);
+        if (p.length >= 2 && !p.some(isNaN)) {
+          if (j % 2 === 0) ptsIzq.push(relToLatLon(origen, p[0], p[1]));
+          else ptsDer.push(relToLatLon(origen, p[0], p[1]));
+        }
+      }
+
+      if (ptsIzq.length && ptsDer.length) {
+        polys.push([...ptsIzq, ...ptsDer.reverse(), ptsIzq[0]]);
+      }
     }
-    return rects.length ? rects : null;
-  } catch { return null; }
+
+    return polys.length ? polys : null;
+  } catch (e) {
+    console.error("[parseSections]", e.message);
+    return null;
+  }
 }
 
 // ── Parser completo de un lote ────────────────────────────
 function parseLote(docs) {
   const result = {
-    nombre:   null,
-    origen:   null,
+    nombre: null,
+    origen: null,
     boundary: null,
     sections: null,
     ts_ultimo: 0,
@@ -125,15 +164,27 @@ function parseLote(docs) {
     result.boundary = parseKML(byType.boundary_kml[0].contenido);
   }
   if (!result.boundary && byType.boundary?.[0]) {
-    result.boundary = parseBoundaryTxt(byType.boundary[0].contenido, result.origen);
+    result.boundary = parseBoundaryTxt(
+      byType.boundary[0].contenido,
+      result.origen,
+    );
   }
 
   // 3. Sections (cobertura aplicada)
   if (byType.sections_coverage?.[0] && result.origen) {
-    result.sections = parseSections(byType.sections_coverage[0].contenido, result.origen);
+    result.sections = parseSections(
+      byType.sections_coverage[0].contenido,
+      result.origen,
+    );
   }
 
   return result;
 }
 
-module.exports = { parseFieldTxt, parseBoundaryTxt, parseKML, parseSections, parseLote };
+module.exports = {
+  parseFieldTxt,
+  parseBoundaryTxt,
+  parseKML,
+  parseSections,
+  parseLote,
+};
