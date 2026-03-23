@@ -87,52 +87,43 @@ function parseKML(contenido) {
 }
 
 // ── Sections.txt → rectángulos de cobertura ──────────────
-function parseSections(contenido, origen) {
+function parseFieldTxt(contenido) {
   try {
-    if (!origen) return null;
-    const lines = (contenido || "")
-      .trim()
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (!lines.length) return null;
+    const lines = (contenido || "").trim().split(/\r?\n/);
 
-    const polys = [];
-    let i = 0;
-
-    while (i < lines.length) {
-      // Encabezado: un solo entero sin coma
-      const nPts = parseInt(lines[i]);
-      if (isNaN(nPts) || lines[i].includes(",")) {
-        i++;
-        continue;
-      }
-      i++;
-
-      // Línea metadata (anchoIzq,anchoDer,heading)
-      if (i < lines.length && lines[i].split(",").length === 3) i++;
-
-      // Leer nPts puntos alternados izq/der
-      const ptsIzq = [],
-        ptsDer = [];
-      for (let j = 0; j < nPts && i < lines.length; j++, i++) {
-        const p = lines[i].split(",").map(parseFloat);
-        if (p.length >= 2 && !p.some(isNaN)) {
-          if (j % 2 === 0) ptsIzq.push(relToLatLon(origen, p[0], p[1]));
-          else ptsDer.push(relToLatLon(origen, p[0], p[1]));
+    // Formato nuevo AOG: buscar línea "StartFix" y leer la siguiente
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (lines[i].trim() === "StartFix") {
+        const parts = lines[i + 1].trim().split(",");
+        if (parts.length >= 2) {
+          const lat = parseFloat(parts[0]);
+          const lon = parseFloat(parts[1]);
+          if (
+            !isNaN(lat) &&
+            !isNaN(lon) &&
+            Math.abs(lat) <= 90 &&
+            Math.abs(lon) <= 180
+          )
+            return { lat, lon };
         }
-      }
-
-      if (ptsIzq.length && ptsDer.length) {
-        polys.push([...ptsIzq, ...ptsDer.reverse(), ptsIzq[0]]);
       }
     }
 
-    return polys.length ? polys : null;
-  } catch (e) {
-    console.error("[parseSections]", e.message);
-    return null;
-  }
+    // Fallback: formato viejo (lat lon en la primera línea)
+    const parts = lines[0].trim().split(/[\s,]+/);
+    if (parts.length >= 2) {
+      const lat = parseFloat(parts[0]);
+      const lon = parseFloat(parts[1]);
+      if (
+        !isNaN(lat) &&
+        !isNaN(lon) &&
+        Math.abs(lat) <= 90 &&
+        Math.abs(lon) <= 180
+      )
+        return { lat, lon };
+    }
+  } catch {}
+  return null;
 }
 
 // ── Parser completo de un lote ────────────────────────────
