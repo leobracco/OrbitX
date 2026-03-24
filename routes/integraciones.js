@@ -34,7 +34,7 @@ module.exports.decrypt = decrypt;
 // ══════════════════════════════════════════════════════════
 router.get('/copernicus', async (req, res) => {
   try {
-    const { estabSlug } = req.jwtUser;
+    const { estabSlug } = req.user;
     const db     = getDB('orbitx_global');
     const orgDoc = await db.get(`org_${estabSlug}`);
     const coper  = orgDoc.integraciones?.copernicus;
@@ -57,7 +57,7 @@ router.get('/copernicus', async (req, res) => {
 // ══════════════════════════════════════════════════════════
 router.post('/copernicus', async (req, res) => {
   try {
-    const { estabSlug, uid, rol } = req.jwtUser;
+    const { estabSlug, uid, rol } = req.user;
 
     // Solo roles con permiso de configuración
     if (!['owner', 'admin_org', 'superadmin'].includes(rol)) {
@@ -97,7 +97,7 @@ router.post('/copernicus', async (req, res) => {
 // ══════════════════════════════════════════════════════════
 router.delete('/copernicus', async (req, res) => {
   try {
-    const { estabSlug, rol } = req.jwtUser;
+    const { estabSlug, rol } = req.user;
     if (!['owner', 'superadmin'].includes(rol)) {
       return res.status(403).json({ error: 'Sin permiso' });
     }

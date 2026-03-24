@@ -80,7 +80,7 @@ function tileToBbox(z, x, y) {
 // ══════════════════════════════════════════════════════════
 router.get('/tile/:z/:x/:y', async (req, res) => {
   try {
-    const { estabSlug } = req.jwtUser;
+    const { estabSlug } = req.user;
     const { z, x, y }  = req.params;
     const date = req.query.date || new Date().toISOString().slice(0, 10);
 
@@ -137,7 +137,7 @@ router.get('/tile/:z/:x/:y', async (req, res) => {
 // ══════════════════════════════════════════════════════════
 router.get('/fechas-disponibles', async (req, res) => {
   try {
-    const { estabSlug } = req.jwtUser;
+    const { estabSlug } = req.user;
     const { bbox, dias = 90 } = req.query;
     if (!bbox) return res.status(400).json({ error: 'bbox requerido' });
 
