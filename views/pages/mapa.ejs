@@ -1,9 +1,9 @@
-<%# pages/mapa.ejs — Mapa de lotes · buscador 3 chars + lazy load %>
+<%# pages/mapa.ejs — Mapa de lotes · buscador + lazy load + panel de capas %>
 
 <div class="page-header">
   <div>
     <h2>Mapa de lotes</h2>
-    <p>Boundaries · cobertura aplicada · origen GPS</p>
+    <p>Boundaries · cobertura · capas externas</p>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <span id="mapa-estado" style="font-size:11px;color:var(--muted2)">–</span>
@@ -29,19 +29,14 @@
       <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);
                    font-size:13px;opacity:0.35;pointer-events:none">🔍</span>
 
-      <!-- Dropdown resultados -->
       <div id="search-dropdown"
         style="display:none;position:fixed;z-index:99999;
-               background:rgba(10,14,26,0.96);
-               border:1px solid rgba(255,255,255,0.1);
-               border-radius:10px;
-               box-shadow:0 12px 40px rgba(0,0,0,0.7);
-               backdrop-filter:blur(12px);
-               max-height:280px;overflow-y:auto">
+               background:rgba(10,14,26,0.96);border:1px solid rgba(255,255,255,0.1);
+               border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.7);
+               backdrop-filter:blur(12px);max-height:280px;overflow-y:auto">
       </div>
     </div>
 
-    <!-- Filtro estab (solo SA) -->
     <% if (locals.isSA) { %>
     <select id="filtro-estab"
       style="background:var(--surface2);border:1px solid var(--border);color:var(--text);
@@ -50,69 +45,91 @@
       onchange="recargarLista()">
       <option value="">Todos los establecimientos</option>
       <% establecimientos.forEach(e => { %>
-      <option value="<%= e.slug %>"
-        <%= locals.miSlug === e.slug ? "selected" : "" %>><%= e.nombre %></option>
+      <option value="<%= e.slug %>" <%= locals.miSlug===e.slug?'selected':'' %>><%= e.nombre %></option>
       <% }) %>
     </select>
     <% } %>
 
-    <!-- Pill lote activo -->
     <div id="pill-activo"
       style="display:none;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.3);
              border-radius:8px;padding:7px 12px;font-size:12px;color:var(--lime);
              align-items:center;gap:8px;white-space:nowrap;flex-shrink:0">
       <span id="pill-nombre">–</span>
       <button onclick="limpiarMapa()"
-        style="background:none;border:none;color:var(--lime);cursor:pointer;
-               font-size:14px;padding:0;line-height:1">✕</button>
+        style="background:none;border:none;color:var(--lime);cursor:pointer;font-size:14px;padding:0;line-height:1">✕</button>
     </div>
-
   </div>
 </div>
 
-<!-- Mapa -->
-<div style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
-  <div id="mapa" style="height:560px;width:100%;background:#050810"></div>
+<!-- Layout: mapa + panel capas -->
+<div style="display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start">
 
-  <!-- Leyenda -->
-  <div style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.78);
-       border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;
-       color:#fff;line-height:2.2;pointer-events:none">
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style="display:inline-block;width:16px;height:2px;background:#b8ff3c;border-radius:2px"></span>
-      Boundary
+  <!-- Mapa -->
+  <div style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
+    <div id="mapa" style="height:580px;width:100%;background:#050810"></div>
+
+    <!-- Leyenda -->
+    <div id="mapa-leyenda"
+      style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.78);
+             border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;
+             color:#fff;line-height:2.4;pointer-events:none;min-width:140px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:inline-block;width:16px;height:2px;background:#b8ff3c;border-radius:2px"></span>Boundary
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:inline-block;width:14px;height:10px;background:rgba(60,158,255,0.35);
+                     border:1px solid #3c9eff;border-radius:2px"></span>Cobertura
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:inline-block;width:8px;height:8px;background:#f59e0b;border-radius:50%"></span>Origen GPS
+      </div>
+      <!-- Capas externas se agregan dinámicamente aquí -->
+      <div id="leyenda-capas"></div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style="display:inline-block;width:14px;height:10px;
-                   background:rgba(60,158,255,0.35);border:1px solid #3c9eff;border-radius:2px"></span>
-      Cobertura
+
+    <!-- Overlay vacío -->
+    <div id="mapa-empty"
+      style="position:absolute;inset:0;display:flex;flex-direction:column;
+             align-items:center;justify-content:center;pointer-events:none;z-index:500">
+      <div style="font-size:40px;opacity:0.15">🗺</div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:10px;opacity:0.5">
+        Buscá un lote para verlo
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style="display:inline-block;width:8px;height:8px;background:#f59e0b;border-radius:50%"></span>
-      Origen GPS
+
+    <!-- Loading -->
+    <div id="mapa-loading"
+      style="display:none;position:absolute;inset:0;background:rgba(0,0,0,0.55);
+             align-items:center;justify-content:center;z-index:2000">
+      <div style="background:var(--surface);border:1px solid var(--border);
+           border-radius:10px;padding:14px 22px;font-size:13px;color:var(--text);
+           display:flex;align-items:center;gap:10px">
+        <span class="spinner"></span><span id="loading-texto">Cargando…</span>
+      </div>
     </div>
   </div>
 
-  <!-- Overlay vacío -->
-  <div id="mapa-empty"
-    style="position:absolute;inset:0;display:flex;flex-direction:column;
-           align-items:center;justify-content:center;pointer-events:none;z-index:500">
-    <div style="font-size:40px;opacity:0.15">🗺</div>
-    <div style="font-size:12px;color:var(--muted2);margin-top:10px;opacity:0.5">
-      Buscá un lote para verlo en el mapa
+  <!-- Panel de capas (se muestra cuando hay lote seleccionado) -->
+  <div id="panel-capas"
+    style="display:none;width:240px;background:var(--surface);border:1px solid var(--border);
+           border-radius:var(--radius);overflow:hidden;flex-shrink:0">
+
+    <div style="padding:12px 14px;border-bottom:1px solid var(--border);
+                display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:12px;font-weight:500;color:#fff">Capas</span>
+      <span id="capas-count" style="font-size:10px;color:var(--muted2)">–</span>
+    </div>
+
+    <div id="capas-lista" style="padding:8px 0;max-height:520px;overflow-y:auto"></div>
+
+    <div style="padding:10px 14px;border-top:1px solid var(--border)">
+      <button class="btn btn-ghost" style="width:100%;font-size:11px"
+        onclick="window.location='/lotes'">
+        ✏ Gestionar capas →
+      </button>
     </div>
   </div>
 
-  <!-- Loading -->
-  <div id="mapa-loading"
-    style="display:none;position:absolute;inset:0;background:rgba(0,0,0,0.55);
-           align-items:center;justify-content:center;z-index:2000">
-    <div style="background:var(--surface);border:1px solid var(--border);
-         border-radius:10px;padding:14px 22px;font-size:13px;color:var(--text);
-         display:flex;align-items:center;gap:10px">
-      <span class="spinner"></span> Cargando lote…
-    </div>
-  </div>
 </div>
 
 <!-- Leaflet -->
@@ -121,41 +138,81 @@
 <style>
 .leaflet-container { background: #050810 !important; }
 #search-dropdown > div { transition: background .1s; }
-#search-dropdown > div:hover { background: var(--surface2); }
+
+.capa-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background .1s;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.capa-item:hover { background: var(--surface2); }
+.capa-item:last-child { border-bottom: none; }
+.capa-toggle {
+  width: 28px; height: 16px; border-radius: 8px;
+  border: 1.5px solid rgba(255,255,255,0.2);
+  flex-shrink: 0; cursor: pointer;
+  transition: all .2s; position: relative;
+}
+.capa-toggle.on  { border-color: rgba(184,255,60,0.6); }
+.capa-toggle::after {
+  content: ''; position: absolute;
+  width: 10px; height: 10px; border-radius: 50%;
+  top: 2px; left: 2px; transition: all .2s;
+}
+.capa-toggle.off::after { background: rgba(255,255,255,0.2); }
+.capa-toggle.on::after  { background: var(--lime); transform: translateX(12px); }
 </style>
 
 <script>
-let _mapa     = null;
-let _layers   = [];
-let _lista    = [];   // lista liviana (nombres, flags, sin coords)
-let _searchTO = null;
+// ── Estado ─────────────────────────────────────────────────
+let _mapa       = null;
+let _layers     = [];        // capas base del lote (boundary, sections, origen)
+let _capaLayers = {};        // { capaId: [leafletLayer, ...] }
+let _lista      = [];
+let _searchTO   = null;
+let _loteActual = null;
+
+// Paleta para capas externas
+const CAPA_COLORES = [
+  "#ff6b35","#a855f7","#06b6d4","#f59e0b",
+  "#ec4899","#10b981","#ef4444","#8b5cf6",
+];
+let _colorIdx = 0;
+function nextColor() { return CAPA_COLORES[_colorIdx++ % CAPA_COLORES.length]; }
+
+const CAPA_ICONO = {
+  ndvi:'🛰', imagen_drone:'🚁', imagen_sat:'🛰', lluvia:'🌧', clima:'🌤',
+  quantix:'⚙', vistax_manual:'🌱', analisis_suelo:'🧪', prescripcion:'📋',
+  shapefile:'📐', pdf:'📄', csv:'📊', nota:'📝', imagen:'🖼', otro:'📁',
+  geojson:'🗺', kml:'📍',
+};
 
 // ── Init mapa ──────────────────────────────────────────────
 function initMapa() {
   if (_mapa) return;
   _mapa = L.map("mapa", { zoomControl: true, preferCanvas: true })
             .setView([-34.6, -60.0], 10);
-  // Satelital hasta zoom nativo 17, fondo negro más allá
+
   const _satLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     { attribution: "Esri", maxNativeZoom: 17, maxZoom: 22 }
   ).addTo(_mapa);
 
-  // Etiquetas
   const _labelLayer = L.tileLayer(
     "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
     { maxNativeZoom: 17, maxZoom: 22, opacity: 0.7 }
   ).addTo(_mapa);
 
-  // Al superar zoom 17: ocultar etiquetas (sat ya se estira solo con maxNativeZoom)
   _mapa.on("zoomend", () => {
     _labelLayer.setOpacity(_mapa.getZoom() > 17 ? 0 : 0.7);
   });
-
   _mapa.on("click", cerrarDropdown);
 }
 
-// ── Lista liviana al abrir (solo nombres y flags, sin coords) ─
+// ── Lista liviana ──────────────────────────────────────────
 async function recargarLista() {
   try {
     const estab = document.getElementById("filtro-estab")?.value || "";
@@ -168,7 +225,7 @@ async function recargarLista() {
   }
 }
 
-// ── Buscador (debounce 180ms) ──────────────────────────────
+// ── Buscador ───────────────────────────────────────────────
 function posicionarDropdown() {
   const input = document.getElementById("lote-search");
   const dd    = document.getElementById("search-dropdown");
@@ -194,18 +251,20 @@ function onBusqueda(val) {
       dd.innerHTML = `<div style="padding:14px 16px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center">
         Sin resultados para "<em style='color:rgba(255,255,255,0.6)'>${val}</em>"</div>`;
       dd.style.display = "block";
+      posicionarDropdown();
       return;
     }
 
     dd.innerHTML = matches.map(l => {
       const nombre = l.nombre || "?";
       const badges = [
-        l.tiene_boundary ? `<span style="font-size:9px;color:var(--lime);opacity:.8">⬡ boundary</span>`   : "",
-        l.tiene_sections ? `<span style="font-size:9px;color:#3c9eff;opacity:.8">▦ cobertura</span>`      : "",
-        l.tiene_origen   ? `<span style="font-size:9px;color:#f59e0b;opacity:.8">📍 GPS</span>`           : "",
+        l.tiene_boundary ? `<span style="font-size:9px;color:var(--lime);opacity:.8">⬡ boundary</span>` : "",
+        l.tiene_sections ? `<span style="font-size:9px;color:#3c9eff;opacity:.8">▦ cobertura</span>` : "",
+        l.tiene_origen   ? `<span style="font-size:9px;color:#f59e0b;opacity:.8">📍 GPS</span>` : "",
       ].filter(Boolean).join(" &middot; ");
       const estabLabel = l.estab_slug && l.estab_slug !== "unassigned" ? l.estab_slug : "";
-      return `<div onclick="seleccionarLote('${encodeURIComponent(nombre)}','${l.estab_slug||''}')"
+      return `<div
+        onclick="seleccionarLote('${encodeURIComponent(nombre)}','${l.estab_slug||''}')"
         onmouseover="this.style.background='rgba(184,255,60,0.06)'"
         onmouseout="this.style.background=''"
         style="padding:11px 16px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);transition:background .1s">
@@ -226,98 +285,327 @@ function cerrarDropdown() {
   document.getElementById("search-dropdown").style.display = "none";
 }
 
-// ── Seleccionar lote → fetch solo ESE lote con coords ─────
+// ── Seleccionar lote ───────────────────────────────────────
 async function seleccionarLote(nombreEnc, estabSlug) {
   cerrarDropdown();
-  document.getElementById("lote-search").value = decodeURIComponent(nombreEnc);
+  _loteActual = decodeURIComponent(nombreEnc);
+  document.getElementById("lote-search").value = _loteActual;
 
   initMapa();
-  document.getElementById("mapa-loading").style.display = "flex";
-  document.getElementById("mapa-empty").style.display   = "none";
+  mostrarLoading("Cargando lote…");
+  document.getElementById("mapa-empty").style.display = "none";
 
+  // Limpiar todo
   _layers.forEach(l => _mapa.removeLayer(l));
   _layers = [];
+  Object.values(_capaLayers).forEach(ls => ls.forEach(l => _mapa.removeLayer(l)));
+  _capaLayers = {};
+  _colorIdx   = 0;
+  document.getElementById("leyenda-capas").innerHTML = "";
+  document.getElementById("panel-capas").style.display = "none";
 
   try {
+    // 1. Cargar AOG base
     const qs   = `?lote=${nombreEnc}` + (estabSlug ? `&estab=${estabSlug}` : "");
     const data = await Auth.get("/api/aog/mapa" + qs);
     const lote = Array.isArray(data) ? data[0] : data;
 
-    if (!lote) {
-      toast("Sin datos para este lote", "", "amber");
-      document.getElementById("mapa-empty").style.display = "flex";
-      return;
-    }
-
-    const nombre = lote.nombre || decodeURIComponent(nombreEnc);
     const bounds = [];
 
-    // Boundary
-    if (lote.boundary?.length > 2) {
-      const poly = L.polygon(lote.boundary, {
-        color: "#b8ff3c", weight: 1.5, opacity: 0.9,
-        fillColor: "#b8ff3c", fillOpacity: 0.07,
-      }).addTo(_mapa);
-      poly.bindTooltip(`<b style="color:#b8ff3c">${nombre}</b>`, { sticky: true });
-      _layers.push(poly);
-      lote.boundary.forEach(p => bounds.push(p));
-    }
+    if (lote) {
+      const nombre = lote.nombre || _loteActual;
 
-    // Sections
-    if (lote.sections?.length) {
-      lote.sections.forEach(rect => {
-        _layers.push(
-          L.polygon(rect, {
+      if (lote.boundary?.length > 2) {
+        const poly = L.polygon(lote.boundary, {
+          color: "#b8ff3c", weight: 1.5, opacity: 0.9,
+          fillColor: "#b8ff3c", fillOpacity: 0.07,
+        }).addTo(_mapa);
+        poly.bindTooltip(`<b style="color:#b8ff3c">${nombre}</b>`, { sticky: true });
+        _layers.push(poly);
+        lote.boundary.forEach(p => bounds.push(p));
+      }
+
+      if (lote.sections?.length) {
+        lote.sections.forEach(rect => {
+          _layers.push(L.polygon(rect, {
             color: "#3c9eff", weight: 0.5, opacity: 0.7,
             fillColor: "#3c9eff", fillOpacity: 0.3,
-          }).addTo(_mapa)
-        );
-      });
-    }
+          }).addTo(_mapa));
+        });
+      }
 
-    // Origen GPS
-    if (lote.origen) {
-      const m = L.circleMarker([lote.origen.lat, lote.origen.lon], {
-        radius: 5, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1, weight: 1.5,
-      }).addTo(_mapa);
-      m.bindTooltip(`${nombre} — origen GPS`);
-      _layers.push(m);
-      bounds.push([lote.origen.lat, lote.origen.lon]);
-    }
+      if (lote.origen) {
+        const m = L.circleMarker([lote.origen.lat, lote.origen.lon], {
+          radius: 5, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1, weight: 1.5,
+        }).addTo(_mapa);
+        m.bindTooltip(`${nombre} — origen GPS`);
+        _layers.push(m);
+        bounds.push([lote.origen.lat, lote.origen.lon]);
+      }
 
-    if (bounds.length) _mapa.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
+      if (bounds.length) _mapa.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
+    }
 
     // Pill activo
-    document.getElementById("pill-nombre").textContent    = nombre;
-    document.getElementById("pill-activo").style.display  = "flex";
+    document.getElementById("pill-nombre").textContent   = _loteActual;
+    document.getElementById("pill-activo").style.display = "flex";
 
+    // Estado
     const info = [
-      lote.boundary ? "⬡ Boundary"                        : null,
-      lote.sections ? `▦ ${lote.sections.length} pasadas` : null,
-      lote.origen   ? "📍 GPS"                             : null,
+      lote?.boundary ? "⬡ Boundary" : null,
+      lote?.sections ? `▦ ${lote.sections.length} pasadas` : null,
+      lote?.origen   ? "📍 GPS" : null,
     ].filter(Boolean).join(" · ");
-    document.getElementById("mapa-estado").textContent = nombre + (info ? "  " + info : "");
+    document.getElementById("mapa-estado").textContent = _loteActual + (info ? "  " + info : "");
+
+    // 2. Cargar capas externas del lote
+    ocultarLoading();
+    cargarCapasLote(nombreEnc, estabSlug);
 
   } catch(e) {
     toast("Error cargando lote", e.message, "red");
     document.getElementById("mapa-empty").style.display = "flex";
-  } finally {
-    document.getElementById("mapa-loading").style.display = "none";
+    ocultarLoading();
   }
+}
+
+// ── Cargar capas externas (async, no bloquea) ─────────────
+async function cargarCapasLote(nombreEnc, estabSlug) {
+  try {
+    const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+    const externas = ctx.capas?.externas || {};
+    const todasCapas = Object.entries(externas).flatMap(([subtipo, capas]) =>
+      capas.map(c => ({ ...c, subtipo }))
+    );
+
+    if (!todasCapas.length) return;
+
+    // Mostrar panel
+    document.getElementById("panel-capas").style.display = "block";
+    document.getElementById("capas-count").textContent   = todasCapas.length + " capa" + (todasCapas.length !== 1 ? "s" : "");
+
+    renderPanelCapas(todasCapas, nombreEnc);
+
+    // Auto-cargar las capas que tienen geometría
+    for (const capa of todasCapas) {
+      if (capa.contenido_texto || capa.base64) {
+        await cargarCapaEnMapa(capa, nombreEnc);
+      }
+    }
+
+  } catch(e) {
+    // Sin capas maestro — ok, no mostrar error
+  }
+}
+
+// ── Renderizar panel de capas ──────────────────────────────
+function renderPanelCapas(capas, nombreEnc) {
+  const lista = document.getElementById("capas-lista");
+  lista.innerHTML = capas.map((c, i) => {
+    const icono  = CAPA_ICONO[c.subtipo] || "📁";
+    const color  = CAPA_COLORES[i % CAPA_COLORES.length];
+    const capaId = `capa_${i}`;
+    const tieneGeo = esCapaGeografica(c);
+    return `
+      <div class="capa-item" onclick="toggleCapa('${capaId}','${nombreEnc}',${i})">
+        <div style="width:10px;height:10px;border-radius:3px;background:${color};flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${c.nombre}">${icono} ${c.nombre}</div>
+          <div style="font-size:10px;color:var(--muted2)">${c.subtipo}${c.fuente?' · '+c.fuente:''}</div>
+        </div>
+        ${tieneGeo
+          ? `<div class="capa-toggle on" id="toggle-${capaId}" title="Mostrar/ocultar en mapa"></div>`
+          : `<span style="font-size:10px;color:var(--muted2)" title="Sin datos geográficos">—</span>`}
+      </div>`;
+  }).join("");
+}
+
+function esCapaGeografica(c) {
+  const ext = (c.nombre||"").split(".").pop().toLowerCase();
+  return ["geojson","json","csv","kml","shp","shapefile"].includes(ext) ||
+         ["ndvi","shapefile","geojson","kml","csv","imagen_drone","imagen_sat"].includes(c.subtipo) ||
+         !!c.contenido_texto || !!c.base64;
+}
+
+// ── Toggle capa en el mapa ────────────────────────────────
+async function toggleCapa(capaId, nombreEnc, idx) {
+  const toggle = document.getElementById(`toggle-${capaId}`);
+  if (!toggle) return;
+
+  const estaOn = toggle.classList.contains("on");
+
+  if (estaOn) {
+    // Ocultar
+    (_capaLayers[capaId] || []).forEach(l => _mapa.removeLayer(l));
+    delete _capaLayers[capaId];
+    toggle.classList.remove("on");
+    toggle.classList.add("off");
+  } else {
+    // Mostrar — recargar capa
+    toggle.classList.add("on");
+    toggle.classList.remove("off");
+    mostrarLoading("Cargando capa…");
+    try {
+      const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+      const externas = ctx.capas?.externas || {};
+      const todasCapas = Object.entries(externas).flatMap(([sub, cs]) => cs.map(c => ({ ...c, subtipo: sub })));
+      if (todasCapas[idx]) {
+        await cargarCapaEnMapa(todasCapas[idx], nombreEnc, capaId, idx);
+      }
+    } catch(e) {
+      toast("Error cargando capa", e.message, "red");
+    } finally {
+      ocultarLoading();
+    }
+  }
+}
+
+// ── Parsear y dibujar una capa en el mapa ─────────────────
+async function cargarCapaEnMapa(capa, nombreEnc, capaId, colorOffset) {
+  const color = CAPA_COLORES[(colorOffset !== undefined ? colorOffset : _colorIdx) % CAPA_COLORES.length];
+  if (colorOffset === undefined) _colorIdx++;
+  if (!capaId) {
+    const idx = Object.keys(_capaLayers).length;
+    capaId = `capa_${idx}`;
+  }
+
+  const contenido = capa.contenido_texto || null;
+  if (!contenido) return;
+
+  const ext = (capa.nombre || "").split(".").pop().toLowerCase();
+  let leafletLayers = [];
+
+  try {
+    // ── GeoJSON / JSON ────────────────────────────────────
+    if (ext === "geojson" || ext === "json" || capa.subtipo === "geojson") {
+      const gj = JSON.parse(contenido);
+      const layer = L.geoJSON(gj, {
+        style: () => ({
+          color,
+          weight: 1.5,
+          opacity: 0.85,
+          fillColor: color,
+          fillOpacity: 0.25,
+        }),
+        pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+          radius: 4, color, fillColor: color, fillOpacity: 0.8, weight: 1,
+        }),
+        onEachFeature: (feature, layer) => {
+          if (feature.properties) {
+            const props = Object.entries(feature.properties)
+              .filter(([,v]) => v !== null && v !== undefined)
+              .slice(0, 5)
+              .map(([k, v]) => `<b>${k}:</b> ${typeof v === "number" ? v.toFixed(4) : v}`)
+              .join("<br>");
+            if (props) layer.bindPopup(`<div style="font-size:12px;min-width:120px">${props}</div>`);
+          }
+        },
+      }).addTo(_mapa);
+      leafletLayers.push(layer);
+
+      // Ajustar bounds si no hay lote base
+      if (!_layers.length) {
+        try { _mapa.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 }); } catch {}
+      }
+    }
+
+    // ── KML ────────────────────────────────────────────────
+    else if (ext === "kml") {
+      const coordsMatch = contenido.match(/<coordinates>([\s\S]*?)<\/coordinates>/gi) || [];
+      coordsMatch.forEach(block => {
+        const pts = block.replace(/<\/?coordinates>/gi, "").trim()
+          .split(/\s+/).map(c => {
+            const [lon, lat] = c.split(",").map(parseFloat);
+            return (!isNaN(lat) && !isNaN(lon)) ? [lat, lon] : null;
+          }).filter(Boolean);
+        if (pts.length > 1) {
+          leafletLayers.push(L.polyline(pts, { color, weight: 2, opacity: 0.85 }).addTo(_mapa));
+        } else if (pts.length === 1) {
+          leafletLayers.push(L.circleMarker(pts[0], { radius: 5, color, fillColor: color, fillOpacity: 0.85, weight: 1 }).addTo(_mapa));
+        }
+      });
+    }
+
+    // ── CSV con lat/lon ───────────────────────────────────
+    else if (ext === "csv") {
+      const lines   = contenido.split(/\r?\n/).filter(l => l.trim());
+      const sep     = lines[0].includes("\t") ? "\t" : ",";
+      const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
+      const latCol  = headers.findIndex(h => ["lat","latitude","latitud"].includes(h));
+      const lonCol  = headers.findIndex(h => ["lon","lng","long","longitude","longitud"].includes(h));
+
+      if (latCol >= 0 && lonCol >= 0) {
+        const pts = [];
+        lines.slice(1).forEach(line => {
+          const cols = line.split(sep).map(v => v.replace(/^"|"$/g, "").trim());
+          const lat  = parseFloat(cols[latCol]);
+          const lon  = parseFloat(cols[lonCol]);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            const props = headers.map((h, i) => `<b>${h}:</b> ${cols[i] || "–"}`).join("<br>");
+            const m = L.circleMarker([lat, lon], {
+              radius: 3, color, fillColor: color, fillOpacity: 0.75, weight: 0.5,
+            }).addTo(_mapa);
+            m.bindPopup(`<div style="font-size:12px">${props}</div>`);
+            leafletLayers.push(m);
+            pts.push([lat, lon]);
+          }
+        });
+        if (pts.length && !_layers.length) {
+          try { _mapa.fitBounds(pts, { padding: [30, 30], maxZoom: 18 }); } catch {}
+        }
+      } else {
+        toast(`CSV "${capa.nombre}" sin columnas lat/lon`, "No se puede dibujar en el mapa", "amber");
+        return;
+      }
+    }
+
+  } catch(e) {
+    console.error("[mapa/capa]", capa.nombre, e.message);
+    toast(`Error al dibujar "${capa.nombre}"`, e.message, "red");
+    return;
+  }
+
+  if (!leafletLayers.length) return;
+
+  _capaLayers[capaId] = leafletLayers;
+
+  // Agregar a leyenda
+  const leyenda = document.getElementById("leyenda-capas");
+  const nombre  = capa.nombre.length > 22 ? capa.nombre.slice(0, 20) + "…" : capa.nombre;
+  leyenda.innerHTML += `
+    <div style="display:flex;align-items:center;gap:8px" id="leyenda-${capaId}">
+      <span style="display:inline-block;width:14px;height:3px;background:${color};border-radius:2px"></span>
+      <span style="color:rgba(255,255,255,0.7)">${nombre}</span>
+    </div>`;
 }
 
 // ── Limpiar ────────────────────────────────────────────────
 function limpiarMapa() {
   _layers.forEach(l => _mapa?.removeLayer(l));
   _layers = [];
-  document.getElementById("lote-search").value        = "";
-  document.getElementById("pill-activo").style.display = "none";
-  document.getElementById("mapa-empty").style.display  = "flex";
-  document.getElementById("mapa-estado").textContent   =
-    _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
+  Object.values(_capaLayers).forEach(ls => ls.forEach(l => _mapa?.removeLayer(l)));
+  _capaLayers = {};
+  _colorIdx   = 0;
+  _loteActual = null;
+  document.getElementById("lote-search").value          = "";
+  document.getElementById("pill-activo").style.display   = "none";
+  document.getElementById("mapa-empty").style.display    = "flex";
+  document.getElementById("panel-capas").style.display   = "none";
+  document.getElementById("leyenda-capas").innerHTML     = "";
+  document.getElementById("mapa-estado").textContent     = _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
 }
 
-// ── Cerrar dropdown al click fuera ────────────────────────
+// ── Loading helpers ────────────────────────────────────────
+function mostrarLoading(txt) {
+  document.getElementById("loading-texto").textContent   = txt || "Cargando…";
+  document.getElementById("mapa-loading").style.display  = "flex";
+}
+function ocultarLoading() {
+  document.getElementById("mapa-loading").style.display  = "none";
+}
+
+// ── Cerrar dropdown ────────────────────────────────────────
 document.addEventListener("click", e => {
   if (!e.target.closest("#lote-search") && !e.target.closest("#search-dropdown"))
     cerrarDropdown();
