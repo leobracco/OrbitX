@@ -386,8 +386,29 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
 
     renderPanelCapas(todasCapas, nombreEnc);
 
-    // Auto-cargar las capas que tienen geometría
+    // Separar SHP de otros formatos
+    const shpGrupos = {};
+    const noSHP     = [];
     for (const capa of todasCapas) {
+      const ext = (capa.nombre || "").split(".").pop().toLowerCase();
+      if (["shp","dbf","shx","prj"].includes(ext)) {
+        const base = capa.nombre.replace(/\.[^.]+$/, "");
+        if (!shpGrupos[base]) shpGrupos[base] = {};
+        shpGrupos[base][ext] = capa;
+      } else {
+        noSHP.push(capa);
+      }
+    }
+
+    // Cargar grupos SHP via endpoint de conversión UTM→WGS84
+    for (const [base, grp] of Object.entries(shpGrupos)) {
+      if (grp.shp && grp.shp.base64) {
+        await cargarSHPEnMapa(base, grp);
+      }
+    }
+
+    // Cargar resto (GeoJSON, CSV, KML)
+    for (const capa of noSHP) {
       if (capa.contenido_texto || capa.base64) {
         await cargarCapaEnMapa(capa, nombreEnc);
       }
@@ -401,21 +422,54 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
 // ── Renderizar panel de capas ──────────────────────────────
 function renderPanelCapas(capas, nombreEnc) {
   const lista = document.getElementById("capas-lista");
-  lista.innerHTML = capas.map((c, i) => {
-    const icono  = CAPA_ICONO[c.subtipo] || "📁";
-    const color  = CAPA_COLORES[i % CAPA_COLORES.length];
-    const capaId = `capa_${i}`;
-    const tieneGeo = esCapaGeografica(c);
+
+  // Agrupar SHP para mostrar como una sola entrada
+  const shpGruposVisto = new Set();
+  const items = [];
+  let colorOff = 0;
+
+  for (const c of capas) {
+    const ext  = (c.nombre || "").split(".").pop().toLowerCase();
+    const base = c.nombre.replace(/\.[^.]+$/, "");
+    if (["shp","dbf","shx","prj"].includes(ext)) {
+      if (ext === "shp") {
+        items.push({ tipo:"shp", base, color: CAPA_COLORES[colorOff++ % CAPA_COLORES.length],
+                     capaId: `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}` });
+      }
+      // dbf/shx/prj se ignoran visualmente (van implícitos)
+    } else {
+      const icono    = CAPA_ICONO[c.subtipo] || "📁";
+      const color    = CAPA_COLORES[colorOff++ % CAPA_COLORES.length];
+      const capaId   = `capa_${items.length}`;
+      const tieneGeo = esCapaGeografica(c);
+      items.push({ tipo:"capa", capa:c, icono, color, capaId, tieneGeo });
+    }
+  }
+
+  lista.innerHTML = items.map(it => {
+    if (it.tipo === "shp") {
+      return `
+        <div class="capa-item">
+          <div style="width:10px;height:10px;border-radius:3px;background:${it.color};flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              📐 ${it.base}.shp</div>
+            <div style="font-size:10px;color:var(--muted2)">shapefile · UTM→WGS84 auto</div>
+          </div>
+          <div class="capa-toggle on" id="toggle-${it.capaId}" title="Mostrar/ocultar"></div>
+        </div>`;
+    }
+    const c = it.capa;
     return `
-      <div class="capa-item" onclick="toggleCapa('${capaId}','${nombreEnc}',${i})">
-        <div style="width:10px;height:10px;border-radius:3px;background:${color};flex-shrink:0"></div>
+      <div class="capa-item" onclick="toggleCapa('${it.capaId}','${nombreEnc}',${capas.indexOf(c)})">
+        <div style="width:10px;height:10px;border-radius:3px;background:${it.color};flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            title="${c.nombre}">${icono} ${c.nombre}</div>
+            title="${c.nombre}">${it.icono} ${c.nombre}</div>
           <div style="font-size:10px;color:var(--muted2)">${c.subtipo}${c.fuente?' · '+c.fuente:''}</div>
         </div>
-        ${tieneGeo
-          ? `<div class="capa-toggle on" id="toggle-${capaId}" title="Mostrar/ocultar en mapa"></div>`
+        ${it.tieneGeo
+          ? `<div class="capa-toggle on" id="toggle-${it.capaId}" title="Mostrar/ocultar en mapa"></div>`
           : `<span style="font-size:10px;color:var(--muted2)" title="Sin datos geográficos">—</span>`}
       </div>`;
   }).join("");
@@ -458,6 +512,130 @@ async function toggleCapa(capaId, nombreEnc, idx) {
     } finally {
       ocultarLoading();
     }
+  }
+}
+
+// ── SHP: convertir UTM→WGS84 vía backend y dibujar ──────
+async function cargarSHPEnMapa(base, grp) {
+  const color  = CAPA_COLORES[_colorIdx % CAPA_COLORES.length];
+  const capaId = `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}`;
+  _colorIdx++;
+
+  try {
+    mostrarLoading(`Convirtiendo ${base}.shp…`);
+
+    // Leer PRJ como texto si está disponible
+    let prjText = null;
+    if (grp.prj) {
+      prjText = grp.prj.contenido_texto || (grp.prj.base64
+        ? atob(grp.prj.base64)
+        : null);
+    }
+
+    const body = {
+      shp: grp.shp.base64,
+      shx: grp.shx?.base64 || null,
+      dbf: grp.dbf?.base64 || null,
+      prj: prjText,
+    };
+
+    const geojson = await Auth.post("/api/lotes-maestro/shp-to-geojson", body);
+    ocultarLoading();
+
+    if (!geojson.features?.length) {
+      toast(`${base}.shp`, "Sin features para mostrar", "amber");
+      return;
+    }
+
+    // Detectar si es nube de puntos con valor numérico → mapa de calor por color
+    const firstProps = geojson.features[0]?.properties || {};
+    const numKeys    = Object.keys(firstProps).filter(k => typeof firstProps[k] === "number");
+    const valKey     = numKeys[0] || null;
+
+    let layer;
+    if (valKey && geojson.features.length > 100) {
+      // Nube de puntos con valor → gradiente de color por valor
+      const vals   = geojson.features.map(f => f.properties[valKey]);
+      const minVal = Math.min(...vals);
+      const maxVal = Math.max(...vals);
+      const range  = maxVal - minVal || 1;
+
+      layer = L.geoJSON(geojson, {
+        pointToLayer: (feature, latlng) => {
+          const t   = (feature.properties[valKey] - minVal) / range;
+          // Gradiente: azul(0) → verde(0.5) → rojo(1)
+          const r   = Math.round(t < 0.5 ? t*2*50 : 50 + (t-0.5)*2*205);
+          const g   = Math.round(t < 0.5 ? 100 + t*2*155 : 255 - (t-0.5)*2*200);
+          const b   = Math.round(t < 0.5 ? 200 - t*2*200 : 0);
+          const clr = `rgb(${r},${g},${b})`;
+          return L.circleMarker(latlng, {
+            radius: 4, color: clr, fillColor: clr,
+            fillOpacity: 0.85, weight: 0,
+          });
+        },
+        onEachFeature: (feature, layer) => {
+          const val = feature.properties[valKey];
+          layer.bindPopup(
+            `<div style="font-size:12px;min-width:100px">
+              <b style="color:#b8ff3c">${valKey}:</b> ${typeof val==="number" ? val.toFixed(4) : val}
+              ${Object.entries(feature.properties).filter(([k])=>k!==valKey).slice(0,3)
+                .map(([k,v])=>`<br><b>${k}:</b> ${v}`).join("")}
+            </div>`
+          );
+        },
+      }).addTo(_mapa);
+
+      // Agregar leyenda de gradiente
+      const leyenda = document.getElementById("leyenda-capas");
+      leyenda.innerHTML += `
+        <div id="leyenda-${capaId}" style="margin-top:6px">
+          <div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:3px">${base} (${valKey})</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:9px;color:rgba(255,255,255,0.4)">${minVal.toFixed(2)}</span>
+            <div style="width:60px;height:6px;border-radius:3px;
+                        background:linear-gradient(to right,rgb(0,100,200),rgb(50,255,50),rgb(255,55,0))"></div>
+            <span style="font-size:9px;color:rgba(255,255,255,0.4)">${maxVal.toFixed(2)}</span>
+          </div>
+        </div>`;
+
+    } else {
+      // Polígonos / líneas / puntos simples
+      layer = L.geoJSON(geojson, {
+        style: () => ({ color, weight:1.5, opacity:0.85, fillColor:color, fillOpacity:0.25 }),
+        pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+          radius: 4, color, fillColor: color, fillOpacity: 0.85, weight: 1,
+        }),
+        onEachFeature: (feature, l) => {
+          if (feature.properties) {
+            const props = Object.entries(feature.properties).slice(0,5)
+              .map(([k,v]) => `<b>${k}:</b> ${typeof v==="number" ? v.toFixed(4) : v}`)
+              .join("<br>");
+            if (props) l.bindPopup(`<div style="font-size:12px">${props}</div>`);
+          }
+        },
+      }).addTo(_mapa);
+
+      const leyenda = document.getElementById("leyenda-capas");
+      leyenda.innerHTML += `
+        <div style="display:flex;align-items:center;gap:8px" id="leyenda-${capaId}">
+          <span style="display:inline-block;width:14px;height:3px;background:${color};border-radius:2px"></span>
+          <span style="color:rgba(255,255,255,0.7)">${base}</span>
+        </div>`;
+    }
+
+    _capaLayers[capaId] = [layer];
+
+    // Ajustar bounds al shapefile
+    try {
+      _mapa.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 });
+    } catch {}
+
+    toast(`✓ ${base}.shp`, `${geojson.features.length} features cargados`, "lime");
+
+  } catch(e) {
+    ocultarLoading();
+    console.error("[cargarSHP]", base, e.message);
+    toast(`Error en ${base}.shp`, e.message, "red");
   }
 }
 
