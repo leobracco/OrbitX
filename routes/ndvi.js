@@ -5,7 +5,6 @@
 // El frontend NUNCA ve el token de Copernicus — solo llama /api/ndvi/tile/...
 
 const router   = require('express').Router();
-const fetch    = require('node-fetch');
 const { getDB } = require('../services/couchdb');
 const { decrypt } = require('./integraciones');
 
