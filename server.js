@@ -25,6 +25,10 @@ const routeVistaX = require("./routes/vistax");
 const routeGrupos = require("./routes/grupos");
 const routeAgrariaChat = require("./routes/agraria_chat");
 const routeLotesMaestro = require("./routes/lotes_maestro");
+const { router: integracionesRouter } = require('./routes/integraciones');
+const ndviRouter = require('./routes/ndvi');
+
+
 
 const app = express();
 const server = http.createServer(app);
@@ -104,6 +108,8 @@ app.use("/api/vistax", auth.required, routeVistaX);
 app.use("/api/grupos", auth.required, routeGrupos);
 app.use("/api/agraria", auth.required, routeAgrariaChat);
 app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
+app.use('/api/integraciones', authMiddleware, integracionesRouter);
+app.use('/api/ndvi',          authMiddleware, ndviRouter);
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
 app.use(

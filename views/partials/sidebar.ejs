@@ -4,70 +4,65 @@ const _nav = activeNav || "";
 function navItem(href, icon, label, active, badge) {
   const on = (active === href) || (href !== "/" && href !== "/dashboard" && active && active.startsWith(href));
   return `<a href="${href}" class="nav-item${on?" active":""}">
-    <span class="nav-icon">${icon}</span>
-    <span class="nav-label">${label}</span>
+<span class="nav-icon">${icon}</span>
+<span class="nav-label">${label}</span>
     ${badge ? `<span class="nav-badge">${badge}</span>` : ""}
-  </a>`;
+</a>`;
 }
 %>
 <aside class="sidebar" id="sidebar">
-  <div class="sidebar-logo">
-    <svg width="28" height="28" viewBox="0 0 30 30" fill="none">
-      <circle cx="15" cy="15" r="3.5" fill="#B8FF3C"/>
-      <circle cx="15" cy="15" r="7" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
-      <ellipse cx="15" cy="15" rx="13" ry="5.5" stroke="#B8FF3C" stroke-width="1" opacity="0.65" transform="rotate(-25 15 15)"/>
-      <circle cx="22" cy="9" r="1.8" fill="#3C9EFF"/>
-    </svg>
-    <span class="logo-name">Orbit<em>X</em></span>
-    <span class="logo-badge">Cloud</span>
-  </div>
-
-  <nav class="sidebar-nav">
-
-    <div class="nav-section">Principal</div>
-    <%- navItem('/dashboard',    '⊞',  'Dashboard',          _nav) %>
-    <%- navItem('/alertas',      '⚠',  'Alertas',            _nav) %>
-    <%- navItem('/dispositivos', '📡', 'Dispositivos',       _nav) %>
-
-    <div class="nav-section">Gestión</div>
-    <%- navItem('/establecimientos', '◫', 'Establecimientos', _nav) %>
-    <%- navItem('/lotes',   '🌾', 'Lotes',      _nav) %>
-    <%- navItem('/mapa',    '🗺', 'Mapa',        _nav) %>
-    <%- navItem('/vehiculos','🚜','Vehículos',   _nav) %>
-
-    <div class="nav-section">Siembra</div>
-    <%- navItem('/vistax',           '🌱', 'VistaX',          _nav) %>
-    <%- navItem('/configuraciones',  '⚙',  'Configuraciones', _nav) %>
-    <%- navItem('/prescripciones',   '📋', 'Prescripciones',  _nav) %>
-    <%- navItem('/agraria',          '✦',  'agrarIA',         _nav) %>
-
-    <% if (locals.isAdmin || locals.isSA) { %>
-    <div class="nav-section">Admin</div>
-    <%- navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) %>
-    <%- navItem('/usuarios',  '👤', 'Usuarios',  _nav) %>
-    <%- navItem('/roles',     '🔑', 'Roles',     _nav) %>
-    <%- navItem('/grupos',    '👥', 'Grupos',    _nav) %>
-    <% if (locals.isSA) { %>
-    <%- navItem('/config',  '🔧', 'Config sistema', _nav) %>
-    <%- navItem('/couchdb', '🗃', 'CouchDB',        _nav) %>
-    <% } %>
-    <% } %>
-
-  </nav>
-
-  <div class="sidebar-footer">
-    <div class="user-row">
-      <div class="user-avatar">
-        <%= (locals.user?.nombre || locals.user?.email || "U")[0].toUpperCase() %>
-      </div>
-      <div class="user-info">
-        <div class="user-name"><%= locals.user?.nombre || locals.user?.email || "Usuario" %></div>
-        <div class="user-role"><%= locals.user?.rol_global || "usuario" %></div>
-      </div>
-    </div>
-    <a href="/logout" class="nav-item" style="margin-top:4px;border-left:none">
-      <span class="nav-icon">↪</span>
-      <span class="nav-label">Cerrar sesión</span>
-    </a>
-  </div>
+<div class="sidebar-logo">
+<svg width="28" height="28" viewBox="0 0 30 30" fill="none">
+<circle cx="15" cy="15" r="3.5" fill="#B8FF3C"/>
+<circle cx="15" cy="15" r="7" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
+<ellipse cx="15" cy="15" rx="13" ry="5.5" stroke="#B8FF3C" stroke-width="1" opacity="0.65" transform="rotate(-25 15 15)"/>
+<circle cx="22" cy="9" r="1.8" fill="#3C9EFF"/>
+</svg>
+<span class="logo-name">Orbit<em>X</em></span>
+<span class="logo-badge">Cloud</span>
+</div>
+<nav class="sidebar-nav">
+<div class="nav-section">Principal</div>
+<%- navItem('/dashboard',    '⊞',  'Dashboard',          _nav) %>
+<%- navItem('/alertas',      '⚠',  'Alertas',            _nav) %>
+<%- navItem('/dispositivos', '📡', 'Dispositivos',       _nav) %>
+<div class="nav-section">Gestión</div>
+<%- navItem('/establecimientos', '◫', 'Establecimientos', _nav) %>
+<%- navItem('/lotes',   '🌾', 'Lotes',      _nav) %>
+<%- navItem('/mapa',    '🗺', 'Mapa',        _nav) %>
+<%- navItem('/vehiculos','🚜','Vehículos',   _nav) %>
+<div class="nav-section">Siembra</div>
+<%- navItem('/vistax',           '🌱', 'VistaX',          _nav) %>
+<%- navItem('/configuraciones',  '⚙',  'Configuraciones', _nav) %>
+<%- navItem('/prescripciones',   '📋', 'Prescripciones',  _nav) %>
+<%- navItem('/agraria',          '✦',  'agrarIA',         _nav) %>
+<div class="nav-section">Satélite</div>
+<%- navItem('/integraciones', '🛰', 'Integraciones', _nav) %>
+<% if (locals.isAdmin || locals.isSA) { %>
+<div class="nav-section">Admin</div>
+<%- navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) %>
+<%- navItem('/usuarios',  '👤', 'Usuarios',  _nav) %>
+<%- navItem('/roles',     '🔑', 'Roles',     _nav) %>
+<%- navItem('/grupos',    '👥', 'Grupos',    _nav) %>
+<% if (locals.isSA) { %>
+<%- navItem('/config',  '🔧', 'Config sistema', _nav) %>
+<%- navItem('/couchdb', '🗃', 'CouchDB',        _nav) %>
+<% } %>
+<% } %>
+</nav>
+<div class="sidebar-footer">
+<div class="user-row">
+<div class="user-avatar">
+<%= (locals.user?.nombre || locals.user?.email || "U")[0].toUpperCase() %>
+</div>
+<div class="user-info">
+<div class="user-name"><%= locals.user?.nombre || locals.user?.email || "Usuario" %></div>
+<div class="user-role"><%= locals.user?.rol_global || "usuario" %></div>
+</div>
+</div>
+<a href="/logout" class="nav-item" style="margin-top:4px;border-left:none">
+<span class="nav-icon">↪</span>
+<span class="nav-label">Cerrar sesión</span>
+</a>
+</div>
 </aside>
