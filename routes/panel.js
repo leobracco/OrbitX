@@ -517,19 +517,32 @@ router.get("/configuraciones", requireAuth, async (req, res) => {
     lotes.sort((a,b) => (b.ts_ultimo||0) - (a.ts_ultimo||0));
   } catch(e) { console.error("[Panel/configuraciones]", e.message); }
 
-  // stats compatibles con lo que espera aog.ejs
+  // Calcular stats que aog.ejs espera
+  let totalArchivos = 0, tieneVehicle = false, ultimoSync = 0;
+  const tiposCount = {};
+  lotes.forEach(l => {
+    totalArchivos += l.archivos?.length || 0;
+    (l.archivos || []).forEach(t => { tiposCount[t] = (tiposCount[t]||0) + 1; });
+    if ((l.archivos||[]).includes("vehicle_config")) tieneVehicle = true;
+    if ((l.ts_ultimo||0) > ultimoSync) ultimoSync = l.ts_ultimo;
+  });
+
   const stats = {
-    lotes_count:        lotes.length,
-    lotes_con_boundary: lotes.filter(l => l.tiene_boundary).length,
-    lotes_con_sections: lotes.filter(l => l.tiene_sections).length,
-    establecimientos:   establecimientos.length,
+    lotes_count:    lotes.length,
+    total_archivos: totalArchivos,
+    tiene_vehicle:  tieneVehicle,
+    ultimo_sync:    ultimoSync || null,
+    tipos:          tiposCount,
   };
+
+  // aogPath: ruta configurada en el agente (solo informativa)
+  const aogPath = process.env.AOG_PATH || "C:\\Piloto AP";
 
   const regBadge = await getRegBadge(db).catch(()=>0);
   res.render("layout", {
     ...base(req, { regBadge }),
-    title:"Configuraciones", page:"aog",   // reutiliza aog.ejs existente
-    establecimientos, lotes, stats
+    title:"Configuraciones", page:"aog",
+    establecimientos, lotes, stats, aogPath
   });
 });
 
