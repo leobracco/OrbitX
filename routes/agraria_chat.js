@@ -263,7 +263,13 @@ function parseKML(text) {
 function parsearArchivo(adj) {
   const { categoria, nombre, base64, texto } = adj;
   const ext = (nombre||'').split('.').pop().toLowerCase();
-  const contenido = texto || (base64 ? Buffer.from(base64,'base64').toString('utf-8') : '');
+  // Texto directo o decodificar base64; nunca pasar null a Buffer.from
+  let contenido = '';
+  if (texto) {
+    contenido = texto;
+  } else if (base64) {
+    try { contenido = Buffer.from(base64, 'base64').toString('utf-8'); } catch {}
+  }
 
   try {
     if (ext === 'geojson' || ext === 'json') return parseGeoJSON(contenido);
@@ -388,18 +394,22 @@ router.post("/chat", async (req, res) => {
 
     // Procesar grupos SHP
     for (const [base, grp] of Object.entries(shpGroup)) {
-      if (grp.shp) {
-        const resumen = parseShapefile(
-          grp.shp.base64,
-          grp.shx?.base64,
-          grp.dbf?.base64,
-          grp.prj ? Buffer.from(grp.prj.base64,'base64').toString('utf-8') : null
-        );
+      if (grp.shp && grp.shp.base64) {
+        // SHP es binario → siempre base64; DBF/SHX también binarios
+        const shxData = grp.shx?.base64 || null;
+        const dbfData = grp.dbf?.base64 || null;
+        // PRJ es texto plano — puede llegar como texto directo o base64
+        const prjText = grp.prj
+          ? (grp.prj.texto || (grp.prj.base64 ? Buffer.from(grp.prj.base64,'base64').toString('utf-8') : null))
+          : null;
+        const resumen = parseShapefile(grp.shp.base64, shxData, dbfData, prjText);
         textosExtra.push(resumen);
-      } else if (grp.dbf) {
-        // DBF solo
-        const parsed = parseDBF(Buffer.from(grp.dbf.base64,'base64'));
-        textosExtra.push(`=== DBF: ${base}.dbf ===\nCampos: ${parsed.fields.map(f=>f.name).join(', ')}\nRegistros: ${parsed.numRecords}`);
+      } else if (grp.dbf && grp.dbf.base64) {
+        // DBF solo sin SHP
+        try {
+          const parsed = parseDBF(Buffer.from(grp.dbf.base64,'base64'));
+          textosExtra.push(`=== DBF: ${base}.dbf ===\nCampos: ${parsed.fields.map(f=>f.name).join(', ')}\nRegistros: ${parsed.numRecords}`);
+        } catch(e) { console.error('[agrarIA/dbf]', e.message); }
       }
     }
 
