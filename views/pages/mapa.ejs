@@ -135,14 +135,51 @@ function initMapa() {
   if (_mapa) return;
   _mapa = L.map("mapa", { zoomControl: true, preferCanvas: true })
             .setView([-34.6, -60.0], 10);
-  L.tileLayer(
+  // Capa oscura (fallback sin tiles)
+  const _darkLayer = L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+    { attribution: "CartoDB", maxZoom: 22, subdomains: "abcd", opacity: 0 }
+  ).addTo(_mapa);
+
+  // Satelital (disponible hasta zoom 17)
+  const _satLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "Esri", maxZoom: 20 }
+    { attribution: "Esri", maxNativeZoom: 17, maxZoom: 22 }
   ).addTo(_mapa);
-  L.tileLayer(
+
+  // Etiquetas
+  const _labelLayer = L.tileLayer(
     "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    { maxZoom: 20, opacity: 0.65 }
+    { maxNativeZoom: 17, maxZoom: 22, opacity: 0.65 }
   ).addTo(_mapa);
+
+  // Badge modo offline
+  const _badge = document.createElement("div");
+  _badge.id = "offline-badge";
+  _badge.textContent = "📡 Modo sin conexión — sin tiles satelitales";
+  _badge.style.cssText = "display:none;position:absolute;top:10px;right:10px;z-index:1000;" +
+    "background:rgba(0,0,0,0.78);color:rgba(255,255,255,0.5);font-size:11px;" +
+    "padding:5px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);" +
+    "font-family:monospace;pointer-events:none";
+  document.getElementById("mapa").appendChild(_badge);
+
+  // Cambiar a modo oscuro al superar zoom 17 (sin tiles sat)
+  _mapa.on("zoomend", () => {
+    const z = _mapa.getZoom();
+    if (z > 17) {
+      _darkLayer.setOpacity(1);
+      _satLayer.setOpacity(0);
+      _labelLayer.setOpacity(0);
+      _badge.style.display = "block";
+      document.querySelector("#mapa .leaflet-container").style.background = "#050810";
+    } else {
+      _darkLayer.setOpacity(0);
+      _satLayer.setOpacity(1);
+      _labelLayer.setOpacity(0.65);
+      _badge.style.display = "none";
+    }
+  });
+
   _mapa.on("click", cerrarDropdown);
 }
 
