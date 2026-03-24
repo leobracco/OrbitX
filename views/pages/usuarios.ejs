@@ -1,5 +1,4 @@
 <%# pages/usuarios.ejs %>
-
 <div class="page-header">
   <div>
     <h2>Usuarios</h2>
@@ -7,7 +6,6 @@
   </div>
   <a href="/usuarios" class="btn">↻ Actualizar</a>
 </div>
-
 <div class="card">
   <div class="table-wrap">
     <table class="data-table">
@@ -15,6 +13,7 @@
         <tr>
           <th>Usuario</th>
           <th>Rol global</th>
+          <th>Grupos</th>
           <th>Último login</th>
           <th>Estado</th>
           <th></th>
@@ -22,10 +21,10 @@
       </thead>
       <tbody>
         <% if (!usuarios || usuarios.length === 0) { %>
-        <tr><td colspan="5" class="loading">Sin usuarios registrados</td></tr>
+        <tr><td colspan="6" class="loading">Sin usuarios registrados</td></tr>
         <% } else { %>
         <% usuarios.forEach(u => { %>
-        <tr>
+        <tr id="user-row-<%= (u._id||'').replace('usr_','') %>">
           <td>
             <div style="display:flex;align-items:center;gap:10px">
               <div style="width:30px;height:30px;border-radius:8px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--lime);flex-shrink:0">
@@ -38,6 +37,12 @@
             </div>
           </td>
           <td><%- rolBadge(u.rol_global) %></td>
+          <td>
+            <div id="grupos-badges-<%= (u._id||'').replace('usr_','') %>"
+              style="display:flex;gap:4px;flex-wrap:wrap;min-width:80px">
+              <span style="font-size:10px;color:var(--muted2)">cargando...</span>
+            </div>
+          </td>
           <td class="td-dim" style="font-size:11px"><%= fmtDate(u.ultimo_login) %></td>
           <td>
             <span class="badge <%= u.activo !== false ? 'badge-lime' : 'badge-red' %>">
@@ -48,7 +53,7 @@
             <% const uid = (u._id || '').replace('usr_',''); %>
             <% if (u.rol_global !== 'superadmin') { %>
             <button class="btn btn-sm btn-ghost"
-              onclick="openUserModal('<%= uid %>', '<%= u.nombre %>', '<%= u.email %>', <%= u.activo !== false %>)">
+              onclick="openUserModal('<%= uid %>', '<%= u.nombre %>', '<%= u.email %>', <%= u.activo !== false %>, '<%= u._id %>'))">
               ⋯ Gestionar
             </button>
             <% } %>
@@ -63,29 +68,167 @@
 
 <!-- Modal gestión usuario -->
 <div class="modal-backdrop" id="modal-usuario">
-  <div class="modal">
+  <div class="modal" style="width:480px">
     <div class="modal-title" id="modal-u-nombre">Usuario</div>
-    <div class="modal-sub"   id="modal-u-email">email</div>
-    <div id="modal-u-actions" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
-    <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-usuario')">Cancelar</button>
+    <div class="modal-sub"   id="modal-u-email" style="margin-bottom:16px">email</div>
+
+    <!-- Acciones -->
+    <div id="modal-u-actions" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px"></div>
+
+    <!-- Grupos del usuario -->
+    <div style="border-top:1px solid var(--border);padding-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted2)">Grupos asignados</div>
+        <button class="btn btn-sm btn-lime-outline" onclick="abrirAsignarGrupo()">+ Asignar grupo</button>
+      </div>
+      <div id="modal-u-grupos" style="display:flex;flex-direction:column;gap:6px;min-height:32px">
+        <div style="font-size:12px;color:var(--muted2)">Sin grupos asignados</div>
+      </div>
+    </div>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:16px" onclick="closeModal('modal-usuario')">Cerrar</button>
+  </div>
+</div>
+
+<!-- Modal asignar grupo -->
+<div class="modal-backdrop" id="modal-asignar-grupo">
+  <div class="modal">
+    <div class="modal-title">Asignar grupo</div>
+    <div class="modal-sub" id="modal-ag-usuario" style="color:var(--lime)">–</div>
+    <div style="margin:16px 0">
+      <div class="field">
+        <label>Grupo</label>
+        <select id="ag-select" style="width:100%">
+          <option value="">Seleccioná un grupo...</option>
+        </select>
+      </div>
+    </div>
+    <div id="ag-alert" class="alert error"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-asignar-grupo')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmarAsignarGrupo()">Asignar</button>
+    </div>
   </div>
 </div>
 
 <script>
-function openUserModal(uid, nombre, email, activo) {
+let _uidActual       = null;
+let _uidDocActual    = null;
+let _todosGrupos     = [];
+
+// ── Cargar badges de grupos para todos los usuarios ───────
+async function cargarBadgesGrupos() {
+  try {
+    _todosGrupos = await Auth.get('/api/grupos');
+  } catch { return; }
+
+  // Para cada usuario visible cargar sus grupos
+  const rows = document.querySelectorAll('[id^="user-row-"]');
+  for (const row of rows) {
+    const uid = row.id.replace('user-row-', '');
+    try {
+      const grupos = await Auth.get(`/api/grupos/usuario/usr_${uid}`);
+      const el = document.getElementById(`grupos-badges-${uid}`);
+      if (!el) continue;
+      if (!grupos.length) {
+        el.innerHTML = '<span style="font-size:10px;color:var(--muted)">–</span>';
+      } else {
+        el.innerHTML = grupos.map(g =>
+          `<span style="font-size:9px;padding:2px 7px;border-radius:4px;background:${g.color||'#3C9EFF'}18;color:${g.color||'#3C9EFF'};border:1px solid ${g.color||'#3C9EFF'}33">${g.nombre}</span>`
+        ).join('');
+      }
+    } catch {
+      const el = document.getElementById(`grupos-badges-${uid}`);
+      if (el) el.innerHTML = '<span style="font-size:10px;color:var(--muted)">–</span>';
+    }
+  }
+}
+
+// ── Abrir modal de gestión ────────────────────────────────
+async function openUserModal(uid, nombre, email, activo, uidDoc) {
+  _uidActual    = uid;
+  _uidDocActual = uidDoc;
   document.getElementById('modal-u-nombre').textContent = nombre;
   document.getElementById('modal-u-email').textContent  = email;
 
+  // Acción activar/desactivar
   const actions = document.getElementById('modal-u-actions');
   actions.innerHTML = `
     <button onclick="toggleUsuario('${uid}', ${activo}, this)"
-      style="width:100%;padding:10px;background:${activo ? 'var(--red-dim)':'var(--lime-dim)'};border:1px solid ${activo ? 'rgba(255,68,68,0.3)':'rgba(184,255,60,0.3)'};border-radius:8px;color:${activo ? 'var(--red)':'var(--lime)'};font-size:13px;cursor:pointer;text-align:left;font-family:var(--font-b)">
+      style="width:100%;padding:10px;background:${activo?'var(--red-dim)':'var(--lime-dim)'};border:1px solid ${activo?'rgba(255,68,68,0.3)':'rgba(184,255,60,0.3)'};border-radius:8px;color:${activo?'var(--red)':'var(--lime)'};font-size:13px;cursor:pointer;text-align:left;font-family:var(--font-b)">
       ${activo ? '⛔ Desactivar cuenta' : '✓ Activar cuenta'}
     </button>`;
 
+  // Cargar grupos del usuario
+  await cargarGruposModal(uidDoc);
   openModal('modal-usuario');
 }
 
+async function cargarGruposModal(uidDoc) {
+  const el = document.getElementById('modal-u-grupos');
+  el.innerHTML = '<div style="font-size:12px;color:var(--muted2)">Cargando...</div>';
+  try {
+    const grupos = await Auth.get(`/api/grupos/usuario/${uidDoc}`);
+    if (!grupos.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--muted2)">Sin grupos asignados</div>';
+      return;
+    }
+    el.innerHTML = grupos.map(g => `
+      <div style="display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+        <div style="width:8px;height:8px;border-radius:50%;background:${g.color||'#3C9EFF'};flex-shrink:0"></div>
+        <span style="font-size:13px;color:var(--text);flex:1">${g.nombre}</span>
+        <div style="display:flex;gap:3px">
+          ${Object.entries(g.permisos||{}).filter(([,v])=>v.length).map(([r,p])=>
+            `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--surface);color:var(--muted2);border:1px solid var(--border)">${r}</span>`
+          ).join('')}
+        </div>
+        <button class="btn btn-sm btn-ghost" style="color:var(--red);padding:2px 6px"
+          onclick="quitarGrupo('${g._id}', '${uidDoc}', '${g.nombre}')">✕</button>
+      </div>`).join('');
+  } catch(e) {
+    el.innerHTML = `<div class="alert error show">${e.message}</div>`;
+  }
+}
+
+// ── Asignar grupo ─────────────────────────────────────────
+async function abrirAsignarGrupo() {
+  if (!_todosGrupos.length) {
+    try { _todosGrupos = await Auth.get('/api/grupos'); } catch {}
+  }
+  const nombre = document.getElementById('modal-u-nombre').textContent;
+  document.getElementById('modal-ag-usuario').textContent = nombre;
+
+  const select = document.getElementById('ag-select');
+  select.innerHTML = '<option value="">Seleccioná un grupo...</option>' +
+    _todosGrupos.map(g => `<option value="${g._id}">${g.nombre}</option>`).join('');
+
+  hideAlert('ag-alert');
+  openModal('modal-asignar-grupo');
+}
+
+async function confirmarAsignarGrupo() {
+  const grupoId = document.getElementById('ag-select').value;
+  if (!grupoId) { showAlert('ag-alert', 'Seleccioná un grupo'); return; }
+  try {
+    await Auth.post(`/api/grupos/${grupoId}/usuarios`, { uid: _uidDocActual });
+    toast('✓ Grupo asignado', '', 'lime');
+    closeModal('modal-asignar-grupo');
+    await cargarGruposModal(_uidDocActual);
+    cargarBadgesGrupos();
+  } catch(e) { showAlert('ag-alert', e.message); }
+}
+
+async function quitarGrupo(grupoId, uidDoc, nombre) {
+  if (!confirm(`¿Quitar del grupo "${nombre}"?`)) return;
+  try {
+    await Auth.del(`/api/grupos/${grupoId}/usuarios/${uidDoc}`);
+    toast('✓ Usuario quitado del grupo', nombre, 'lime');
+    await cargarGruposModal(uidDoc);
+    cargarBadgesGrupos();
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+
+// ── Activar/desactivar ────────────────────────────────────
 async function toggleUsuario(uid, activo, btn) {
   btn.disabled = true;
   try {
@@ -98,4 +241,15 @@ async function toggleUsuario(uid, activo, btn) {
     btn.disabled = false;
   }
 }
+
+function showAlert(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.className = 'alert error show'; }
+}
+function hideAlert(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('show');
+}
+
+document.addEventListener('DOMContentLoaded', cargarBadgesGrupos);
 </script>
