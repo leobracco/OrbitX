@@ -418,7 +418,7 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
           // Buscaremos el SHP cuyo ts sea el más parecido
           base = "shp_" + capa.ts; // fallback — se refinará abajo
         }
-        if (!shpGrupos[base]) shpGrupos[base] = {};
+        if (!shpGrupos[base]) shpGrupos[base] = { nombreDisplay: capa.nombre };
         if (esShpBin)     shpGrupos[base].shp = capa;
         else if (esShx)   shpGrupos[base].shx = capa;
         else if (esDbf)   shpGrupos[base].dbf = capa;
@@ -481,7 +481,8 @@ function renderPanelCapas(capas, nombreEnc) {
     const base = c.nombre.replace(/\.[^.]+$/, "");
     if (["shp","dbf","shx","prj"].includes(ext)) {
       if (ext === "shp") {
-        items.push({ tipo:"shp", base, color: CAPA_COLORES[colorOff++ % CAPA_COLORES.length],
+        items.push({ tipo:"shp", base, nombreDisplay: c.nombre || base,
+                     color: CAPA_COLORES[colorOff++ % CAPA_COLORES.length],
                      capaId: `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}` });
       }
       // dbf/shx/prj se ignoran visualmente (van implícitos)
@@ -496,13 +497,14 @@ function renderPanelCapas(capas, nombreEnc) {
 
   lista.innerHTML = items.map(it => {
     if (it.tipo === "shp") {
+      const label = it.nombreDisplay || it.base;
       return `
         <div class="capa-item">
           <div style="width:10px;height:10px;border-radius:3px;background:${it.color};flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
-            <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              📐 ${it.base}.shp</div>
-            <div style="font-size:10px;color:var(--muted2)">shapefile · UTM→WGS84 auto</div>
+            <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${label}">📐 ${label}</div>
+            <div style="font-size:10px;color:var(--muted2)">shapefile · gradiente automático</div>
           </div>
           <div class="capa-toggle on" id="toggle-${it.capaId}" title="Mostrar/ocultar"></div>
         </div>`;
@@ -575,8 +577,9 @@ async function toggleCapa(capaId, nombreEnc, idx) {
 
 // ── SHP: convertir UTM→WGS84 vía backend y dibujar ──────
 async function cargarSHPEnMapa(base, grp) {
-  const color  = CAPA_COLORES[_colorIdx % CAPA_COLORES.length];
-  const capaId = `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}`;
+  const color       = CAPA_COLORES[_colorIdx % CAPA_COLORES.length];
+  const capaId      = `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}`;
+  const labelMostrar = grp.nombreDisplay || grp.shp?.nombre || base;
   _colorIdx++;
 
   try {
@@ -606,21 +609,31 @@ async function cargarSHPEnMapa(base, grp) {
     }
 
     // Detectar si es nube de puntos con valor numérico → mapa de calor por color
+    // Los valores del DBF pueden venir como strings — parsear a número
     const firstProps = geojson.features[0]?.properties || {};
-    const numKeys    = Object.keys(firstProps).filter(k => typeof firstProps[k] === "number");
-    const valKey     = numKeys[0] || null;
+    let valKey = null;
+    for (const k of Object.keys(firstProps)) {
+      const v = parseFloat(firstProps[k]);
+      if (!isNaN(v)) { valKey = k; break; }
+    }
 
     let layer;
-    if (valKey && geojson.features.length > 100) {
+    if (valKey && geojson.features.length > 1) {
       // Nube de puntos con valor → gradiente de color por valor
-      const vals   = geojson.features.map(f => f.properties[valKey]);
+      const vals   = geojson.features
+        .map(f => parseFloat(f.properties[valKey]))
+        .filter(v => !isNaN(v));
       const minVal = Math.min(...vals);
       const maxVal = Math.max(...vals);
       const range  = maxVal - minVal || 1;
 
+      console.log(`[SHP gradiente] campo="${valKey}" min=${minVal.toFixed(4)} max=${maxVal.toFixed(4)} n=${vals.length}`);
+
       layer = L.geoJSON(geojson, {
         pointToLayer: (feature, latlng) => {
-          const t   = (feature.properties[valKey] - minVal) / range;
+          const raw = parseFloat(feature.properties[valKey]);
+          const val = isNaN(raw) ? minVal : raw;
+          const t   = Math.max(0, Math.min(1, (val - minVal) / range));
           // Gradiente: azul(0) → verde(0.5) → rojo(1)
           const r   = Math.round(t < 0.5 ? t*2*50 : 50 + (t-0.5)*2*205);
           const g   = Math.round(t < 0.5 ? 100 + t*2*155 : 255 - (t-0.5)*2*200);
@@ -632,7 +645,8 @@ async function cargarSHPEnMapa(base, grp) {
           });
         },
         onEachFeature: (feature, layer) => {
-          const val = feature.properties[valKey];
+          const raw = parseFloat(feature.properties[valKey]);
+          const val = isNaN(raw) ? feature.properties[valKey] : raw;
           layer.bindPopup(
             `<div style="font-size:12px;min-width:100px">
               <b style="color:#b8ff3c">${valKey}:</b> ${typeof val==="number" ? val.toFixed(4) : val}
@@ -647,7 +661,7 @@ async function cargarSHPEnMapa(base, grp) {
       const leyenda = document.getElementById("leyenda-capas");
       leyenda.innerHTML += `
         <div id="leyenda-${capaId}" style="margin-top:6px">
-          <div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:3px">${base} (${valKey})</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:3px">${labelMostrar} (${valKey})</div>
           <div style="display:flex;align-items:center;gap:4px">
             <span style="font-size:9px;color:rgba(255,255,255,0.4)">${minVal.toFixed(2)}</span>
             <div style="width:60px;height:6px;border-radius:3px;
@@ -677,7 +691,7 @@ async function cargarSHPEnMapa(base, grp) {
       leyenda.innerHTML += `
         <div style="display:flex;align-items:center;gap:8px" id="leyenda-${capaId}">
           <span style="display:inline-block;width:14px;height:3px;background:${color};border-radius:2px"></span>
-          <span style="color:rgba(255,255,255,0.7)">${base}</span>
+          <span style="color:rgba(255,255,255,0.7)">${labelMostrar}</span>
         </div>`;
     }
 
@@ -688,7 +702,7 @@ async function cargarSHPEnMapa(base, grp) {
       _mapa.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 });
     } catch {}
 
-    toast(`✓ ${base}.shp`, `${geojson.features.length} features cargados`, "lime");
+    toast(`✓ ${labelMostrar}`, `${geojson.features.length} features cargados`, "lime");
 
   } catch(e) {
     ocultarLoading();
