@@ -725,9 +725,20 @@ async function cargarSHPEnMapa(base, grp) {
       if (!isNaN(v)) { valKey = k; break; }
     }
 
+    // Detectar tipo de geometría dominante
+    const geomTipo = geojson.features[0]?.geometry?.type || "Point";
+    const esPoligono = geomTipo.includes("Polygon");
+    const esLinea    = geomTipo.includes("LineString") || geomTipo.includes("Polyline");
+
+    function gradColor(t) {
+      const r = Math.round(t < 0.5 ? t*2*50 : 50 + (t-0.5)*2*205);
+      const g = Math.round(t < 0.5 ? 100 + t*2*155 : 255 - (t-0.5)*2*200);
+      const b = Math.round(t < 0.5 ? 200 - t*2*200 : 0);
+      return `rgb(${r},${g},${b})`;
+    }
+
     let layer;
     if (valKey && geojson.features.length > 1) {
-      // Nube de puntos con valor → gradiente de color por valor
       const vals   = geojson.features
         .map(f => parseFloat(f.properties[valKey]))
         .filter(v => !isNaN(v));
@@ -735,29 +746,34 @@ async function cargarSHPEnMapa(base, grp) {
       const maxVal = Math.max(...vals);
       const range  = maxVal - minVal || 1;
 
-      console.log(`[SHP gradiente] campo="${valKey}" min=${minVal.toFixed(4)} max=${maxVal.toFixed(4)} n=${vals.length}`);
+      console.log(`[SHP gradiente] tipo=${geomTipo} campo="${valKey}" min=${minVal.toFixed(4)} max=${maxVal.toFixed(4)} n=${vals.length}`);
 
       layer = L.geoJSON(geojson, {
-        pointToLayer: (feature, latlng) => {
+        // Para polígonos: fill por gradiente de color
+        style: esPoligono ? (feature) => {
           const raw = parseFloat(feature.properties[valKey]);
-          const val = isNaN(raw) ? minVal : raw;
-          const t   = Math.max(0, Math.min(1, (val - minVal) / range));
-          // Gradiente: azul(0) → verde(0.5) → rojo(1)
-          const r   = Math.round(t < 0.5 ? t*2*50 : 50 + (t-0.5)*2*205);
-          const g   = Math.round(t < 0.5 ? 100 + t*2*155 : 255 - (t-0.5)*2*200);
-          const b   = Math.round(t < 0.5 ? 200 - t*2*200 : 0);
-          const clr = `rgb(${r},${g},${b})`;
+          const t   = isNaN(raw) ? 0 : Math.max(0, Math.min(1, (raw - minVal) / range));
+          const clr = gradColor(t);
+          return { color: clr, weight: 0.5, opacity: 0.9, fillColor: clr, fillOpacity: 0.75 };
+        } : undefined,
+        // Para puntos: circleMarker con gradiente
+        pointToLayer: !esPoligono && !esLinea ? (feature, latlng) => {
+          const raw = parseFloat(feature.properties[valKey]);
+          const t   = isNaN(raw) ? 0 : Math.max(0, Math.min(1, (raw - minVal) / range));
+          const clr = gradColor(t);
           return L.circleMarker(latlng, {
             radius: 4, color: clr, fillColor: clr,
             fillOpacity: 0.85, weight: 0,
           });
-        },
+        } : undefined,
         onEachFeature: (feature, layer) => {
           const raw = parseFloat(feature.properties[valKey]);
           const val = isNaN(raw) ? feature.properties[valKey] : raw;
+          const t   = isNaN(raw) ? 0 : Math.max(0, Math.min(1, (raw - minVal) / range));
+          const clr = gradColor(t);
           layer.bindPopup(
             `<div style="font-size:12px;min-width:100px">
-              <b style="color:#b8ff3c">${valKey}:</b> ${typeof val==="number" ? val.toFixed(4) : val}
+              <b style="color:${clr}">${valKey}:</b> ${typeof val==="number" ? val.toFixed(4) : val}
               ${Object.entries(feature.properties).filter(([k])=>k!==valKey).slice(0,3)
                 .map(([k,v])=>`<br><b>${k}:</b> ${v}`).join("")}
             </div>`
@@ -779,12 +795,13 @@ async function cargarSHPEnMapa(base, grp) {
         </div>`;
 
     } else {
-      // Polígonos / líneas / puntos simples
+      // Sin campo numérico → color fijo del panel
+      // Para polígonos: fill semitransparente; para puntos: circleMarker
       layer = L.geoJSON(geojson, {
-        style: () => ({ color, weight:1.5, opacity:0.85, fillColor:color, fillOpacity:0.25 }),
-        pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+        style: esPoligono ? () => ({ color, weight:1.5, opacity:0.85, fillColor:color, fillOpacity:0.35 }) : undefined,
+        pointToLayer: !esPoligono ? (feature, latlng) => L.circleMarker(latlng, {
           radius: 4, color, fillColor: color, fillOpacity: 0.85, weight: 1,
-        }),
+        }) : undefined,
         onEachFeature: (feature, l) => {
           if (feature.properties) {
             const props = Object.entries(feature.properties).slice(0,5)
