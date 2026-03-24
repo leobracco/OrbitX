@@ -601,4 +601,17 @@ router.get("/prescripciones", requireAuth, async (req, res) => {
   res.render("layout", { ...base(req, { regBadge }), title:"Prescripciones", page:"prescripciones", establecimientos });
 });
 
+// ─────────────────────────────────────────────────────────
+// INTEGRACIONES
+// ─────────────────────────────────────────────────────────
+router.get("/integraciones", requireAuth, requireAdmin, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", {
+    ...base(req, { regBadge }),
+    title:     "Integraciones",
+    page:      "integraciones",
+    activeNav: "/integraciones",
+  });
+});
 module.exports = router;
