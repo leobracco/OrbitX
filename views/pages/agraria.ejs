@@ -43,7 +43,7 @@
       <div style="position:relative;flex-shrink:0">
         <button id="btn-adjuntar"
           onclick="document.getElementById('file-input').click()"
-          title="Adjuntar imagen, PDF o audio"
+          title="Adjuntar imagen, PDF, GeoJSON, Shapefile, CSV, KML o audio"
           style="width:36px;height:36px;background:var(--surface2);border:1px solid var(--border);
                  border-radius:8px;color:var(--muted2);cursor:pointer;font-size:16px;
                  display:flex;align-items:center;justify-content:center;transition:all .15s;
@@ -53,7 +53,8 @@
           📎
         </button>
         <input type="file" id="file-input" multiple accept="image/*,.pdf,audio/*"
-          style="display:none" onchange="onFilesSelected(this.files)"/>
+          style="display:none" onchange="onFilesSelected(this.files)"
+          accept="image/*,.pdf,audio/*,.geojson,.json,.csv,.kml,.kmz,.shp,.dbf,.shx,.prj,.txt,.zip"/>
       </div>
 
       <!-- Textarea del mensaje -->
@@ -218,6 +219,7 @@ async function onFilesSelected(files) {
     if (_adjuntos.length >= 5) { toast('Máximo 5 adjuntos por mensaje', '', 'amber'); break; }
 
     const tipo = file.type;
+    const ext  = file.name.split('.').pop().toLowerCase();
     let categoria, icono;
 
     if (tipo.startsWith('image/')) {
@@ -226,9 +228,23 @@ async function onFilesSelected(files) {
       categoria = 'pdf'; icono = '📄';
     } else if (tipo.startsWith('audio/')) {
       categoria = 'audio'; icono = '🎵';
+    } else if (['geojson','json'].includes(ext)) {
+      categoria = 'geojson'; icono = '🗺';
+    } else if (ext === 'shp') {
+      categoria = 'shp'; icono = '📐';
+    } else if (['dbf','shx','prj'].includes(ext)) {
+      categoria = 'shp_aux'; icono = '📎';
+    } else if (ext === 'csv') {
+      categoria = 'csv'; icono = '📊';
+    } else if (['kml','kmz'].includes(ext)) {
+      categoria = 'kml'; icono = '📍';
+    } else if (ext === 'txt') {
+      categoria = 'txt'; icono = '📝';
+    } else if (ext === 'zip') {
+      categoria = 'zip'; icono = '🗜';
     } else {
-      toast(`Tipo no soportado: ${tipo}`, 'Usá imagen, PDF o audio', 'amber');
-      continue;
+      // Intentar como texto genérico
+      categoria = 'datos'; icono = '📁';
     }
 
     // Límite de tamaño: 10MB
@@ -237,13 +253,21 @@ async function onFilesSelected(files) {
       continue;
     }
 
-    const base64 = await fileToBase64(file);
-    _adjuntos.push({ file, tipo, categoria, icono, base64, mediaType: tipo, nombre: file.name });
+    const ext2 = file.name.split('.').pop().toLowerCase();
+    let base64 = null, texto = null;
+    if (TEXT_EXTS.has(ext2) && file.size < 5*1024*1024) {
+      texto = await fileToText(file);
+    } else {
+      base64 = await fileToBase64(file);
+    }
+    _adjuntos.push({ file, tipo, categoria, icono, base64, texto, mediaType: tipo, nombre: file.name });
   }
 
   document.getElementById('file-input').value = '';
   renderAdjuntosPreview();
 }
+
+const TEXT_EXTS = new Set(['geojson','json','csv','kml','txt','prj']);
 
 function fileToBase64(file) {
   return new Promise((res, rej) => {
@@ -251,6 +275,15 @@ function fileToBase64(file) {
     r.onload  = () => res(r.result.split(',')[1]);
     r.onerror = () => rej(new Error('Error leyendo archivo'));
     r.readAsDataURL(file);
+  });
+}
+
+function fileToText(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = () => res(r.result);
+    r.onerror = () => rej(new Error('Error leyendo archivo'));
+    r.readAsText(file, 'utf-8');
   });
 }
 
@@ -336,7 +369,8 @@ async function enviarChat() {
     const adjuntosPayload = adjuntosEnvio.map(a => ({
       categoria:  a.categoria,
       mediaType:  a.mediaType,
-      base64:     a.base64,
+      base64:     a.base64  || null,
+      texto:      a.texto   || null,
       nombre:     a.nombre,
     }));
 
