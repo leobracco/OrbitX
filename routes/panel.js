@@ -455,15 +455,19 @@ router.get("/vehiculos", requireAuth, async (req, res) => {
           selector: { tipo:"aog_archivo", subtipo:"vehicle_config" },
           limit: 100,
         });
+        const { parseVehicleXML, formatearVehiculo } = require("../services/aog_vehicle_parser");
         r.docs.forEach(d => {
-          const nombreReal = extraerNombreVehiculo(d.contenido, d.nombre?.replace(/\.xml$/i,""));
+          const raw    = parseVehicleXML(d.contenido);
+          const grupos = formatearVehiculo(raw) || [];
+          const nombre = extraerNombreVehiculo(d.contenido, d.nombre?.replace(/\.xml$/i,""));
           vehiculos.push({
-            nombre:          nombreReal,
-            nombre_archivo:  d.nombre,
-            device_id:       d.device_id,
-            estab_slug:      slug,
-            ts:              d.ts,
-            ruta_rel:        d.ruta_rel,
+            nombre,
+            nombre_archivo: d.nombre,
+            device_id:      d.device_id,
+            estab_slug:     slug,
+            ts:             d.ts,
+            ruta_rel:       d.ruta_rel,
+            grupos,
           });
           vehiculosRaw.push({ nombre_archivo:d.nombre, ruta_rel:d.ruta_rel||"" });
         });

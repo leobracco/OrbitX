@@ -31,9 +31,9 @@
 
       <!-- Dropdown resultados -->
       <div id="search-dropdown"
-        style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
+        style="display:none;position:fixed;z-index:99999;
                background:var(--surface);border:1px solid var(--border2);border-radius:8px;
-               box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:9000;
+               box-shadow:0 8px 24px rgba(0,0,0,0.5);
                max-height:260px;overflow-y:auto">
       </div>
     </div>
@@ -157,6 +157,15 @@ async function recargarLista() {
 }
 
 // ── Buscador (debounce 180ms) ──────────────────────────────
+function posicionarDropdown() {
+  const input = document.getElementById("lote-search");
+  const dd    = document.getElementById("search-dropdown");
+  const rect  = input.getBoundingClientRect();
+  dd.style.top   = (rect.bottom + 4) + "px";
+  dd.style.left  = rect.left + "px";
+  dd.style.width = rect.width + "px";
+}
+
 function onBusqueda(val) {
   clearTimeout(_searchTO);
   const dd = document.getElementById("search-dropdown");
@@ -194,6 +203,7 @@ function onBusqueda(val) {
       </div>`;
     }).join("");
 
+    posicionarDropdown();
     dd.style.display = "block";
   }, 180);
 }
