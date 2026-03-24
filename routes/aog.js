@@ -99,7 +99,45 @@ router.get("/lotes", async (req, res) => {
     res.json(Object.values(lotes).sort((a,b)=>b.ts_ultimo-a.ts_ultimo));
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
-
+router.get("/lotes-mapa", async (req, res) => {
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug  || jwtUser?.estab_slug || null;
+    const filtro  = req.query.estab;
+    const nano    = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
+    let slugs = [];
+    if (isSA) {
+      if (filtro) { slugs = [filtro]; }
+      else {
+        const globalDB = req.app.locals.globalDB;
+        let orgs = [];
+        try { const r = await globalDB.find({ selector:{tipo:"org"}, limit:200 }); orgs=r.docs; }
+        catch { const all = await globalDB.list({include_docs:true}); orgs=all.rows.map(r=>r.doc).filter(d=>d&&d.tipo==="org"); }
+        slugs = orgs.map(o=>o.slug);
+        if (!slugs.includes("unassigned")) slugs.push("unassigned");
+      }
+    } else if (miSlug) { slugs = [miSlug]; }
+    const lista = [];
+    for (const slug of slugs) {
+      try {
+        const r = await nano.db.use("orbitx_"+slug).find({ selector:{tipo:"aog_archivo",es_lote:true}, fields:["lote_nombre","subtipo","ts"], limit:2000 });
+        const g = {};
+        r.docs.forEach(d => {
+          const n = d.lote_nombre||"?";
+          if (!g[n]) g[n]={nombre:n,estab_slug:slug,tiene_boundary:false,tiene_sections:false,tiene_origen:false,ts:0};
+          if (d.subtipo==="boundary"||d.subtipo==="boundary_kml") g[n].tiene_boundary=true;
+          if (d.subtipo==="sections_coverage") g[n].tiene_sections=true;
+          if (d.subtipo==="field_origin") g[n].tiene_origen=true;
+          if ((d.ts||0)>g[n].ts) g[n].ts=d.ts;
+        });
+        Object.values(g).forEach(l=>lista.push(l));
+      } catch(e) { console.error("[lotes-mapa]",slug,e.message); }
+    }
+    lista.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    res.json(lista);
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
 // GET /api/aog/lotes/:nombre
 router.get("/lotes/:nombre", async (req, res) => {
   try {
