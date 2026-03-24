@@ -99,7 +99,7 @@ async function guardarCopernicus() {
   }
 
   try {
-    await Auth.put('/api/integraciones/copernicus', { client_id, client_secret, instance_id });
+    await Auth.post('/api/integraciones/copernicus', { client_id, client_secret, instance_id });
     toast('✓ Integración guardada', 'NDVI disponible en el mapa de lotes', 'lime');
     document.getElementById('cop-badge').textContent = 'Activo';
     document.getElementById('cop-badge').className   = 'badge badge-lime';

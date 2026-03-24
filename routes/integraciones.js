@@ -55,7 +55,7 @@ router.get('/copernicus', async (req, res) => {
 //  Body: { client_id, client_secret, instance_id }
 //  Solo owner / admin_org pueden hacerlo
 // ══════════════════════════════════════════════════════════
-router.put('/copernicus', async (req, res) => {
+router.post('/copernicus', async (req, res) => {
   try {
     const { estabSlug, uid, rol } = req.jwtUser;
 
