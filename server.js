@@ -24,6 +24,7 @@ const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
 const routeGrupos = require("./routes/grupos");
 const routeAgrariaChat = require("./routes/agraria_chat");
+const routeLotesMaestro = require("./routes/lotes_maestro");
 
 const app = express();
 const server = http.createServer(app);
@@ -102,6 +103,7 @@ app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/vistax", auth.required, routeVistaX);
 app.use("/api/grupos", auth.required, routeGrupos);
 app.use("/api/agraria", auth.required, routeAgrariaChat);
+app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
 app.use(

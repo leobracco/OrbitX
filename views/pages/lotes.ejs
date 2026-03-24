@@ -1,139 +1,652 @@
-<%# pages/lotes.ejs %>
+<%# pages/lotes.ejs — Lotes maestros: AOG + capas de info %>
 
 <div class="page-header">
   <div>
     <h2>Lotes</h2>
-    <p><%= lotes.length %> lote<%= lotes.length !== 1 ? 's' : '' %> registrados</p>
+    <p>Cobertura AOG · VistaX · QuantiX · NDVI · Lluvias · Documentos</p>
   </div>
   <div style="display:flex;gap:8px">
-    <a href="/lotes" class="btn">↻ Actualizar</a>
-    <button class="btn btn-ghost" onclick="exportCSV()">↓ Exportar CSV</button>
+    <input type="text" id="filtro-lote" placeholder="Filtrar lotes…"
+      oninput="filtrarLotes(this.value)"
+      style="background:var(--surface2);border:1px solid var(--border);color:var(--text);
+             padding:7px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;
+             outline:none;width:200px"/>
+    <a href="/lotes" class="btn">↻</a>
   </div>
 </div>
 
-<!-- Filtros -->
-<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-  <% const estados = ['todos','progreso','completado']; %>
-  <% estados.forEach(e => { %>
-  <a href="/lotes<%= e !== 'todos' ? '?estado='+e : '' %>"
-    class="btn btn-sm <%= filtroEstado === e || (!filtroEstado && e==='todos') ? 'btn-primary' : '' %>">
-    <%= e === 'todos' ? 'Todos' : e === 'progreso' ? 'En progreso' : 'Completados' %>
-  </a>
-  <% }) %>
+<!-- KPIs -->
+<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px" id="kpi-lotes">
+  <div class="kpi lime"><div class="kpi-shine"></div><div class="kpi-label">Lotes totales</div><div class="kpi-val" id="kpi-total">–</div><div class="kpi-delta">sincronizados</div></div>
+  <div class="kpi blue"><div class="kpi-shine"></div><div class="kpi-label">Con cobertura AOG</div><div class="kpi-val" id="kpi-aog">–</div><div class="kpi-delta">boundaries + sections</div></div>
+  <div class="kpi teal"><div class="kpi-shine"></div><div class="kpi-label">Con datos VistaX</div><div class="kpi-val" id="kpi-vx">–</div><div class="kpi-delta">densidad siembra</div></div>
+  <div class="kpi" style="background:var(--surface)"><div class="kpi-shine"></div><div class="kpi-label">Capas externas</div><div class="kpi-val" id="kpi-capas" style="color:var(--muted2)">–</div><div class="kpi-delta">NDVI, lluvias, docs</div></div>
 </div>
 
-<% if (!lotes || lotes.length === 0) { %>
-  <div class="empty-state">
-    <span class="icon">🌾</span>
-    <p>No hay lotes registrados aún.</p>
-  </div>
-<% } else { %>
-
-<div class="card">
-  <div class="table-wrap">
-    <table class="data-table" id="lotes-table">
-      <thead>
-        <tr>
-          <th>Lote</th>
-          <th>Establecimiento</th>
-          <th>Ha</th>
-          <th>Densidad prom.</th>
-          <th>Alertas</th>
-          <th>Estado</th>
-          <th>Fecha</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <% lotes.forEach(l => {
-          const densidad = l.resumen?.densidad_avg || 0;
-          const alertas  = l.alertas_count || 0;
-        %>
-        <tr>
-          <td class="td-main"><%= l.nombre || l._id %></td>
-          <td class="td-dim"><%= l.orgSlug || '–' %></td>
-          <td class="td-mono"><%= (l.ha_sembradas || 0).toLocaleString('es-AR') %></td>
-          <td class="td-mono" style="color:<%= densidad >= 68000 ? 'var(--lime)' : densidad > 0 ? 'var(--amber)' : 'var(--muted2)' %>">
-            <%= densidad > 0 ? (densidad/1000).toFixed(1) + 'k' : '–' %>
-          </td>
-          <td class="td-mono" style="color:<%= alertas > 0 ? 'var(--red)' : 'var(--lime)' %>">
-            <%= alertas > 0 ? '⚠ ' + alertas : '✓' %>
-          </td>
-          <td>
-            <span class="badge <%= l.estado === 'progreso' ? 'badge-blue' : l.estado === 'completado' ? 'badge-lime' : 'badge-gray' %>">
-              <%= l.estado === 'progreso' ? 'En progreso' : l.estado === 'completado' ? 'Completado' : l.estado || '–' %>
-            </span>
-          </td>
-          <td class="td-dim" style="font-size:11px"><%= fmtDate(l.fecha_inicio) %></td>
-          <td>
-            <button class="btn btn-sm btn-ghost" onclick="analizarLote('<%= l._id %>', '<%= l.orgSlug %>')">
-              🌿 Analizar
-            </button>
-          </td>
-        </tr>
-        <% }) %>
-      </tbody>
-    </table>
-  </div>
+<!-- Tabla de lotes -->
+<div class="card" id="card-lotes">
+  <div class="loading"><span class="spinner"></span></div>
 </div>
 
-<% } %>
-
-<!-- Modal análisis agrarIA -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- MODAL: detalle + capas del lote                        -->
+<!-- ═══════════════════════════════════════════════════════ -->
 <div class="modal-backdrop" id="modal-lote">
-  <div class="modal" style="width:520px">
-    <div class="modal-title" id="modal-l-nombre">–</div>
-    <div class="modal-sub" style="color:var(--muted2)">Análisis agrarIA</div>
-    <div id="modal-l-content" style="margin:16px 0;font-size:13px;color:var(--text);line-height:1.7;min-height:80px">
-      <div class="loading">Consultando agrarIA...</div>
+  <div class="modal" style="width:680px;max-height:90vh;display:flex;flex-direction:column;padding:0">
+
+    <!-- Header -->
+    <div style="padding:18px 22px 14px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1">
+          <div class="modal-title" id="ml-nombre" style="margin:0">–</div>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap" id="ml-badges"></div>
+        </div>
+        <button class="btn btn-sm btn-ghost" onclick="abrirEditarLote()" title="Editar metadata">✏ Editar</button>
+        <button class="btn btn-sm btn-primary" onclick="abrirAgregarCapa()" title="Agregar capa de info">+ Capa</button>
+        <button class="btn btn-sm btn-ghost" onclick="analizarConIA()" title="Analizar con agrarIA">🌿 IA</button>
+      </div>
     </div>
-    <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-lote')">Cerrar</button>
+
+    <!-- Tabs -->
+    <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0">
+      <% ['aog','vistax','capas','info'].forEach((t,i) => { %>
+      <button id="tab-<%= t %>" onclick="switchTab('<%= t %>')"
+        style="padding:10px 18px;background:none;border:none;color:var(--muted2);
+               font-size:12px;cursor:pointer;border-bottom:2px solid transparent;
+               font-family:var(--font-b);transition:all .15s"
+        onmouseover="if(!this.classList.contains('tab-active'))this.style.color='var(--text)'"
+        onmouseout="if(!this.classList.contains('tab-active'))this.style.color='var(--muted2)'">
+        <%= {aog:'🗺 AOG',vistax:'🌱 VistaX',capas:'📁 Capas',info:'ℹ Info'}[t] %>
+      </button>
+      <% }) %>
+    </div>
+
+    <!-- Contenido -->
+    <div style="flex:1;overflow-y:auto;padding:16px 22px">
+      <div id="tab-content-aog">    <div class="loading"><span class="spinner"></span></div></div>
+      <div id="tab-content-vistax" style="display:none"><div class="loading"><span class="spinner"></span></div></div>
+      <div id="tab-content-capas"  style="display:none"><div class="loading"><span class="spinner"></span></div></div>
+      <div id="tab-content-info"   style="display:none"><div class="loading"><span class="spinner"></span></div></div>
+    </div>
+
+    <div style="padding:12px 22px;border-top:1px solid var(--border);flex-shrink:0">
+      <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-lote')">Cerrar</button>
+    </div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- MODAL: agregar capa                                    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-capa">
+  <div class="modal" style="width:520px">
+    <div class="modal-title">Agregar capa de información</div>
+    <div class="modal-sub" id="mc-lote-nombre" style="color:var(--lime)">–</div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;margin:16px 0">
+
+      <div class="field">
+        <label>Tipo de capa</label>
+        <select id="mc-subtipo" onchange="onSubtipoChange(this.value)"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);
+                 color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);
+                 font-size:13px;outline:none">
+          <optgroup label="Imágenes satelitales / drones">
+            <option value="ndvi">🛰 NDVI / Índice vegetal</option>
+            <option value="imagen_drone">🚁 Imagen de drone</option>
+            <option value="imagen_sat">🛰 Imagen satelital</option>
+          </optgroup>
+          <optgroup label="Clima">
+            <option value="lluvia">🌧 Registro de lluvias</option>
+            <option value="clima">🌤 Datos climáticos</option>
+          </optgroup>
+          <optgroup label="Productos Agro Parallel">
+            <option value="quantix">⚙ Reporte QuantiX</option>
+            <option value="vistax_manual">🌱 Datos VistaX adicionales</option>
+          </optgroup>
+          <optgroup label="Documentos">
+            <option value="analisis_suelo">🧪 Análisis de suelo</option>
+            <option value="prescripcion">📋 Prescripción</option>
+            <option value="shapefile">📐 Shapefile / GeoJSON</option>
+            <option value="pdf">📄 PDF / documento</option>
+            <option value="csv">📊 CSV / planilla</option>
+          </optgroup>
+          <optgroup label="Otro">
+            <option value="nota">📝 Nota / observación</option>
+            <option value="imagen">🖼 Fotografía del campo</option>
+            <option value="otro">📁 Otro</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Nombre / descripción</label>
+        <input type="text" id="mc-nombre"
+          placeholder="Ej: NDVI 15-Mar-2026, Análisis de suelo zona norte…"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);
+                 padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;
+                 outline:none;width:100%;box-sizing:border-box"/>
+      </div>
+
+      <div class="field">
+        <label>Fuente</label>
+        <select id="mc-fuente"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);
+                 color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);
+                 font-size:13px;outline:none">
+          <option value="manual">Manual / subido</option>
+          <option value="quantix">QuantiX</option>
+          <option value="drone">Drone</option>
+          <option value="smn">SMN / Meteorología</option>
+          <option value="laboratorio">Laboratorio</option>
+          <option value="usuario">Usuario</option>
+        </select>
+      </div>
+
+      <!-- Resumen / nota de texto -->
+      <div class="field" id="campo-resumen">
+        <label>Resumen / notas (opcional)</label>
+        <textarea id="mc-resumen" rows="3"
+          placeholder="Ej: NDVI promedio 0.62. Zona NE con déficit hídrico…"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);
+                 padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;
+                 outline:none;width:100%;box-sizing:border-box;resize:vertical"></textarea>
+      </div>
+
+      <!-- Archivo adjunto -->
+      <div class="field" id="campo-archivo">
+        <label>Archivo (opcional)</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost" onclick="document.getElementById('mc-file').click()"
+            style="flex-shrink:0">📎 Elegir archivo</button>
+          <span id="mc-file-label" style="font-size:12px;color:var(--muted2)">Sin archivo</span>
+          <input type="file" id="mc-file" style="display:none"
+            accept="image/*,.pdf,.csv,.geojson,.json,.shp,.dbf,.shx,.prj,.kml,.kmz,.txt,.zip"
+            onchange="onCapaFile(this.files[0])"/>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="mc-alert" class="alert error"></div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-capa')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" id="btn-guardar-capa" onclick="guardarCapa()">
+        Guardar capa
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- MODAL: editar metadata del lote                        -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-editar-lote">
+  <div class="modal" style="width:480px">
+    <div class="modal-title">Datos del lote</div>
+    <div class="modal-sub" id="mel-nombre" style="color:var(--lime)">–</div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin:16px 0">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field">
+          <label>Cultivo</label>
+          <input type="text" id="mel-cultivo" placeholder="Ej: Soja, Maíz…"
+            style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none;width:100%;box-sizing:border-box"/>
+        </div>
+        <div class="field">
+          <label>Temporada</label>
+          <input type="text" id="mel-temporada" placeholder="Ej: 2025/26"
+            style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none;width:100%;box-sizing:border-box"/>
+        </div>
+      </div>
+      <div class="field">
+        <label>Hectáreas estimadas</label>
+        <input type="number" id="mel-ha" min="0" step="0.1" placeholder="Ej: 120"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none;width:100%;box-sizing:border-box"/>
+      </div>
+      <div class="field">
+        <label>Tags (separados por coma)</label>
+        <input type="text" id="mel-tags" placeholder="Ej: lote norte, soja, alto rendimiento"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none;width:100%;box-sizing:border-box"/>
+      </div>
+      <div class="field">
+        <label>Notas</label>
+        <textarea id="mel-notas" rows="3" placeholder="Observaciones generales del lote…"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none;width:100%;box-sizing:border-box;resize:vertical"></textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-editar-lote')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="guardarMetadata()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.tab-active { color: var(--lime) !important; border-bottom-color: var(--lime) !important; }
+.capa-row {
+  display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid rgba(255,255,255,0.05);
+}
+.capa-row:last-child { border-bottom:none; }
+</style>
 
 <script>
-async function analizarLote(id, orgSlug) {
-  document.getElementById('modal-l-nombre').textContent = id;
-  document.getElementById('modal-l-content').innerHTML  = '<div class="loading"><span class="spinner"></span> Consultando agrarIA...</div>';
-  openModal('modal-lote');
+// ── Estado ─────────────────────────────────────────────────
+let _lotes     = [];
+let _loteActual = null;
+let _tabActual = "aog";
+let _capaFile  = null;
+
+const SUBTIPO_ICONO = {
+  ndvi:'🛰',imagen_drone:'🚁',imagen_sat:'🛰',lluvia:'🌧',clima:'🌤',
+  quantix:'⚙',vistax_manual:'🌱',analisis_suelo:'🧪',prescripcion:'📋',
+  shapefile:'📐',pdf:'📄',csv:'📊',nota:'📝',imagen:'🖼',otro:'📁',
+};
+const SUBTIPO_LABEL = {
+  ndvi:'NDVI',imagen_drone:'Drone',imagen_sat:'Sat',lluvia:'Lluvia',clima:'Clima',
+  quantix:'QuantiX',vistax_manual:'VistaX',analisis_suelo:'Suelo',
+  prescripcion:'Prescripción',shapefile:'Shapefile',pdf:'PDF',
+  csv:'CSV',nota:'Nota',imagen:'Foto',otro:'Otro',
+};
+
+// ── Cargar lotes ──────────────────────────────────────────
+async function cargarLotes() {
   try {
-    const d = await Auth.get(`/api/lotes/${encodeURIComponent(id)}/analisis`);
-    document.getElementById('modal-l-nombre').textContent = d.resumen?.nombre || id;
-    document.getElementById('modal-l-content').innerHTML = `
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px;line-height:1.7;color:var(--text)">
-        ${d.analisis || 'Sin análisis disponible'}
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px">
-        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-family:var(--font-m);font-size:16px;color:var(--lime)">${d.resumen?.ha_sembradas||0} ha</div>
-          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Sembradas</div>
-        </div>
-        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-family:var(--font-m);font-size:16px;color:var(--blue)">${d.resumen?.dur_min||0} min</div>
-          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Duración</div>
-        </div>
-        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-family:var(--font-m);font-size:16px;color:${d.resumen?.alertas_count>0?'var(--red)':'var(--lime)'}">
-            ${d.resumen?.alertas_count||0}
-          </div>
-          <div style="font-size:10px;color:var(--muted2);margin-top:2px">Alertas</div>
-        </div>
-      </div>`;
+    _lotes = await Auth.get('/api/lotes-maestro');
+
+    // KPIs
+    document.getElementById('kpi-total').textContent = _lotes.length;
+    document.getElementById('kpi-aog').textContent   = _lotes.filter(l => l.aog?.tiene_boundary).length;
+    document.getElementById('kpi-vx').textContent    = _lotes.filter(l => l.vistax).length;
+    document.getElementById('kpi-capas').textContent = _lotes.reduce((s,l) => s + (l.capas_count||0), 0);
+
+    renderTabla(_lotes);
   } catch(e) {
-    document.getElementById('modal-l-content').innerHTML = `<div class="alert error show">${e.message}</div>`;
+    document.getElementById('card-lotes').innerHTML =
+      `<div class="alert error show" style="margin:16px">${e.message}</div>`;
   }
 }
 
-function exportCSV() {
-  const rows = [['Lote','Ha','Densidad','Alertas','Estado','Fecha']];
-  document.querySelectorAll('#lotes-table tbody tr').forEach(r => {
-    const tds = r.querySelectorAll('td');
-    rows.push([tds[0]?.innerText, tds[2]?.innerText, tds[3]?.innerText, tds[4]?.innerText, tds[5]?.innerText, tds[6]?.innerText]);
-  });
-  const csv = rows.map(r => r.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
-  const a   = document.createElement('a');
-  a.href    = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download= `lotes_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
+function renderTabla(lista) {
+  const card = document.getElementById('card-lotes');
+  if (!lista.length) {
+    card.innerHTML = `<div class="empty-state" style="padding:50px">
+      <span class="icon">🌾</span>
+      <p>Sin lotes sincronizados.<br>Instalá el agente en el tractor.</p>
+    </div>`;
+    return;
+  }
+
+  card.innerHTML = `
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr>
+          <th>Lote</th><th>Cultivo</th><th>AOG</th>
+          <th>VistaX</th><th>Capas</th><th>Último sync</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${lista.map(l => `
+          <tr onclick="abrirLote('${encodeURIComponent(l.nombre)}')" style="cursor:pointer">
+            <td>
+              <div class="td-main">${l.nombre}</div>
+              <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">
+                ${l.temporada ? `<span class="badge badge-gray" style="font-size:9px">${l.temporada}</span>` : ''}
+                ${(l.tags||[]).map(t => `<span class="badge badge-gray" style="font-size:9px">${t}</span>`).join('')}
+                ${!l.tiene_maestro ? `<span class="badge badge-amber" style="font-size:9px">sin metadata</span>` : ''}
+              </div>
+            </td>
+            <td class="td-dim">${l.cultivo || '–'}</td>
+            <td>
+              <div style="display:flex;gap:4px;flex-wrap:wrap">
+                ${l.aog?.tiene_boundary  ? '<span class="badge badge-lime" style="font-size:9px">⬡ boundary</span>' : ''}
+                ${l.aog?.tiene_sections  ? `<span class="badge badge-blue" style="font-size:9px">▦ ${l.aog.pasadas} pasadas</span>` : ''}
+                ${!l.aog ? '<span class="badge badge-gray" style="font-size:9px">sin AOG</span>' : ''}
+              </div>
+            </td>
+            <td>
+              ${l.vistax
+                ? `<span class="badge badge-teal" style="font-size:9px">
+                    ${l.vistax.semillas_total?.toLocaleString('es-AR') || '–'} sem
+                   </span>`
+                : '<span style="font-size:11px;color:var(--muted2)">–</span>'}
+            </td>
+            <td>
+              ${l.capas_count
+                ? `<span style="font-size:12px;color:var(--lime);font-family:var(--font-m)">${l.capas_count}</span>
+                   <span style="font-size:10px;color:var(--muted2)"> capas</span>`
+                : '<span style="font-size:11px;color:var(--muted2)">–</span>'}
+            </td>
+            <td class="td-dim" style="font-size:11px">
+              ${l.ts_ultimo ? new Date(l.ts_ultimo).toLocaleDateString('es-AR') : '–'}
+            </td>
+            <td>
+              <button class="btn btn-sm btn-lime-outline"
+                onclick="event.stopPropagation();abrirAgregarCapaDirecto('${encodeURIComponent(l.nombre)}')">
+                + Capa
+              </button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
+
+function filtrarLotes(q) {
+  if (!q.trim()) { renderTabla(_lotes); return; }
+  const filtered = _lotes.filter(l =>
+    l.nombre.toLowerCase().includes(q.toLowerCase()) ||
+    (l.cultivo||'').toLowerCase().includes(q.toLowerCase()) ||
+    (l.tags||[]).some(t => t.toLowerCase().includes(q.toLowerCase()))
+  );
+  renderTabla(filtered);
+}
+
+// ── Abrir lote ────────────────────────────────────────────
+async function abrirLote(nombreEnc) {
+  const nombre = decodeURIComponent(nombreEnc);
+  _loteActual  = nombre;
+
+  document.getElementById('ml-nombre').textContent = nombre;
+  document.getElementById('ml-badges').innerHTML = '<span class="spinner" style="width:12px;height:12px"></span>';
+  openModal('modal-lote');
+  switchTab('aog', true);
+
+  // Cargar contexto
+  try {
+    const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+    _contextoActual = ctx;
+    renderBadges(ctx);
+    renderTabAOG(ctx);
+    renderTabVistaX(ctx);
+    renderTabCapas(ctx);
+    renderTabInfo(ctx);
+  } catch(e) {
+    document.getElementById('tab-content-aog').innerHTML =
+      `<div class="alert error show">${e.message}</div>`;
+  }
+}
+
+let _contextoActual = null;
+
+function renderBadges(ctx) {
+  const badges = [];
+  if (ctx.cultivo)   badges.push(`<span class="badge badge-teal">${ctx.cultivo}</span>`);
+  if (ctx.temporada) badges.push(`<span class="badge badge-gray">${ctx.temporada}</span>`);
+  if (ctx.ha_estimadas) badges.push(`<span class="badge badge-gray">${ctx.ha_estimadas} ha</span>`);
+  document.getElementById('ml-badges').innerHTML = badges.join('');
+}
+
+function renderTabAOG(ctx) {
+  const aog = ctx.capas?.aog;
+  if (!aog) {
+    document.getElementById('tab-content-aog').innerHTML =
+      `<div class="empty-state" style="padding:30px">
+        <p>No hay archivos AOG sincronizados para este lote.</p>
+      </div>`;
+    return;
+  }
+  document.getElementById('tab-content-aog').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;color:${aog.tiene_boundary?'var(--lime)':'var(--muted2)'}">${aog.tiene_boundary?'✓':'–'}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Boundary</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:18px;color:var(--blue)">${aog.pasadas||'–'}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Pasadas</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:20px;color:${aog.tiene_origen?'var(--lime)':'var(--muted2)'}">${aog.tiene_origen?'✓':'–'}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Origen GPS</div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+      Archivos (${aog.archivos?.length||0})
+    </div>
+    ${(aog.archivos||[]).map(a => `
+      <div class="capa-row">
+        <span style="font-family:var(--font-m);font-size:11px;color:var(--lime);min-width:140px">${a.nombre}</span>
+        <span class="badge badge-gray" style="font-size:9px">${a.subtipo}</span>
+        <span class="td-dim" style="font-size:10px;margin-left:auto">${a.ts?new Date(a.ts).toLocaleDateString('es-AR'):'–'}</span>
+      </div>`).join('')}
+    <div style="margin-top:14px">
+      <button class="btn btn-ghost" style="width:100%" onclick="verEnMapa()">🗺 Ver en mapa</button>
+    </div>`;
+}
+
+function renderTabVistaX(ctx) {
+  const vx = ctx.capas?.vistax;
+  if (!vx) {
+    document.getElementById('tab-content-vistax').innerHTML =
+      `<div class="empty-state" style="padding:30px">
+        <p>No hay datos VistaX para este lote.</p>
+        <button class="btn btn-ghost" style="margin-top:10px" onclick="abrirAgregarCapa();document.getElementById('mc-subtipo').value='vistax_manual'">
+          + Agregar manualmente
+        </button>
+      </div>`;
+    return;
+  }
+  document.getElementById('tab-content-vistax').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:16px;color:var(--lime)">${(vx.semillas_total||0).toLocaleString('es-AR')}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Semillas totales</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:16px;color:var(--blue)">${vx.duracion_min||'–'}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Min siembra</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:16px;color:var(--teal)">${vx.reportes||0}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Reportes</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      ${vx.tiene_densidad  ? '<span class="badge badge-lime">Mapa densidad</span>' : ''}
+      ${vx.tiene_semillas  ? '<span class="badge badge-blue">Semillas GPS</span>' : ''}
+      ${vx.tiene_alertas   ? '<span class="badge badge-red">Alertas</span>' : ''}
+    </div>
+    ${vx.densidad_obj ? `<div style="font-size:12px;color:var(--muted2)">Densidad objetivo: <span style="color:var(--lime)">${vx.densidad_obj} sem/ha</span></div>` : ''}
+    <div style="margin-top:14px">
+      <button class="btn btn-ghost" style="width:100%" onclick="window.location='/vistax'">🌱 Ver en VistaX</button>
+    </div>`;
+}
+
+function renderTabCapas(ctx) {
+  const externas = ctx.capas?.externas || {};
+  const entries  = Object.entries(externas);
+  const cont     = document.getElementById('tab-content-capas');
+
+  if (!entries.length) {
+    cont.innerHTML = `<div class="empty-state" style="padding:30px">
+      <span class="icon">📁</span>
+      <p>Sin capas externas todavía.<br>Agregá NDVI, lluvias, análisis de suelo, PDFs…</p>
+      <button class="btn btn-lime-outline" style="margin-top:12px" onclick="abrirAgregarCapa()">+ Agregar primera capa</button>
+    </div>`;
+    return;
+  }
+
+  cont.innerHTML = entries.map(([subtipo, capas]) => `
+    <div style="margin-bottom:16px">
+      <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;
+                  letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <span>${SUBTIPO_ICONO[subtipo]||'📁'}</span>
+        <span>${SUBTIPO_LABEL[subtipo]||subtipo}</span>
+        <span style="color:var(--border2)">(${capas.length})</span>
+      </div>
+      ${capas.map(c => `
+        <div class="capa-row">
+          <div style="flex:1">
+            <div style="font-size:13px;color:var(--text)">${c.nombre}</div>
+            ${c.resumen ? `<div style="font-size:11px;color:var(--muted2);margin-top:3px">${c.resumen}</div>` : ''}
+          </div>
+          <span class="badge badge-gray" style="font-size:9px">${c.fuente||'manual'}</span>
+          <span class="td-dim" style="font-size:10px">${c.ts?new Date(c.ts).toLocaleDateString('es-AR'):'–'}</span>
+        </div>`).join('')}
+    </div>`).join('') +
+  `<button class="btn btn-ghost" style="width:100%;margin-top:4px" onclick="abrirAgregarCapa()">+ Agregar capa</button>`;
+}
+
+function renderTabInfo(ctx) {
+  document.getElementById('tab-content-info').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Resumen del lote</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+          <div><span style="color:var(--muted2)">Cultivo:</span> <span style="color:var(--text)">${ctx.cultivo||'–'}</span></div>
+          <div><span style="color:var(--muted2)">Temporada:</span> <span style="color:var(--text)">${ctx.temporada||'–'}</span></div>
+          <div><span style="color:var(--muted2)">Hectáreas:</span> <span style="color:var(--text)">${ctx.ha_estimadas||'–'}</span></div>
+          <div><span style="color:var(--muted2)">Establecimiento:</span> <span style="color:var(--text)">${ctx.estab||'–'}</span></div>
+        </div>
+        ${ctx.notas ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2);border-top:1px solid var(--border);padding-top:8px">${ctx.notas}</div>` : ''}
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Capas disponibles</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${ctx.capas?.aog     ? '<span class="badge badge-lime">🗺 AOG</span>' : ''}
+          ${ctx.capas?.vistax  ? '<span class="badge badge-teal">🌱 VistaX</span>' : ''}
+          ${Object.entries(ctx.capas?.externas||{}).map(([t,c]) =>
+            `<span class="badge badge-gray">${SUBTIPO_ICONO[t]||'📁'} ${SUBTIPO_LABEL[t]||t} (${c.length})</span>`
+          ).join('')}
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="analizarConIA()">🌿 Analizar este lote con agrarIA</button>
+    </div>`;
+}
+
+// ── Tabs ──────────────────────────────────────────────────
+function switchTab(tab, force) {
+  if (tab === _tabActual && !force) return;
+  _tabActual = tab;
+  ['aog','vistax','capas','info'].forEach(t => {
+    document.getElementById(`tab-${t}`)?.classList.toggle('tab-active', t === tab);
+    const cont = document.getElementById(`tab-content-${t}`);
+    if (cont) cont.style.display = t === tab ? 'block' : 'none';
+  });
+}
+
+// ── Editar metadata ───────────────────────────────────────
+function abrirEditarLote() {
+  const ctx = _contextoActual || {};
+  document.getElementById('mel-nombre').textContent = _loteActual;
+  document.getElementById('mel-cultivo').value      = ctx.cultivo      || '';
+  document.getElementById('mel-temporada').value    = ctx.temporada    || '';
+  document.getElementById('mel-ha').value           = ctx.ha_estimadas || '';
+  document.getElementById('mel-tags').value         = (ctx.tags||[]).join(', ');
+  document.getElementById('mel-notas').value        = ctx.notas        || '';
+  openModal('modal-editar-lote');
+}
+
+async function guardarMetadata() {
+  try {
+    const tags = document.getElementById('mel-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+    await Auth.put(`/api/lotes-maestro/${encodeURIComponent(_loteActual)}`, {
+      cultivo:      document.getElementById('mel-cultivo').value.trim()  || null,
+      temporada:    document.getElementById('mel-temporada').value.trim() || null,
+      ha_estimadas: parseFloat(document.getElementById('mel-ha').value)   || null,
+      tags,
+      notas:        document.getElementById('mel-notas').value.trim(),
+    });
+    toast('✓ Guardado', _loteActual, 'lime');
+    closeModal('modal-editar-lote');
+    await abrirLote(encodeURIComponent(_loteActual));
+    cargarLotes();
+  } catch(e) { toast('Error', e.message, 'red'); }
+}
+
+// ── Agregar capa ──────────────────────────────────────────
+function abrirAgregarCapa() {
+  document.getElementById('mc-lote-nombre').textContent = _loteActual;
+  document.getElementById('mc-nombre').value  = '';
+  document.getElementById('mc-resumen').value = '';
+  document.getElementById('mc-file-label').textContent = 'Sin archivo';
+  document.getElementById('mc-alert').classList.remove('show');
+  _capaFile = null;
+  openModal('modal-capa');
+}
+
+function abrirAgregarCapaDirecto(nombreEnc) {
+  _loteActual = decodeURIComponent(nombreEnc);
+  abrirAgregarCapa();
+}
+
+function onCapaFile(file) {
+  if (!file) return;
+  _capaFile = file;
+  document.getElementById('mc-file-label').textContent = `${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+}
+
+async function guardarCapa() {
+  const subtipo = document.getElementById('mc-subtipo').value;
+  const nombre  = document.getElementById('mc-nombre').value.trim();
+  if (!nombre) {
+    const el = document.getElementById('mc-alert');
+    el.textContent = 'Ingresá un nombre/descripción'; el.className = 'alert error show';
+    return;
+  }
+
+  const btn = document.getElementById('btn-guardar-capa');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+
+  try {
+    const body = {
+      subtipo,
+      nombre,
+      fuente:  document.getElementById('mc-fuente').value,
+      resumen: document.getElementById('mc-resumen').value.trim() || null,
+    };
+
+    // Adjuntar archivo si hay
+    if (_capaFile) {
+      const TEXT_EXTS = new Set(['geojson','json','csv','kml','txt','prj']);
+      const ext = _capaFile.name.split('.').pop().toLowerCase();
+      if (TEXT_EXTS.has(ext) && _capaFile.size < 5*1024*1024) {
+        body.contenido_texto = await new Promise((res,rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = rej;
+          r.readAsText(_capaFile, 'utf-8');
+        });
+      } else {
+        body.base64 = await new Promise((res,rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(_capaFile);
+        });
+        body.mediaType = _capaFile.type;
+      }
+    }
+
+    await Auth.post(`/api/lotes-maestro/${encodeURIComponent(_loteActual)}/capa`, body);
+    toast('✓ Capa agregada', nombre, 'lime');
+    closeModal('modal-capa');
+    if (_contextoActual) await abrirLote(encodeURIComponent(_loteActual));
+    cargarLotes();
+  } catch(e) {
+    const el = document.getElementById('mc-alert');
+    el.textContent = e.message; el.className = 'alert error show';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar capa';
+  }
+}
+
+// ── Ver en mapa ───────────────────────────────────────────
+function verEnMapa() {
+  closeModal('modal-lote');
+  // Abrir mapa y seleccionar el lote
+  window.location = '/mapa';
+  // TODO: pasar el lote como parámetro cuando el mapa soporte deep-link
+}
+
+// ── Analizar con IA ───────────────────────────────────────
+async function analizarConIA() {
+  closeModal('modal-lote');
+  // Ir a agrarIA con el lote pre-seleccionado
+  sessionStorage.setItem('agraria_lote', _loteActual);
+  window.location = '/agraria';
+}
+
+document.addEventListener('DOMContentLoaded', cargarLotes);
 </script>
