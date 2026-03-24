@@ -1,218 +1,303 @@
-<%# pages/mapa.ejs — Mapa de lotes AOG %>
+<%# pages/mapa.ejs — Mapa de lotes · buscador 3 chars + lazy load %>
 
 <div class="page-header">
   <div>
     <h2>Mapa de lotes</h2>
-    <p>Boundaries y cobertura sincronizados desde AgOpenGPS</p>
+    <p>Boundaries · cobertura aplicada · origen GPS</p>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <div id="mapa-estado" style="font-size:11px;color:var(--muted2)">Cargando...</div>
-    <button class="btn btn-ghost" onclick="cargarMapa()">↻ Actualizar</button>
-    <% if (user.rol_global === 'superadmin') { %>
-    <select id="filtro-estab" class="btn btn-ghost" style="padding:6px 10px;font-size:12px"
-      onchange="cargarMapa()">
+    <span id="mapa-estado" style="font-size:11px;color:var(--muted2)">–</span>
+    <button class="btn btn-ghost" onclick="limpiarMapa()">✕ Limpiar</button>
+  </div>
+</div>
+
+<!-- Buscador -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-body" style="padding:12px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+
+    <div style="position:relative;flex:1;min-width:200px">
+      <input type="text" id="lote-search"
+        placeholder="Buscar lote… (mínimo 3 caracteres)"
+        autocomplete="off"
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);
+               color:var(--text);padding:9px 12px 9px 34px;border-radius:8px;
+               font-family:var(--font-b);font-size:13px;outline:none;
+               box-sizing:border-box;transition:border-color .15s"
+        oninput="onBusqueda(this.value)"
+        onfocus="this.style.borderColor='rgba(184,255,60,0.4)'"
+        onblur="this.style.borderColor='var(--border)'"/>
+      <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);
+                   font-size:13px;opacity:0.35;pointer-events:none">🔍</span>
+
+      <!-- Dropdown resultados -->
+      <div id="search-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
+               background:var(--surface);border:1px solid var(--border2);border-radius:8px;
+               box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:9000;
+               max-height:260px;overflow-y:auto">
+      </div>
+    </div>
+
+    <!-- Filtro estab (solo SA) -->
+    <% if (locals.isSA) { %>
+    <select id="filtro-estab"
+      style="background:var(--surface2);border:1px solid var(--border);color:var(--text);
+             padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;
+             outline:none;flex-shrink:0"
+      onchange="recargarLista()">
       <option value="">Todos los establecimientos</option>
       <% establecimientos.forEach(e => { %>
-      <option value="<%= e.slug %>"><%= e.nombre %></option>
+      <option value="<%= e.slug %>"
+        <%= locals.miSlug === e.slug ? "selected" : "" %>><%= e.nombre %></option>
       <% }) %>
     </select>
     <% } %>
+
+    <!-- Pill lote activo -->
+    <div id="pill-activo"
+      style="display:none;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.3);
+             border-radius:8px;padding:7px 12px;font-size:12px;color:var(--lime);
+             align-items:center;gap:8px;white-space:nowrap;flex-shrink:0">
+      <span id="pill-nombre">–</span>
+      <button onclick="limpiarMapa()"
+        style="background:none;border:none;color:var(--lime);cursor:pointer;
+               font-size:14px;padding:0;line-height:1">✕</button>
+    </div>
+
   </div>
 </div>
 
 <!-- Mapa -->
 <div style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
-  <div id="mapa" style="height:520px;width:100%;background:var(--surface2)"></div>
+  <div id="mapa" style="height:560px;width:100%;background:#050810"></div>
 
   <!-- Leyenda -->
-  <div style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.75);border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;color:#fff;line-height:2">
-    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:14px;height:3px;background:#b8ff3c"></span> Boundary</div>
-    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:14px;height:10px;background:rgba(60,158,255,0.4);border:1px solid #3c9eff"></span> Cobertura aplicada</div>
-    <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:8px;height:8px;background:#f59e0b;border-radius:50%"></span> Origen GPS</div>
+  <div style="position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,0.78);
+       border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;
+       color:#fff;line-height:2.2;pointer-events:none">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="display:inline-block;width:16px;height:2px;background:#b8ff3c;border-radius:2px"></span>
+      Boundary
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="display:inline-block;width:14px;height:10px;
+                   background:rgba(60,158,255,0.35);border:1px solid #3c9eff;border-radius:2px"></span>
+      Cobertura
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="display:inline-block;width:8px;height:8px;background:#f59e0b;border-radius:50%"></span>
+      Origen GPS
+    </div>
   </div>
 
-  <!-- Loading overlay -->
-  <div id="mapa-loading" style="position:absolute;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:2000">
-    <div style="color:#fff;font-size:14px">Cargando lotes...</div>
+  <!-- Overlay vacío -->
+  <div id="mapa-empty"
+    style="position:absolute;inset:0;display:flex;flex-direction:column;
+           align-items:center;justify-content:center;pointer-events:none;z-index:500">
+    <div style="font-size:40px;opacity:0.15">🗺</div>
+    <div style="font-size:12px;color:var(--muted2);margin-top:10px;opacity:0.5">
+      Buscá un lote para verlo en el mapa
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="mapa-loading"
+    style="display:none;position:absolute;inset:0;background:rgba(0,0,0,0.55);
+           align-items:center;justify-content:center;z-index:2000">
+    <div style="background:var(--surface);border:1px solid var(--border);
+         border-radius:10px;padding:14px 22px;font-size:13px;color:var(--text);
+         display:flex;align-items:center;gap:10px">
+      <span class="spinner"></span> Cargando lote…
+    </div>
   </div>
 </div>
-
-<!-- Lista de lotes debajo -->
-<div id="lotes-lista" style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
 
 <!-- Leaflet -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+.leaflet-container { background: #050810 !important; }
+#search-dropdown > div { transition: background .1s; }
+#search-dropdown > div:hover { background: var(--surface2); }
+</style>
 
 <script>
-let mapa = null;
-let layers = [];
+let _mapa     = null;
+let _layers   = [];
+let _lista    = [];   // lista liviana (nombres, flags, sin coords)
+let _searchTO = null;
 
+// ── Init mapa ──────────────────────────────────────────────
 function initMapa() {
-  if (mapa) return;
-
-  mapa = L.map("mapa", { zoomControl:true, maxZoom:22 }).setView([-34.6, -60.0], 10);
-
-  // Capa base oscura siempre presente
-  const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
-    attribution: "CartoDB", maxZoom: 22, subdomains: 'abcd', opacity: 0,
-  }).addTo(mapa);
-
-  // Satelital
-  const satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-    attribution: "Esri", maxNativeZoom: 17, maxZoom: 22,
-  }).addTo(mapa);
-
-  // Etiquetas
-  const labelLayer = L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
-    maxNativeZoom: 17, maxZoom: 22, opacity: 0.7,
-  }).addTo(mapa);
-
-  // Badge "Modo offline"
-  const badge = document.createElement('div');
-  badge.id = 'offline-badge';
-  badge.innerHTML = '📡 Modo sin conexión';
-  badge.style.cssText = 'display:none;position:absolute;top:10px;right:10px;z-index:1000;background:rgba(0,0,0,0.75);color:#718096;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);font-family:monospace';
-  document.getElementById('mapa').appendChild(badge);
-
-  // Al cambiar zoom — si supera 17 activar modo oscuro
-  mapa.on('zoomend', () => {
-    const z = mapa.getZoom();
-    if (z > 17) {
-      darkLayer.setOpacity(1);
-      satLayer.setOpacity(0);
-      labelLayer.setOpacity(0);
-      badge.style.display = 'block';
-      document.querySelector('.leaflet-container').style.background = '#050810';
-    } else {
-      darkLayer.setOpacity(0);
-      satLayer.setOpacity(1);
-      labelLayer.setOpacity(0.7);
-      badge.style.display = 'none';
-    }
-  });
+  if (_mapa) return;
+  _mapa = L.map("mapa", { zoomControl: true, preferCanvas: true })
+            .setView([-34.6, -60.0], 10);
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Esri", maxZoom: 20 }
+  ).addTo(_mapa);
+  L.tileLayer(
+    "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 20, opacity: 0.65 }
+  ).addTo(_mapa);
+  _mapa.on("click", cerrarDropdown);
 }
 
-async function cargarMapa() {
+// ── Lista liviana al abrir (solo nombres y flags, sin coords) ─
+async function recargarLista() {
+  try {
+    const estab = document.getElementById("filtro-estab")?.value || "";
+    const url   = "/api/aog/lotes-mapa" + (estab ? "?estab=" + estab : "");
+    _lista      = await Auth.get(url);
+    document.getElementById("mapa-estado").textContent =
+      _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
+  } catch {
+    document.getElementById("mapa-estado").textContent = "Error al cargar";
+  }
+}
+
+// ── Buscador (debounce 180ms) ──────────────────────────────
+function onBusqueda(val) {
+  clearTimeout(_searchTO);
+  const dd = document.getElementById("search-dropdown");
+  if (val.trim().length < 3) { dd.style.display = "none"; return; }
+
+  _searchTO = setTimeout(() => {
+    const q = val.trim().toLowerCase();
+    const matches = _lista.filter(l =>
+      (l.nombre || "").toLowerCase().includes(q) ||
+      (l.estab_slug || "").toLowerCase().includes(q)
+    ).slice(0, 10);
+
+    if (!matches.length) {
+      dd.innerHTML = `<div style="padding:12px 16px;font-size:12px;color:var(--muted2)">
+        Sin resultados para "<em>${val}</em>"</div>`;
+      dd.style.display = "block";
+      return;
+    }
+
+    dd.innerHTML = matches.map(l => {
+      const nombre = l.nombre || "?";
+      const badges = [
+        l.tiene_boundary ? `<span style="font-size:9px;color:var(--lime);opacity:.8">⬡ boundary</span>`   : "",
+        l.tiene_sections ? `<span style="font-size:9px;color:#3c9eff;opacity:.8">▦ cobertura</span>`      : "",
+        l.tiene_origen   ? `<span style="font-size:9px;color:#f59e0b;opacity:.8">📍 GPS</span>`           : "",
+      ].filter(Boolean).join(" &middot; ");
+      const estabLabel = l.estab_slug && l.estab_slug !== "unassigned" ? l.estab_slug : "";
+      return `<div onclick="seleccionarLote('${encodeURIComponent(nombre)}','${l.estab_slug||''}')"
+        style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">
+        <div style="font-size:13px;color:var(--text)">${nombre}</div>
+        <div style="margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${estabLabel ? `<span style="font-size:10px;color:var(--muted2)">${estabLabel}</span>` : ""}
+          ${badges ? `<span style="font-size:10px;color:var(--muted2)">${badges}</span>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+
+    dd.style.display = "block";
+  }, 180);
+}
+
+function cerrarDropdown() {
+  document.getElementById("search-dropdown").style.display = "none";
+}
+
+// ── Seleccionar lote → fetch solo ESE lote con coords ─────
+async function seleccionarLote(nombreEnc, estabSlug) {
+  cerrarDropdown();
+  document.getElementById("lote-search").value = decodeURIComponent(nombreEnc);
+
   initMapa();
-  document.getElementById('mapa-loading').style.display = 'flex';
-  document.getElementById('mapa-estado').textContent = 'Cargando...';
+  document.getElementById("mapa-loading").style.display = "flex";
+  document.getElementById("mapa-empty").style.display   = "none";
+
+  _layers.forEach(l => _mapa.removeLayer(l));
+  _layers = [];
 
   try {
-    const estab = document.getElementById('filtro-estab')?.value || '';
-    const url   = '/api/aog/mapa' + (estab ? '?estab='+estab : '');
-    const lotes = await Auth.get(url);
+    const qs   = `?lote=${nombreEnc}` + (estabSlug ? `&estab=${estabSlug}` : "");
+    const data = await Auth.get("/api/aog/mapa" + qs);
+    const lote = Array.isArray(data) ? data[0] : data;
 
-    const listaHtml = [];
-    lotes.forEach((lote, i) => {
-      const nombre   = lote.nombre || '?';
-      const secciones = lote.sections ? lote.sections.length : 0;
-      listaHtml.push(`
-        <div id="lote-card-${i}" onclick="cargarLote(${i})"
-          style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s">
-          <div style="font-family:monospace;font-size:12px;color:var(--lime);margin-bottom:4px">${nombre}</div>
-          <div style="font-size:11px;color:var(--muted2)">
-            ${lote.boundary ? '⬡ Boundary' : '○ Sin boundary'} ·
-            ${secciones ? '▦ '+secciones+' sec.' : ''}
-            ${lote.origen ? '📍 GPS' : ''}
-          </div>
-          <div style="font-size:10px;color:var(--muted2);margin-top:3px">${lote.estab_slug||'unassigned'}</div>
-        </div>`);
-    });
+    if (!lote) {
+      toast("Sin datos para este lote", "", "amber");
+      document.getElementById("mapa-empty").style.display = "flex";
+      return;
+    }
 
-    document.getElementById('lotes-lista').innerHTML = listaHtml.join('');
-    document.getElementById('mapa-estado').textContent = `${lotes.length} lote${lotes.length!==1?'s':''}`;
-    window._lotesData = lotes;
+    const nombre = lote.nombre || decodeURIComponent(nombreEnc);
+    const bounds = [];
+
+    // Boundary
+    if (lote.boundary?.length > 2) {
+      const poly = L.polygon(lote.boundary, {
+        color: "#b8ff3c", weight: 1.5, opacity: 0.9,
+        fillColor: "#b8ff3c", fillOpacity: 0.07,
+      }).addTo(_mapa);
+      poly.bindTooltip(`<b style="color:#b8ff3c">${nombre}</b>`, { sticky: true });
+      _layers.push(poly);
+      lote.boundary.forEach(p => bounds.push(p));
+    }
+
+    // Sections
+    if (lote.sections?.length) {
+      lote.sections.forEach(rect => {
+        _layers.push(
+          L.polygon(rect, {
+            color: "#3c9eff", weight: 0.5, opacity: 0.7,
+            fillColor: "#3c9eff", fillOpacity: 0.3,
+          }).addTo(_mapa)
+        );
+      });
+    }
+
+    // Origen GPS
+    if (lote.origen) {
+      const m = L.circleMarker([lote.origen.lat, lote.origen.lon], {
+        radius: 5, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1, weight: 1.5,
+      }).addTo(_mapa);
+      m.bindTooltip(`${nombre} — origen GPS`);
+      _layers.push(m);
+      bounds.push([lote.origen.lat, lote.origen.lon]);
+    }
+
+    if (bounds.length) _mapa.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
+
+    // Pill activo
+    document.getElementById("pill-nombre").textContent    = nombre;
+    document.getElementById("pill-activo").style.display  = "flex";
+
+    const info = [
+      lote.boundary ? "⬡ Boundary"                        : null,
+      lote.sections ? `▦ ${lote.sections.length} pasadas` : null,
+      lote.origen   ? "📍 GPS"                             : null,
+    ].filter(Boolean).join(" · ");
+    document.getElementById("mapa-estado").textContent = nombre + (info ? "  " + info : "");
 
   } catch(e) {
-    document.getElementById('mapa-estado').textContent = 'Error: ' + e.message;
+    toast("Error cargando lote", e.message, "red");
+    document.getElementById("mapa-empty").style.display = "flex";
+  } finally {
+    document.getElementById("mapa-loading").style.display = "none";
   }
-
-  document.getElementById('mapa-loading').style.display = 'none';
 }
 
-function cargarLote(i) {
-  const lote = window._lotesData?.[i];
-  if (!lote) return;
-
-  // Destacar card
-  document.querySelectorAll('[id^="lote-card-"]').forEach(c => c.style.borderColor = 'var(--border)');
-  document.getElementById('lote-card-'+i).style.borderColor = 'var(--lime)';
-
-  // Limpiar capas anteriores
-  layers.forEach(l => mapa.removeLayer(l));
-  layers = [];
-
-  const nombre = lote.nombre || '?';
-  const color  = '#b8ff3c';
-  const bounds = [];
-  let centroLat = null, centroLon = null;
-
-  // Boundary
-  if (lote.boundary?.length > 2) {
-    const poly = L.polygon(lote.boundary, {
-      color, weight:2, opacity:0.9, fillColor:color, fillOpacity:0.08,
-    }).addTo(mapa);
-    poly.bindTooltip(`<b>${nombre}</b>`, { permanent:false, direction:'center' });
-    layers.push(poly);
-    lote.boundary.forEach(([lat,lon]) => bounds.push([lat,lon]));
-    const center = poly.getBounds().getCenter();
-    centroLat = center.lat; centroLon = center.lng;
-  }
-
-  // Sections
-  if (lote.sections) {
-    lote.sections.forEach(rect => {
-      const r = L.polygon(rect, {
-        color:'#3c9eff', weight:0.5, opacity:0.6, fillColor:'#3c9eff', fillOpacity:0.35,
-      }).addTo(mapa);
-      layers.push(r);
-    });
-  }
-
-  // Origen
-  if (lote.origen) {
-    const marker = L.circleMarker([lote.origen.lat, lote.origen.lon], {
-      radius:5, color:'#f59e0b', fillColor:'#f59e0b', fillOpacity:1, weight:1,
-    }).addTo(mapa);
-    marker.bindTooltip(`${nombre} — origen GPS`);
-    layers.push(marker);
-    bounds.push([lote.origen.lat, lote.origen.lon]);
-    centroLat = centroLat || lote.origen.lat;
-    centroLon = centroLon || lote.origen.lon;
-  }
-
-  // Etiqueta
-  if (centroLat && centroLon) {
-    const label = L.marker([centroLat, centroLon], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="background:rgba(0,0,0,0.65);color:#b8ff3c;padding:2px 7px;border-radius:4px;font-size:11px;white-space:nowrap;font-family:monospace">${nombre}</div>`,
-        iconAnchor:[0,0],
-      }), interactive:false,
-    }).addTo(mapa);
-    layers.push(label);
-  }
-
-  if (bounds.length) mapa.fitBounds(bounds, { padding:[30,30], maxZoom:17 });
-  document.getElementById('mapa-estado').textContent = nombre;
-}
-function irALote(i) {
-  const lote = window._lotesData?.[i];
-  if (!lote) return;
-  if (lote.boundary?.length) {
-    mapa.fitBounds(lote.boundary, { padding:[40,40], maxZoom:17 });
-  } else if (lote.origen) {
-    mapa.setView([lote.origen.lat, lote.origen.lon], 15);
-  }
-  // Destacar card
-  document.querySelectorAll('[id^="lote-card-"]').forEach(c => c.style.borderColor = 'var(--border)');
-  const card = document.getElementById('lote-card-'+i);
-  if (card) { card.style.borderColor = 'var(--lime)'; card.scrollIntoView({ behavior:'smooth', block:'nearest' }); }
+// ── Limpiar ────────────────────────────────────────────────
+function limpiarMapa() {
+  _layers.forEach(l => _mapa?.removeLayer(l));
+  _layers = [];
+  document.getElementById("lote-search").value        = "";
+  document.getElementById("pill-activo").style.display = "none";
+  document.getElementById("mapa-empty").style.display  = "flex";
+  document.getElementById("mapa-estado").textContent   =
+    _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
 }
 
-function destacarLote(i) { irALote(i); }
+// ── Cerrar dropdown al click fuera ────────────────────────
+document.addEventListener("click", e => {
+  if (!e.target.closest("#lote-search") && !e.target.closest("#search-dropdown"))
+    cerrarDropdown();
+});
 
-// Cargar al abrir la página
-document.addEventListener('DOMContentLoaded', cargarMapa);
+document.addEventListener("DOMContentLoaded", () => { initMapa(); recargarLista(); });
 </script>

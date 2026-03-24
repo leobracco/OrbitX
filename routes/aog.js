@@ -304,37 +304,55 @@ router.get("/vehiculos", async (req, res) => {
 //  GET /api/aog/mapa  — todos los lotes con polígonos parseados
 //  Para el panel de mapa
 // ══════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+//  GET /api/aog/mapa
+//  Devuelve lotes con polígonos parseados (boundary + sections + origen).
+//  
+//  ?lote=NOMBRE  → solo ese lote (lazy load desde el buscador del mapa)
+//  ?estab=SLUG   → filtrar por establecimiento
+//  Sin parámetros → todos los lotes del usuario (o todos para SA)
+// ══════════════════════════════════════════════════════════
 router.get("/mapa", async (req, res) => {
   try {
-    // Construir lista de slugs a consultar
-    const slugs = [];
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug  || jwtUser?.estab_slug || null;
+    const filtroEstab = req.query.estab;
+    const filtroLote  = req.query.lote ? decodeURIComponent(req.query.lote) : null;
 
-    if (req.query.estab) {
-      // Filtro explícito por estab
-      slugs.push(req.query.estab);
-    } else if (req.user?.rol_global === "superadmin") {
-      // Superadmin: todas las DBs
+    // Armar lista de slugs
+    const slugs = [];
+    if (filtroEstab) {
+      slugs.push(filtroEstab);
+    } else if (isSA) {
       try {
         const nano   = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
         const allDBs = await nano.db.list();
-        allDBs.filter(n => n.startsWith("orbitx_")).forEach(n => slugs.push(n.replace("orbitx_","")));
+        allDBs.filter(n => n.startsWith("orbitx_")).forEach(n => slugs.push(n.replace("orbitx_", "")));
       } catch {}
-    } else if (req.user?.estabSlug) {
-      slugs.push(req.user.estabSlug);
+    } else if (miSlug) {
+      slugs.push(miSlug);
     }
 
-    // Siempre incluir unassigned (datos recién sincronizados sin asignar)
     if (!slugs.includes("unassigned")) slugs.push("unassigned");
-
-    console.log("[AOG/mapa] slugs a consultar:", slugs);
 
     const lotesParsed = [];
 
     for (const slug of slugs) {
       try {
-        const docs = await _findAll(db.getDB(slug), { tipo:"aog_archivo", es_lote:true });
-        console.log(`[AOG/mapa] ${slug}: ${docs.length} docs`);
+        let docs;
+        if (filtroLote) {
+          // Lazy load: solo traer docs del lote pedido
+          docs = await _findAll(db.getDB(slug), {
+            tipo:        "aog_archivo",
+            es_lote:     true,
+            lote_nombre: filtroLote,
+          });
+        } else {
+          docs = await _findAll(db.getDB(slug), { tipo: "aog_archivo", es_lote: true });
+        }
 
+        // Agrupar por lote_nombre
         const grupos = {};
         docs.forEach(d => {
           const n = d.lote_nombre || "?";
@@ -342,21 +360,23 @@ router.get("/mapa", async (req, res) => {
           grupos[n].push(d);
         });
 
-        console.log(`[AOG/mapa] ${slug}: lotes encontrados:`, Object.keys(grupos));
-
         for (const [nombre, loteDocs] of Object.entries(grupos)) {
           const parsed = parseLote(loteDocs);
-          console.log(`[AOG/mapa] lote "${nombre}": boundary=${!!parsed.boundary} origen=${!!parsed.origen} sections=${parsed.sections?.length||0}`);
-          // Incluir aunque no tenga boundary — puede tener solo origen
+          console.log(`[AOG/mapa] "${nombre}": boundary=${!!parsed.boundary} origen=${!!parsed.origen} sections=${parsed.sections?.length||0}`);
           if (parsed.boundary || parsed.origen) {
-            lotesParsed.push({ ...parsed, estab_slug:slug });
+            lotesParsed.push({ ...parsed, estab_slug: slug });
           }
         }
-      } catch(e) { console.error(`[AOG/mapa] ${slug}:`, e.message); }
+      } catch(e) {
+        console.error(`[AOG/mapa] ${slug}:`, e.message);
+      }
     }
 
     res.json(lotesParsed);
-  } catch(e) { res.status(500).json({ error:e.message }); }
+  } catch(e) {
+    console.error("[AOG/mapa]", e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = router;
