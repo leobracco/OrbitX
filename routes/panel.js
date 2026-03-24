@@ -161,7 +161,10 @@ router.get("/usuarios", requireAuth, requireSuperadmin, async (req, res) => {
     usuarios,
   });
 });
-
+// ── GRUPOS ────────────────────────────────────────────────
+router.get("/grupos", requireAuth, requireSuperadmin, (req, res) => {
+  res.render("layout", { ...base(req), title:"Grupos y permisos", page:"grupos" });
+});
 // ── ROLES ────────────────────────────────────────────────
 router.get("/roles", requireAuth, (req, res) => {
   res.render("layout", {

@@ -22,6 +22,7 @@ const routePanel = require("./routes/panel"); // SSR panel
 const routeAOG = require("./routes/aog");
 const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
+const routeGrupos = require("./routes/grupos");
 
 const app = express();
 const server = http.createServer(app);
@@ -98,6 +99,7 @@ app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/vistax", auth.required, routeVistaX);
+app.use("/api/grupos", auth.required, routeGrupos);
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
 app.use(

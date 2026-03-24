@@ -1,0 +1,317 @@
+<%# pages/grupos.ejs — Gestión de grupos y permisos %>
+
+<div class="page-header">
+  <div>
+    <h2>Grupos y permisos</h2>
+    <p>Grupos personalizados con permisos por sección</p>
+  </div>
+  <button class="btn btn-primary" onclick="openModal('modal-nuevo-grupo')">+ Nuevo grupo</button>
+</div>
+
+<!-- Lista de grupos -->
+<div id="grupos-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
+  <div class="loading"><span class="spinner"></span></div>
+</div>
+
+<!-- Modal nuevo/editar grupo -->
+<div class="modal-backdrop" id="modal-nuevo-grupo">
+  <div class="modal" style="width:520px">
+    <div class="modal-title" id="modal-grupo-titulo">Nuevo grupo</div>
+    <div class="modal-sub">Definí el nombre y los permisos de acceso</div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;margin:16px 0">
+
+      <div style="display:grid;grid-template-columns:1fr auto;gap:10px">
+        <div class="field">
+          <label>Nombre del grupo</label>
+          <input type="text" id="g-nombre" placeholder="Ej: Operadores campo norte"/>
+        </div>
+        <div class="field">
+          <label>Color</label>
+          <input type="color" id="g-color" value="#3C9EFF"
+            style="height:38px;padding:2px;border-radius:8px;cursor:pointer;background:var(--surface2);border:1px solid var(--border)"/>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Descripción (opcional)</label>
+        <input type="text" id="g-desc" placeholder="Ej: Pueden ver mapas y resolver alertas"/>
+      </div>
+
+      <!-- Permisos por recurso -->
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted2);margin-bottom:10px">Permisos por sección</div>
+        <div id="permisos-grid" style="display:flex;flex-direction:column;gap:6px">
+
+          <% const recursos = [
+            { id:'mapa',        icon:'🗺',  label:'Mapa / Lotes AOG'    },
+            { id:'vistax',      icon:'🌱',  label:'VistaX (siembra)'    },
+            { id:'dispositivos',icon:'📡',  label:'Dispositivos'         },
+            { id:'alertas',     icon:'⚠',   label:'Alertas'              },
+            { id:'usuarios',    icon:'👥',  label:'Usuarios y registros' },
+          ]; %>
+
+          <% recursos.forEach(r => { %>
+          <div style="display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px">
+            <span style="font-size:16px;flex-shrink:0"><%= r.icon %></span>
+            <span style="font-size:13px;color:var(--text);flex:1"><%= r.label %></span>
+            <div style="display:flex;gap:6px">
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2);cursor:pointer">
+                <input type="checkbox" id="p-<%= r.id %>-read"  value="read"  onchange="sincPermiso('<%= r.id %>')"> Leer
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2);cursor:pointer">
+                <input type="checkbox" id="p-<%= r.id %>-write" value="write" onchange="sincPermiso('<%= r.id %>')"> Editar
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2);cursor:pointer">
+                <input type="checkbox" id="p-<%= r.id %>-admin" value="admin" onchange="sincPermiso('<%= r.id %>')"> Admin
+              </label>
+            </div>
+          </div>
+          <% }) %>
+
+        </div>
+      </div>
+
+    </div>
+
+    <div id="grupo-alert" class="alert error"></div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-nuevo-grupo');resetGrupoForm()">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" id="btn-guardar-grupo" onclick="guardarGrupo()">Crear grupo</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal agregar usuario al grupo -->
+<div class="modal-backdrop" id="modal-agregar-usuario">
+  <div class="modal">
+    <div class="modal-title">Agregar usuario al grupo</div>
+    <div class="modal-sub" id="modal-au-grupo" style="color:var(--lime)">–</div>
+    <div style="margin:16px 0">
+      <div class="field">
+        <label>Usuario</label>
+        <select id="au-select" style="width:100%">
+          <option value="">Seleccioná un usuario...</option>
+        </select>
+      </div>
+    </div>
+    <div id="au-alert" class="alert error"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-agregar-usuario')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmarAgregarUsuario()">Agregar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const RECURSOS = ['mapa','vistax','dispositivos','alertas','usuarios'];
+let _grupoEditandoId = null;
+let _grupoUsuarioId  = null;
+let _todosUsuarios   = [];
+
+// ── Cargar grupos ────────────────────────────────────────
+async function cargarGrupos() {
+  try {
+    const grupos = await Auth.get('/api/grupos');
+    const grid   = document.getElementById('grupos-grid');
+
+    if (!grupos.length) {
+      grid.innerHTML = `
+        <div class="empty-state" style="grid-column:1/-1;padding:60px">
+          <span class="icon">👥</span>
+          <p>No hay grupos creados aún.<br>Creá el primer grupo con el botón de arriba.</p>
+        </div>`;
+      return;
+    }
+
+    grid.innerHTML = grupos.map(g => `
+      <div class="card" style="border-left:3px solid ${g.color||'#3C9EFF'}">
+        <div class="card-head">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:10px;height:10px;border-radius:50%;background:${g.color||'#3C9EFF'};box-shadow:0 0 6px ${g.color||'#3C9EFF'}66"></div>
+            <span class="card-title">${g.nombre}</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-ghost" onclick="editarGrupo('${g._id}')">✏</button>
+            <button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="borrarGrupo('${g._id}','${g.nombre}')">✕</button>
+          </div>
+        </div>
+        <div style="padding:12px 16px">
+          ${g.descripcion ? `<div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${g.descripcion}</div>` : ''}
+
+          <!-- Permisos -->
+          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">
+            ${RECURSOS.map(r => {
+              const p = g.permisos?.[r] || [];
+              if (!p.length) return '';
+              const badges = p.map(a => `<span class="badge badge-${a==='admin'?'red':a==='write'?'amber':'blue'}" style="font-size:9px">${a}</span>`).join('');
+              const icons  = { mapa:'🗺', vistax:'🌱', dispositivos:'📡', alertas:'⚠', usuarios:'👥' };
+              return `<div style="display:flex;align-items:center;gap:6px;font-size:11px">
+                <span>${icons[r]||'•'}</span>
+                <span style="color:var(--muted2);min-width:100px">${r}</span>
+                <div style="display:flex;gap:3px">${badges}</div>
+              </div>`;
+            }).filter(Boolean).join('') || '<div style="font-size:11px;color:var(--muted2)">Sin permisos asignados</div>'}
+          </div>
+
+          <!-- Usuarios -->
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:11px;color:var(--muted2)">${g.usuarios_count} usuario${g.usuarios_count!==1?'s':''}</span>
+            <button class="btn btn-sm btn-lime-outline" onclick="abrirAgregarUsuario('${g._id}','${g.nombre}')">
+              + Usuario
+            </button>
+          </div>
+        </div>
+      </div>`).join('');
+
+  } catch(e) {
+    document.getElementById('grupos-grid').innerHTML =
+      `<div class="alert error show">${e.message}</div>`;
+  }
+}
+
+// ── Sinc permisos: si admin → marcar write y read ────────
+function sincPermiso(recurso) {
+  const admin = document.getElementById(`p-${recurso}-admin`);
+  const write = document.getElementById(`p-${recurso}-write`);
+  const read  = document.getElementById(`p-${recurso}-read`);
+  if (admin.checked) { write.checked = true; read.checked = true; }
+  if (!write.checked) admin.checked = false;
+  if (!read.checked)  { write.checked = false; admin.checked = false; }
+}
+
+// ── Leer permisos del form ───────────────────────────────
+function leerPermisos() {
+  const permisos = {};
+  RECURSOS.forEach(r => {
+    const p = [];
+    ['read','write','admin'].forEach(a => {
+      if (document.getElementById(`p-${r}-${a}`)?.checked) p.push(a);
+    });
+    permisos[r] = p;
+  });
+  return permisos;
+}
+
+// ── Setear permisos en el form ───────────────────────────
+function setPermisos(permisos) {
+  RECURSOS.forEach(r => {
+    const p = permisos?.[r] || [];
+    ['read','write','admin'].forEach(a => {
+      const el = document.getElementById(`p-${r}-${a}`);
+      if (el) el.checked = p.includes(a);
+    });
+  });
+}
+
+// ── Crear / Editar grupo ─────────────────────────────────
+async function guardarGrupo() {
+  const nombre = document.getElementById('g-nombre').value.trim();
+  const desc   = document.getElementById('g-desc').value.trim();
+  const color  = document.getElementById('g-color').value;
+  if (!nombre) {
+    showAlert('grupo-alert', 'El nombre es obligatorio');
+    return;
+  }
+  const btn = document.getElementById('btn-guardar-grupo');
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const body = { nombre, descripcion: desc, color, permisos: leerPermisos() };
+    if (_grupoEditandoId) {
+      await Auth.patch(`/api/grupos/${_grupoEditandoId}`, body);
+      toast('✓ Grupo actualizado', nombre, 'lime');
+    } else {
+      await Auth.post('/api/grupos', body);
+      toast('✓ Grupo creado', nombre, 'lime');
+    }
+    closeModal('modal-nuevo-grupo');
+    resetGrupoForm();
+    cargarGrupos();
+  } catch(e) {
+    showAlert('grupo-alert', e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = _grupoEditandoId ? 'Guardar cambios' : 'Crear grupo';
+  }
+}
+
+async function editarGrupo(id) {
+  try {
+    const g = await Auth.get(`/api/grupos/${id}`);
+    _grupoEditandoId = id;
+    document.getElementById('modal-grupo-titulo').textContent = 'Editar grupo';
+    document.getElementById('btn-guardar-grupo').textContent  = 'Guardar cambios';
+    document.getElementById('g-nombre').value = g.nombre;
+    document.getElementById('g-desc').value   = g.descripcion || '';
+    document.getElementById('g-color').value  = g.color || '#3C9EFF';
+    setPermisos(g.permisos);
+    openModal('modal-nuevo-grupo');
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+
+async function borrarGrupo(id, nombre) {
+  if (!confirm(`¿Borrar el grupo "${nombre}"?\nTodos los usuarios serán desvinculados.`)) return;
+  try {
+    await Auth.del(`/api/grupos/${id}`);
+    toast('✓ Grupo borrado', nombre, 'lime');
+    cargarGrupos();
+  } catch(e) { toast('✗ Error', e.message, 'red'); }
+}
+
+function resetGrupoForm() {
+  _grupoEditandoId = null;
+  document.getElementById('modal-grupo-titulo').textContent = 'Nuevo grupo';
+  document.getElementById('btn-guardar-grupo').textContent  = 'Crear grupo';
+  document.getElementById('g-nombre').value = '';
+  document.getElementById('g-desc').value   = '';
+  document.getElementById('g-color').value  = '#3C9EFF';
+  RECURSOS.forEach(r => ['read','write','admin'].forEach(a => {
+    const el = document.getElementById(`p-${r}-${a}`);
+    if (el) el.checked = false;
+  }));
+  hideAlert('grupo-alert');
+}
+
+// ── Agregar usuario al grupo ─────────────────────────────
+async function abrirAgregarUsuario(grupoId, grupoNombre) {
+  _grupoUsuarioId = grupoId;
+  document.getElementById('modal-au-grupo').textContent = grupoNombre;
+
+  // Cargar usuarios si no están en memoria
+  if (!_todosUsuarios.length) {
+    try {
+      _todosUsuarios = await Auth.get('/api/admin/usuarios');
+    } catch(e) { toast('✗ Error cargando usuarios', e.message, 'red'); return; }
+  }
+
+  const select = document.getElementById('au-select');
+  select.innerHTML = '<option value="">Seleccioná un usuario...</option>' +
+    _todosUsuarios.map(u => `<option value="${u._id}">${u.nombre} (${u.email})</option>`).join('');
+
+  hideAlert('au-alert');
+  openModal('modal-agregar-usuario');
+}
+
+async function confirmarAgregarUsuario() {
+  const uid = document.getElementById('au-select').value;
+  if (!uid) { showAlert('au-alert', 'Seleccioná un usuario'); return; }
+  try {
+    await Auth.post(`/api/grupos/${_grupoUsuarioId}/usuarios`, { uid });
+    toast('✓ Usuario agregado al grupo', '', 'lime');
+    closeModal('modal-agregar-usuario');
+    cargarGrupos();
+  } catch(e) { showAlert('au-alert', e.message); }
+}
+
+function showAlert(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.className = 'alert error show'; }
+}
+function hideAlert(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('show');
+}
+
+document.addEventListener('DOMContentLoaded', cargarGrupos);
+</script>
