@@ -173,7 +173,10 @@ router.get("/roles", requireAuth, (req, res) => {
     page: "roles",
   });
 });
-
+// ── IA ────────────────────────────────────────────────
+router.get("/agraria", requireAuth, (req, res) => {
+  res.render("layout", { ...base(req), title:"agrarIA", page:"agraria" });
+});
 // ── ESTABLECIMIENTOS ─────────────────────────────────────
 router.get("/establecimientos", requireAuth, async (req, res) => {
   const db = req.app.locals.globalDB;

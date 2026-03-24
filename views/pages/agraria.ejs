@@ -1,0 +1,285 @@
+<%# pages/agraria.ejs — agrarIA: chat libre + análisis de lotes %>
+
+<div class="page-header">
+  <div>
+    <h2>🌿 agrarIA</h2>
+    <p>Análisis agronómico con inteligencia artificial · Powered by Claude</p>
+  </div>
+  <button class="btn btn-ghost" onclick="resumenDia()" id="btn-resumen">
+    📋 Resumen del día
+  </button>
+</div>
+
+<div class="g2" style="align-items:start">
+
+  <!-- ── Chat libre ─────────────────────────────────────── -->
+  <div class="card" style="display:flex;flex-direction:column;height:600px">
+    <div class="card-head">
+      <span class="card-title">💬 Chat agronómico</span>
+      <button class="btn btn-sm btn-ghost" onclick="limpiarChat()">✕ Limpiar</button>
+    </div>
+
+    <!-- Mensajes -->
+    <div id="chat-mensajes" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px">
+      <div class="chat-msg-ia">
+        <div class="chat-bubble-ia">
+          Hola. Soy agrarIA, tu asistente agronómico. Puedo analizar tus lotes, detectar patrones de fallas, comparar resultados y recomendarte ajustes operativos. ¿En qué te ayudo hoy?
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px">
+      <input type="text" id="chat-input"
+        placeholder="Ej: ¿Cómo estuvo la siembra del lote La Paloma?"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;outline:none"
+        onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); enviarChat(); }"
+        onfocus="this.style.borderColor='rgba(184,255,60,0.4)'"
+        onblur="this.style.borderColor='var(--border)'"/>
+      <button class="btn btn-primary" id="btn-chat" onclick="enviarChat()" style="padding:9px 14px">
+        ↑
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Análisis rápidos ───────────────────────────────── -->
+  <div style="display:flex;flex-direction:column;gap:14px">
+
+    <!-- Analizar lote AOG -->
+    <div class="card">
+      <div class="card-head"><span class="card-title">🗺 Analizar lote AOG</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:10px">
+        <div class="field">
+          <label>Lote</label>
+          <select id="sel-lote-aog" style="width:100%">
+            <option value="">Cargando lotes...</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="analizarLoteAOG()">Analizar</button>
+        <div id="resultado-aog" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;color:var(--text);line-height:1.7"></div>
+      </div>
+    </div>
+
+    <!-- Comparar lotes -->
+    <div class="card">
+      <div class="card-head"><span class="card-title">⚖ Comparar lotes</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field">
+            <label>Lote A</label>
+            <select id="sel-lote-a" style="width:100%">
+              <option value="">–</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Lote B</label>
+            <select id="sel-lote-b" style="width:100%">
+              <option value="">–</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="compararLotes()">Comparar</button>
+        <div id="resultado-comparar" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;color:var(--text);line-height:1.7"></div>
+      </div>
+    </div>
+
+    <!-- Resumen del día -->
+    <div class="card" id="card-resumen" style="display:none">
+      <div class="card-head"><span class="card-title">📋 Resumen del día</span></div>
+      <div class="card-body">
+        <div id="resultado-resumen" style="font-size:13px;color:var(--text);line-height:1.7"></div>
+        <div id="resumen-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+.chat-msg-ia   { display:flex; justify-content:flex-start; }
+.chat-msg-user { display:flex; justify-content:flex-end; }
+.chat-bubble-ia {
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:12px 12px 12px 2px;
+  padding:10px 14px; max-width:85%;
+  font-size:13px; color:var(--text); line-height:1.6;
+}
+.chat-bubble-user {
+  background:var(--lime-dim); border:1px solid rgba(184,255,60,0.2);
+  border-radius:12px 12px 2px 12px;
+  padding:10px 14px; max-width:85%;
+  font-size:13px; color:var(--text); line-height:1.6;
+}
+.chat-typing {
+  display:flex; gap:4px; align-items:center; padding:4px 0;
+}
+.chat-typing span {
+  width:6px; height:6px; border-radius:50%;
+  background:var(--muted2); animation:typingDot 1.2s infinite;
+}
+.chat-typing span:nth-child(2) { animation-delay:0.2s; }
+.chat-typing span:nth-child(3) { animation-delay:0.4s; }
+@keyframes typingDot {
+  0%,60%,100% { opacity:0.3; transform:translateY(0); }
+  30% { opacity:1; transform:translateY(-4px); }
+}
+</style>
+
+<script>
+let _historialChat = [];
+let _lotesAOG      = [];
+
+// ── Cargar lotes al abrir ─────────────────────────────────
+async function cargarLotesIA() {
+  try {
+    const lotes = await Auth.get('/api/aog/lotes');
+    _lotesAOG   = lotes;
+    const opts  = '<option value="">Seleccioná un lote...</option>' +
+      lotes.map(l => `<option value="${l.nombre}">${l.nombre}</option>`).join('');
+    document.getElementById('sel-lote-aog').innerHTML = opts;
+    document.getElementById('sel-lote-a').innerHTML   = opts;
+    document.getElementById('sel-lote-b').innerHTML   = opts;
+  } catch(e) {
+    ['sel-lote-aog','sel-lote-a','sel-lote-b'].forEach(id => {
+      document.getElementById(id).innerHTML = '<option value="">Error cargando lotes</option>';
+    });
+  }
+}
+
+// ── Chat ──────────────────────────────────────────────────
+function agregarMensaje(texto, esUsuario) {
+  const cont = document.getElementById('chat-mensajes');
+  const div  = document.createElement('div');
+  div.className = esUsuario ? 'chat-msg-user' : 'chat-msg-ia';
+  div.innerHTML = `<div class="${esUsuario ? 'chat-bubble-user' : 'chat-bubble-ia'}">${texto}</div>`;
+  cont.appendChild(div);
+  cont.scrollTop = cont.scrollHeight;
+  return div;
+}
+
+function mostrarTyping() {
+  const cont = document.getElementById('chat-mensajes');
+  const div  = document.createElement('div');
+  div.className = 'chat-msg-ia';
+  div.id = 'typing-indicator';
+  div.innerHTML = `<div class="chat-bubble-ia"><div class="chat-typing"><span></span><span></span><span></span></div></div>`;
+  cont.appendChild(div);
+  cont.scrollTop = cont.scrollHeight;
+}
+
+async function enviarChat() {
+  const input   = document.getElementById('chat-input');
+  const mensaje = input.value.trim();
+  if (!mensaje) return;
+
+  input.value = '';
+  const btn = document.getElementById('btn-chat');
+  btn.disabled = true;
+
+  agregarMensaje(mensaje, true);
+  mostrarTyping();
+
+  try {
+    const r = await Auth.post('/api/agraria/chat', {
+      mensaje,
+      historial: _historialChat,
+    });
+
+    document.getElementById('typing-indicator')?.remove();
+    agregarMensaje(r.respuesta, false);
+
+    _historialChat.push({ rol: 'user',      texto: mensaje     });
+    _historialChat.push({ rol: 'assistant', texto: r.respuesta });
+    if (_historialChat.length > 20) _historialChat = _historialChat.slice(-20);
+
+  } catch(e) {
+    document.getElementById('typing-indicator')?.remove();
+    agregarMensaje(`Error: ${e.message}`, false);
+  } finally {
+    btn.disabled = false;
+    input.focus();
+  }
+}
+
+function limpiarChat() {
+  _historialChat = [];
+  const cont = document.getElementById('chat-mensajes');
+  cont.innerHTML = `
+    <div class="chat-msg-ia">
+      <div class="chat-bubble-ia">Chat reiniciado. ¿En qué te puedo ayudar?</div>
+    </div>`;
+}
+
+// ── Analizar lote AOG ─────────────────────────────────────
+async function analizarLoteAOG() {
+  const nombre = document.getElementById('sel-lote-aog').value;
+  if (!nombre) { toast('Seleccioná un lote', '', 'amber'); return; }
+
+  const res = document.getElementById('resultado-aog');
+  res.style.display = 'block';
+  res.textContent = 'Analizando...';
+
+  try {
+    const r = await Auth.post('/api/agraria/analizar-lote', { lote_nombre: nombre });
+    res.textContent = r.analisis;
+    // También enviar al chat como contexto
+    agregarMensaje(`Análisis del lote "${nombre}": ${r.analisis}`, false);
+    _historialChat.push({ rol: 'assistant', texto: `Análisis del lote "${nombre}": ${r.analisis}` });
+  } catch(e) {
+    res.textContent = `Error: ${e.message}`;
+  }
+}
+
+// ── Comparar lotes ────────────────────────────────────────
+async function compararLotes() {
+  const a = document.getElementById('sel-lote-a').value;
+  const b = document.getElementById('sel-lote-b').value;
+  if (!a || !b) { toast('Seleccioná dos lotes', '', 'amber'); return; }
+  if (a === b)  { toast('Seleccioná lotes diferentes', '', 'amber'); return; }
+
+  const res = document.getElementById('resultado-comparar');
+  res.style.display = 'block';
+  res.textContent = 'Comparando...';
+
+  try {
+    const r = await Auth.post('/api/agraria/comparar-lotes', { lote_a: a, lote_b: b });
+    res.textContent = r.analisis;
+    agregarMensaje(`Comparación "${a}" vs "${b}": ${r.analisis}`, false);
+    _historialChat.push({ rol: 'assistant', texto: r.analisis });
+  } catch(e) {
+    res.textContent = `Error: ${e.message}`;
+  }
+}
+
+// ── Resumen del día ───────────────────────────────────────
+async function resumenDia() {
+  const btn = document.getElementById('btn-resumen');
+  btn.disabled = true; btn.textContent = '...';
+
+  try {
+    const r = await Auth.post('/api/agraria/resumen-dia', {});
+    document.getElementById('card-resumen').style.display = 'block';
+    document.getElementById('resultado-resumen').textContent = r.resumen;
+    document.getElementById('resumen-stats').innerHTML = `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:20px;color:var(--lime)">${r.lotes}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Lotes</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:20px;color:${r.alertas>0?'var(--red)':'var(--lime)'}">${r.alertas}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Alertas</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-family:var(--font-m);font-size:14px;color:var(--teal)">${r.fecha}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Fecha</div>
+      </div>`;
+    document.getElementById('card-resumen').scrollIntoView({ behavior: 'smooth' });
+  } catch(e) {
+    toast('Error generando resumen', e.message, 'red');
+  } finally {
+    btn.disabled = false; btn.textContent = '📋 Resumen del día';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', cargarLotesIA);
+</script>
