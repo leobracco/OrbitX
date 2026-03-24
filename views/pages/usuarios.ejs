@@ -53,7 +53,7 @@
             <% const uid = (u._id || '').replace('usr_',''); %>
             <% if (u.rol_global !== 'superadmin') { %>
             <button class="btn btn-sm btn-ghost"
-              onclick="openUserModal('<%= uid %>', '<%= u.nombre %>', '<%= u.email %>', <%= u.activo !== false %>, '<%= u._id %>'))">
+              onclick="openUserModal('<%= uid %>', '<%= u.nombre %>', '<%= u.email %>', <%= u.activo !== false %>, '<%= u._id %>')">
               ⋯ Gestionar
             </button>
             <% } %>
