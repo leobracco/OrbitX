@@ -391,16 +391,59 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
     renderPanelCapas(todasCapas, nombreEnc);
 
     // Separar SHP de otros formatos
+    // Detección por mediaType (cuando el nombre de capa no tiene extensión)
+    // o por extensión del nombre
     const shpGrupos = {};
     const noSHP     = [];
     for (const capa of todasCapas) {
       const ext = (capa.nombre || "").split(".").pop().toLowerCase();
-      if (["shp","dbf","shx","prj"].includes(ext)) {
-        const base = capa.nombre.replace(/\.[^.]+$/, "");
+      const mt  = (capa.mediaType || "").toLowerCase();
+
+      // Detectar SHP por mediaType o extensión
+      const esShpBin = mt.includes("shp") || mt.includes("x-shapefile") || ext === "shp";
+      const esShx    = mt.includes("shx") || ext === "shx";
+      const esDbf    = mt.includes("dbf") || ext === "dbf";
+      const esPrj    = mt.includes("prj") || ext === "prj";
+
+      if (esShpBin || esShx || esDbf || esPrj) {
+        // Agrupar por _id del primer SHP encontrado, o por nombre base si tiene extensión
+        let base;
+        if (ext === "shp") {
+          base = capa.nombre.replace(/\.shp$/i, "");
+        } else if (esShpBin) {
+          // mediaType es shp pero el nombre no tiene .shp — usar ts como base
+          base = "shp_" + capa.ts;
+        } else {
+          // dbf, shx, prj — buscar el SHP más cercano en tiempo
+          // Buscaremos el SHP cuyo ts sea el más parecido
+          base = "shp_" + capa.ts; // fallback — se refinará abajo
+        }
         if (!shpGrupos[base]) shpGrupos[base] = {};
-        shpGrupos[base][ext] = capa;
+        if (esShpBin)     shpGrupos[base].shp = capa;
+        else if (esShx)   shpGrupos[base].shx = capa;
+        else if (esDbf)   shpGrupos[base].dbf = capa;
+        else if (esPrj)   shpGrupos[base].prj = capa;
       } else {
         noSHP.push(capa);
+      }
+    }
+
+    // Reagrupar SHP por proximidad temporal (SHX/DBF del mismo upload)
+    // Si hay un SHP con ts muy cercano a un SHX/DBF huérfano, unirlos
+    const shpArr = Object.entries(shpGrupos);
+    for (const [base, grp] of shpArr) {
+      if (!grp.shp) continue; // solo procesar grupos con SHP
+      const shpTs = grp.shp.ts;
+      for (const [base2, grp2] of shpArr) {
+        if (base2 === base || grp2.shp) continue; // skip si ya tiene SHP o es el mismo
+        // Si la capa auxiliar está dentro de 60s del SHP, combinar
+        const auxTs = (grp2.shx || grp2.dbf || grp2.prj)?.ts || 0;
+        if (Math.abs(shpTs - auxTs) < 60000) {
+          if (grp2.shx && !grp.shx) grp.shx = grp2.shx;
+          if (grp2.dbf && !grp.dbf) grp.dbf = grp2.dbf;
+          if (grp2.prj && !grp.prj) grp.prj = grp2.prj;
+          delete shpGrupos[base2];
+        }
       }
     }
 
@@ -419,7 +462,8 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
     }
 
   } catch(e) {
-    // Sin capas maestro — ok, no mostrar error
+    console.error("[cargarCapasLote] ERROR:", e.message, e);
+    toast("Error cargando capas", e.message, "red");
   }
 }
 
@@ -655,6 +699,7 @@ async function cargarSHPEnMapa(base, grp) {
 
 // ── Parsear y dibujar una capa en el mapa ─────────────────
 async function cargarCapaEnMapa(capa, nombreEnc, capaId, colorOffset) {
+  console.log("[cargarCapaEnMapa]", capa.nombre, "| texto:", !!capa.contenido_texto, "| b64:", !!capa.base64);
   const color = CAPA_COLORES[(colorOffset !== undefined ? colorOffset : _colorIdx) % CAPA_COLORES.length];
   if (colorOffset === undefined) _colorIdx++;
   if (!capaId) {
@@ -662,8 +707,20 @@ async function cargarCapaEnMapa(capa, nombreEnc, capaId, colorOffset) {
     capaId = `capa_${idx}`;
   }
 
-  const contenido = capa.contenido_texto || null;
-  if (!contenido) return;
+  // Priorizar contenido_texto; si no hay, intentar decodificar base64 para formatos de texto
+  let contenido = capa.contenido_texto || null;
+  if (!contenido && capa.base64) {
+    const _mt  = (capa.mediaType || "").toLowerCase();
+    const _ext = (capa.nombre || "").split(".").pop().toLowerCase();
+    if (["geojson","json","csv","kml","txt"].includes(_ext) ||
+        _mt.includes("json") || _mt.includes("csv") || _mt.includes("kml") || _mt.includes("text")) {
+      try { contenido = atob(capa.base64); } catch(e) { console.warn("[cargarCapaEnMapa] atob falló:", e.message); }
+    }
+  }
+  if (!contenido) {
+    console.warn("[cargarCapaEnMapa] Sin contenido para dibujar:", capa.nombre, "mediaType:", capa.mediaType, "b64:", !!capa.base64);
+    return;
+  }
 
   const ext = (capa.nombre || "").split(".").pop().toLowerCase();
   let leafletLayers = [];
