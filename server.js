@@ -108,8 +108,8 @@ app.use("/api/vistax", auth.required, routeVistaX);
 app.use("/api/grupos", auth.required, routeGrupos);
 app.use("/api/agraria", auth.required, routeAgrariaChat);
 app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
-app.use('/api/integraciones', authMiddleware, integracionesRouter);
-app.use('/api/ndvi',          authMiddleware, ndviRouter);
+app.use('/api/integraciones', auth.required, routeIntegraciones);
+app.use('/api/ndvi',          auth.required, routeNdvi);
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
 app.use(
