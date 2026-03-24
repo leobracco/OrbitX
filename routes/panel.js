@@ -517,11 +517,19 @@ router.get("/configuraciones", requireAuth, async (req, res) => {
     lotes.sort((a,b) => (b.ts_ultimo||0) - (a.ts_ultimo||0));
   } catch(e) { console.error("[Panel/configuraciones]", e.message); }
 
+  // stats compatibles con lo que espera aog.ejs
+  const stats = {
+    lotes_count:        lotes.length,
+    lotes_con_boundary: lotes.filter(l => l.tiene_boundary).length,
+    lotes_con_sections: lotes.filter(l => l.tiene_sections).length,
+    establecimientos:   establecimientos.length,
+  };
+
   const regBadge = await getRegBadge(db).catch(()=>0);
   res.render("layout", {
     ...base(req, { regBadge }),
-    title:"Configuraciones", page:"aog",   // page:"aog" para que el EJS reutilice aog.ejs existente
-    establecimientos, lotes
+    title:"Configuraciones", page:"aog",   // reutiliza aog.ejs existente
+    establecimientos, lotes, stats
   });
 });
 
