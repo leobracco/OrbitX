@@ -174,6 +174,7 @@ let _capaLayers = {};        // { capaId: [leafletLayer, ...] }
 let _lista      = [];
 let _searchTO   = null;
 let _loteActual = null;
+let _primerBoundsCargado = false;  // evita que el 2do SHP pise el fitBounds
 
 // Paleta para capas externas
 const CAPA_COLORES = [
@@ -301,6 +302,7 @@ async function seleccionarLote(nombreEnc, estabSlug) {
   Object.values(_capaLayers).forEach(ls => ls.forEach(l => _mapa.removeLayer(l)));
   _capaLayers = {};
   _colorIdx   = 0;
+  _primerBoundsCargado = false;
   document.getElementById("leyenda-capas").innerHTML = "";
   document.getElementById("panel-capas").style.display = "none";
 
@@ -476,16 +478,44 @@ function renderPanelCapas(capas, nombreEnc) {
   const items = [];
   let colorOff = 0;
 
+  // Primero construir el mapa de grupos SHP igual que en cargarCapasLote
+  // para saber qué capaIds van a ser SHP
+  const _shpGrupoIds = new Set();
+  const _shpItemsMap = {}; // capaId → {nombreDisplay, ts}
+  for (const c of capas) {
+    const _ext = (c.nombre || "").split(".").pop().toLowerCase();
+    const _mt  = (c.mediaType || "").toLowerCase();
+    const esShpBin = _mt.includes("shp") || _mt.includes("x-shapefile") || _ext === "shp";
+    if (esShpBin) {
+      const _base = _ext === "shp"
+        ? c.nombre.replace(/\.shp$/i, "")
+        : "shp_" + c.ts;
+      const _capaId = `capa_shp_${_base.replace(/[^a-z0-9]/gi,"_")}`;
+      _shpGrupoIds.add(_capaId);
+      if (!_shpItemsMap[_capaId]) {
+        _shpItemsMap[_capaId] = { nombreDisplay: c.nombre || _base, ts: c.ts };
+      }
+    }
+  }
+
   for (const c of capas) {
     const ext  = (c.nombre || "").split(".").pop().toLowerCase();
+    const mt   = (c.mediaType || "").toLowerCase();
     const base = c.nombre.replace(/\.[^.]+$/, "");
-    if (["shp","dbf","shx","prj"].includes(ext)) {
-      if (ext === "shp") {
-        items.push({ tipo:"shp", base, nombreDisplay: c.nombre || base,
-                     color: CAPA_COLORES[colorOff++ % CAPA_COLORES.length],
-                     capaId: `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}` });
-      }
-      // dbf/shx/prj se ignoran visualmente (van implícitos)
+    const esShpBin = mt.includes("shp") || mt.includes("x-shapefile") || ext === "shp";
+    const esAux    = mt.includes("shx") || mt.includes("dbf") || mt.includes("prj") ||
+                     ["dbf","shx","prj"].includes(ext);
+
+    if (esShpBin) {
+      // Es un SHP — construir capaId igual que en cargarSHPEnMapa
+      const shpBase  = ext === "shp" ? base : "shp_" + c.ts;
+      const shpCapaId = `capa_shp_${shpBase.replace(/[^a-z0-9]/gi,"_")}`;
+      const label    = c.nombre || shpBase;
+      items.push({ tipo:"shp", base: shpBase, nombreDisplay: label,
+                   color: CAPA_COLORES[colorOff++ % CAPA_COLORES.length],
+                   capaId: shpCapaId });
+    } else if (esAux) {
+      // SHX/DBF/PRJ — ignorar visualmente (ya van implícitos con el SHP)
     } else {
       const icono    = CAPA_ICONO[c.subtipo] || "📁";
       const color    = CAPA_COLORES[colorOff++ % CAPA_COLORES.length];
@@ -499,7 +529,7 @@ function renderPanelCapas(capas, nombreEnc) {
     if (it.tipo === "shp") {
       const label = it.nombreDisplay || it.base;
       return `
-        <div class="capa-item">
+        <div class="capa-item" onclick="toggleCapaSHP('${it.capaId}','${nombreEnc}')">
           <div style="width:10px;height:10px;border-radius:3px;background:${it.color};flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -569,6 +599,84 @@ async function toggleCapa(capaId, nombreEnc, idx) {
       }
     } catch(e) {
       toast("Error cargando capa", e.message, "red");
+    } finally {
+      ocultarLoading();
+    }
+  }
+}
+
+// ── Toggle específico para capas SHP ─────────────────────
+async function toggleCapaSHP(capaId, nombreEnc) {
+  const toggle = document.getElementById(`toggle-${capaId}`);
+  if (!toggle) return;
+
+  const estaOn = toggle.classList.contains("on");
+
+  if (estaOn) {
+    // Ocultar capas del SHP
+    (_capaLayers[capaId] || []).forEach(l => _mapa.removeLayer(l));
+    delete _capaLayers[capaId];
+    toggle.classList.remove("on");
+    toggle.classList.add("off");
+    // Remover leyenda
+    document.getElementById(`leyenda-${capaId}`)?.remove();
+  } else {
+    // Mostrar — re-ejecutar carga del SHP desde el contexto
+    toggle.classList.add("on");
+    toggle.classList.remove("off");
+    mostrarLoading("Cargando shapefile…");
+    try {
+      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+      const externas = ctx.capas?.externas || {};
+      const todasCapas = Object.entries(externas).flatMap(([sub, cs]) =>
+        cs.map(c => ({ ...c, subtipo: sub }))
+      );
+
+      // Reconstruir shpGrupos igual que en cargarCapasLote
+      const shpGrupos = {};
+      for (const capa of todasCapas) {
+        const _ext = (capa.nombre || "").split(".").pop().toLowerCase();
+        const _mt  = (capa.mediaType || "").toLowerCase();
+        const esShpBin = _mt.includes("shp") || _mt.includes("x-shapefile") || _ext === "shp";
+        const esShx    = _mt.includes("shx") || _ext === "shx";
+        const esDbf    = _mt.includes("dbf") || _ext === "dbf";
+        const esPrj    = _mt.includes("prj") || _ext === "prj";
+        if (esShpBin || esShx || esDbf || esPrj) {
+          const _base = _ext === "shp" ? capa.nombre.replace(/\.shp$/i,"") : "shp_" + capa.ts;
+          if (!shpGrupos[_base]) shpGrupos[_base] = { nombreDisplay: capa.nombre };
+          if (esShpBin)  shpGrupos[_base].shp = capa;
+          else if (esShx) shpGrupos[_base].shx = capa;
+          else if (esDbf) shpGrupos[_base].dbf = capa;
+          else if (esPrj) shpGrupos[_base].prj = capa;
+        }
+      }
+      // Reagrupar por proximidad temporal
+      const shpArr = Object.entries(shpGrupos);
+      for (const [base, grp] of shpArr) {
+        if (!grp.shp) continue;
+        for (const [base2, grp2] of shpArr) {
+          if (base2 === base || grp2.shp) continue;
+          const auxTs = (grp2.shx || grp2.dbf || grp2.prj)?.ts || 0;
+          if (Math.abs(grp.shp.ts - auxTs) < 60000) {
+            if (grp2.shx && !grp.shx) grp.shx = grp2.shx;
+            if (grp2.dbf && !grp.dbf) grp.dbf = grp2.dbf;
+            if (grp2.prj && !grp.prj) grp.prj = grp2.prj;
+            delete shpGrupos[base2];
+          }
+        }
+      }
+      // Encontrar el grupo que corresponde a este capaId
+      for (const [base, grp] of Object.entries(shpGrupos)) {
+        const thisCapaId = `capa_shp_${base.replace(/[^a-z0-9]/gi,"_")}`;
+        if (thisCapaId === capaId && grp.shp?.base64) {
+          await cargarSHPEnMapa(base, grp);
+          break;
+        }
+      }
+    } catch(e) {
+      toast("Error al recargar shapefile", e.message, "red");
+      toggle.classList.remove("on");
+      toggle.classList.add("off");
     } finally {
       ocultarLoading();
     }
@@ -697,10 +805,18 @@ async function cargarSHPEnMapa(base, grp) {
 
     _capaLayers[capaId] = [layer];
 
-    // Ajustar bounds al shapefile
-    try {
-      _mapa.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 });
-    } catch {}
+    // Ajustar bounds SOLO si no hay capas base del lote (boundary) y es el primer SHP
+    if (!_layers.length || !_primerBoundsCargado) {
+      try {
+        const b = layer.getBounds();
+        // Verificar que los bounds son WGS84 válidos antes de hacer fitBounds
+        const ne = b.getNorthEast();
+        if (ne.lat >= -90 && ne.lat <= 90 && ne.lng >= -180 && ne.lng <= 180) {
+          _mapa.fitBounds(b, { padding: [30, 30], maxZoom: 18 });
+          _primerBoundsCargado = true;
+        }
+      } catch {}
+    }
 
     toast(`✓ ${labelMostrar}`, `${geojson.features.length} features cargados`, "lime");
 
@@ -851,6 +967,7 @@ function limpiarMapa() {
   _capaLayers = {};
   _colorIdx   = 0;
   _loteActual = null;
+  _primerBoundsCargado = false;
   document.getElementById("lote-search").value          = "";
   document.getElementById("pill-activo").style.display   = "none";
   document.getElementById("mapa-empty").style.display    = "flex";
