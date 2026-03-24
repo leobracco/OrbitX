@@ -380,6 +380,10 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
 
     if (!todasCapas.length) return;
 
+    // Debug: confirmar que los datos llegaron
+    console.log("[VistaX/capas] Total capas:", todasCapas.length);
+    todasCapas.forEach((c,i) => console.log(`  [${i}] ${c.nombre} | texto:${!!c.contenido_texto} | b64:${!!c.base64}`));
+
     // Mostrar panel
     document.getElementById("panel-capas").style.display = "block";
     document.getElementById("capas-count").textContent   = todasCapas.length + " capa" + (todasCapas.length !== 1 ? "s" : "");
@@ -496,16 +500,26 @@ async function toggleCapa(capaId, nombreEnc, idx) {
     toggle.classList.remove("on");
     toggle.classList.add("off");
   } else {
-    // Mostrar — recargar capa
+    // Mostrar — recargar capa desde contexto (ya incluye contenido_texto y base64)
     toggle.classList.add("on");
     toggle.classList.remove("off");
     mostrarLoading("Cargando capa…");
     try {
-      const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
       const externas = ctx.capas?.externas || {};
-      const todasCapas = Object.entries(externas).flatMap(([sub, cs]) => cs.map(c => ({ ...c, subtipo: sub })));
-      if (todasCapas[idx]) {
-        await cargarCapaEnMapa(todasCapas[idx], nombreEnc, capaId, idx);
+      const todasCapas = Object.entries(externas).flatMap(([sub, cs]) =>
+        cs.map(c => ({ ...c, subtipo: sub }))
+      );
+      // Buscar por capaId que coincida con índice o nombre
+      const capa = todasCapas[idx];
+      if (!capa) { toast("Capa no encontrada", "", "amber"); return; }
+
+      const ext = (capa.nombre || "").split(".").pop().toLowerCase();
+      if (["shp","dbf","shx","prj"].includes(ext)) {
+        // No soportado en toggle individual por ahora
+        toast("Recargá la página para ver el shapefile", "", "amber");
+      } else {
+        await cargarCapaEnMapa(capa, nombreEnc, capaId, idx);
       }
     } catch(e) {
       toast("Error cargando capa", e.message, "red");
