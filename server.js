@@ -22,13 +22,6 @@ const routePanel = require("./routes/panel"); // SSR panel
 const routeAOG = require("./routes/aog");
 const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
-const routeGrupos = require("./routes/grupos");
-const routeAgrariaChat = require("./routes/agraria_chat");
-const routeLotesMaestro = require("./routes/lotes_maestro");
-const { router: integracionesRouter } = require('./routes/integraciones');
-const ndviRouter = require('./routes/ndvi');
-
-
 
 const app = express();
 const server = http.createServer(app);
@@ -104,12 +97,15 @@ app.use("/api/lotes", auth.required, routeLotes);
 app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
-app.use("/api/vistax", auth.required, routeVistaX);
-app.use("/api/grupos", auth.required, routeGrupos);
-app.use("/api/agraria", auth.required, routeAgrariaChat);
-app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
-app.use('/api/integraciones', auth.required, integracionesRouter);
-app.use('/api/ndvi',          auth.required, ndviRouter);
+// /api/vistax/sync: sin JWT — usa X-Auth-Token del dispositivo (igual que aog/sync)
+app.use(
+  "/api/vistax",
+  (req, res, next) => {
+    if (req.method === "POST" && req.path === "/sync") return next();
+    return auth.required(req, res, next);
+  },
+  routeVistaX,
+);
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
 app.use(
