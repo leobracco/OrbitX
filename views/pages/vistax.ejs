@@ -125,13 +125,21 @@ function initMapa() {
   mapa = L.map("vx-mapa", { zoomControl:true, preferCanvas:true })
            .setView([-34.6, -60.0], 10);
 
-  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-    attribution: "Esri World Imagery", maxZoom: 20,
+  const ESRI_MAX_NATIVE = 18;
+
+  const esriBase = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Esri World Imagery", maxZoom: 22, maxNativeZoom: ESRI_MAX_NATIVE,
   }).addTo(mapa);
 
   L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 20, opacity: 0.6,
+    maxZoom: 22, maxNativeZoom: ESRI_MAX_NATIVE, opacity: 0.6,
   }).addTo(mapa);
+
+  // Al superar maxNativeZoom → fondo negro sin tiles grises
+  mapa.on("zoomend", () => {
+    document.getElementById("vx-mapa").style.background =
+      mapa.getZoom() > ESRI_MAX_NATIVE ? "#0a0a0a" : "";
+  });
 }
 
 // ── Color por SPM ────────────────────────────────────────
@@ -331,3 +339,4 @@ function exportarGeoJSON() {
 // ── Auto-cargar al abrir ──────────────────────────────────
 document.addEventListener('DOMContentLoaded', cargarLotes);
 </script>
+
