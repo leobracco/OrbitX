@@ -61,11 +61,17 @@
   }
 
   // ── Aplicar (o cambiar) el layer al mapa ──────────────
-  function aplicarLayer(fecha) {
+  async function aplicarLayer(fecha) {
     if (!global._mapa) {
-      console.error('[NDVI] _mapa no disponible');
-      return;
-    }
+  // Esperar hasta 3 segundos a que initMapa() termine
+  await new Promise((resolve, reject) => {
+    let intentos = 0;
+    const check = setInterval(() => {
+      if (global._mapa) { clearInterval(check); resolve(); }
+      if (++intentos > 30) { clearInterval(check); reject(new Error('_mapa no disponible')); }
+    }, 100);
+  });
+}
 
     // Quitar layer anterior si existe
     if (_layer) {
