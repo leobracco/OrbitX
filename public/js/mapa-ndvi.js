@@ -61,52 +61,43 @@
   }
 
   // ── Aplicar (o cambiar) el layer al mapa ──────────────
-  async function aplicarLayer(fecha) {
-    if (!global._mapa) {
-  // Esperar hasta 3 segundos a que initMapa() termine
-  await new Promise((resolve, reject) => {
-    let intentos = 0;
-    const check = setInterval(() => {
-      if (global._mapa) { clearInterval(check); resolve(); }
-      if (++intentos > 30) { clearInterval(check); reject(new Error('_mapa no disponible')); }
-    }, 100);
-  });
-}
-
-    // Quitar layer anterior si existe
-    if (_layer) {
-      global._mapa.removeLayer(_layer);
-      _layer = null;
-    }
-
-    _fecha = fecha;
-
-    _layer = L.tileLayer(
-      `/api/ndvi/tile/{z}/{x}/{y}?date=${fecha}`,
-      {
-        opacity:     _opacity,
-        maxZoom:     22,
-        attribution: `NDVI · Sentinel-2 · ${fecha} · Copernicus`,
-        crossOrigin: true,
-        errorTileUrl: '', // tile transparente si falla
-      }
-    );
-
-    // Insertar debajo de las etiquetas (por encima de la ortofoto)
-    // Buscar el layer de etiquetas por su URL
-    let insertBefore = null;
-    global._mapa.eachLayer(l => {
-      if (l._url && l._url.includes('World_Boundaries')) insertBefore = l;
-    });
-    _layer.addTo(global._mapa);
-
-    _activo = true;
-    _actualizarUI();
-
-    const cloudInfo = _fechas.find(f => f.fecha === fecha);
-    const nubes = cloudInfo ? ` · ${cloudInfo.cloud_cover}% ☁` : '';
-    toast('🛰 NDVI activado', `${fecha}${nubes}`, 'lime');
+  function aplicarLayer(fecha) {
+  if (_layer && global._mapa) {
+    global._mapa.removeLayer(_layer);
+    _layer = null;
   }
+
+  _fecha = fecha;
+
+  // GridLayer personalizado que inyecta el Bearer token
+  const NdviLayer = L.GridLayer.extend({
+    createTile(coords, done) {
+      const tile = document.createElement('img');
+      tile.style.width  = '256px';
+      tile.style.height = '256px';
+
+      const url = `/api/ndvi/tile/${coords.z}/${coords.x}/${coords.y}?date=${fecha}`;
+
+      Auth.fetch(url)
+        .then(r => r.blob())
+        .then(blob => {
+          tile.src = URL.createObjectURL(blob);
+          done(null, tile);
+        })
+        .catch(e => done(e, tile));
+
+      return tile;
+    }
+  });
+
+  _layer = new NdviLayer({ opacity: _opacity, maxZoom: 22 }).addTo(global._mapa);
+  _activo = true;
+  _actualizarUI();
+
+  const cloudInfo = _fechas.find(f => f.fecha === fecha);
+  const nubes = cloudInfo ? ` · ${cloudInfo.cloud_cover}% ☁` : '';
+  toast('🛰 NDVI activado', `${fecha}${nubes}`, 'lime');
+}
 
   // ── Quitar layer ───────────────────────────────────────
   function quitarLayer() {
