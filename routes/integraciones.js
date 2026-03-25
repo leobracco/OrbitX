@@ -35,7 +35,7 @@ module.exports.decrypt = decrypt;
 router.get('/copernicus', async (req, res) => {
   try {
     const { estabSlug } = req.user;
-    const db     = db.getDB('global');
+    const db     = getDB('global');
     const orgDoc = await db.get(`org_${estabSlug}`);
     const coper  = orgDoc.integraciones?.copernicus;
 
@@ -69,7 +69,7 @@ router.post('/copernicus', async (req, res) => {
       return res.status(400).json({ error: 'client_id, client_secret e instance_id son requeridos' });
     }
 
-    const db     = db.getDB('global');
+    const db     = getDB('global');
     const orgDoc = await db.get(`org_${estabSlug}`);
 
     orgDoc.integraciones = orgDoc.integraciones || {};
@@ -102,7 +102,7 @@ router.delete('/copernicus', async (req, res) => {
       return res.status(403).json({ error: 'Sin permiso' });
     }
 
-    const db     = db.getDB('global');
+    const db     = getDB('global');
     const orgDoc = await db.get(`org_${estabSlug}`);
 
     if (orgDoc.integraciones?.copernicus) {

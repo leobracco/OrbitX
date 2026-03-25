@@ -19,7 +19,7 @@ async function getCopernicusToken(estabSlug) {
     return cached.token;
   }
 
-  const db     = db.getDB('global');
+  const db     = getDB('global');
   const orgDoc = await db.get(`org_${estabSlug}`);
   const coper  = orgDoc.integraciones?.copernicus;
 
@@ -85,7 +85,7 @@ router.get('/tile/:z/:x/:y', async (req, res) => {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
 
     // Leer instance_id de esta org
-    const db          = db.getDB('global');
+    const db          = getDB('global');
     const orgDoc      = await db.get(`org_${estabSlug}`);
     const coper       = orgDoc.integraciones?.copernicus;
     if (!coper?.activo) {
