@@ -7,6 +7,10 @@
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <span id="mapa-estado" style="font-size:11px;color:var(--muted2)">–</span>
+    <button id="btn-ndvi" class="btn btn-ghost" onclick="OrbitNDVI.toggle()"
+      style="display:flex;align-items:center;gap:6px">
+      🛰 NDVI
+    </button>
     <button class="btn btn-ghost" onclick="limpiarMapa()">✕ Limpiar</button>
   </div>
 </div>
@@ -131,6 +135,9 @@
   </div>
 
 </div>
+
+<!-- Panel NDVI — se monta por OrbitNDVI.init() -->
+<div id="ndvi-controls"></div>
 
 <!-- Leaflet -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
@@ -1008,5 +1015,9 @@ document.addEventListener("click", e => {
     cerrarDropdown();
 });
 
-document.addEventListener("DOMContentLoaded", () => { initMapa(); recargarLista(); });
+document.addEventListener("DOMContentLoaded", () => {
+  initMapa();
+  recargarLista();
+  if (typeof OrbitNDVI !== 'undefined') OrbitNDVI.init('ndvi-controls');
+});
 </script>

@@ -393,7 +393,8 @@ router.get("/mapa", requireAuth, async (req, res) => {
   res.render("layout", {
     ...base(req, { regBadge }),
     title:"Mapa de lotes", page:"mapa",
-    establecimientos, miSlug: miSlug || ""
+    establecimientos, miSlug: miSlug || "",
+    extraJs: "mapa-ndvi.js"
   });
 });
 
