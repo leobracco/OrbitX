@@ -5,14 +5,19 @@
     <h2>VistaX — Siembra</h2>
     <p>Lotes sincronizados · Densidad por surco · Semillas georeferenciadas</p>
   </div>
-  <div style="display:flex;gap:8px;align-items:center">
-    <div id="vx-estado" style="font-size:11px;color:var(--muted2)">Cargando...</div>
+  <div style="display: flex; gap: 8px; align-items: center">
+    <div id="vx-estado" style="font-size: 11px; color: var(--muted2)">
+      Cargando...
+    </div>
     <a href="/vistax" class="btn">↻ Actualizar</a>
   </div>
 </div>
 
 <!-- KPIs -->
-<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+<div
+  class="kpi-grid"
+  style="grid-template-columns: repeat(4, 1fr); margin-bottom: 20px"
+>
   <div class="kpi lime">
     <div class="kpi-shine"></div>
     <div class="kpi-label">Lotes sincronizados</div>
@@ -31,10 +36,12 @@
     <div class="kpi-val" id="kpi-con-semillas">–</div>
     <div class="kpi-delta">seed_recorder</div>
   </div>
-  <div class="kpi <%= typeof stats !== 'undefined' && stats.tiene_perfiles ? 'lime' : 'red' %>">
+  <div
+    class="kpi <%= typeof stats !== 'undefined' && stats.tiene_perfiles ? 'lime' : 'red' %>"
+  >
     <div class="kpi-shine"></div>
     <div class="kpi-label">Perfil de máquina</div>
-    <div class="kpi-val" style="font-size:18px">
+    <div class="kpi-val" style="font-size: 18px">
       <%= typeof stats !== 'undefined' && stats.tiene_perfiles ? '✓' : '✗' %>
     </div>
     <div class="kpi-delta">configuración sincronizada</div>
@@ -42,74 +49,192 @@
 </div>
 
 <div class="g2">
-
   <!-- Lista de lotes -->
   <div class="card">
     <div class="card-head">
       <span class="card-title">Lotes de siembra</span>
-      <span style="font-size:11px;color:var(--muted2)" id="total-lotes">–</span>
+      <span style="font-size: 11px; color: var(--muted2)" id="total-lotes"
+        >–</span
+      >
     </div>
-    <div id="lista-lotes" style="max-height:520px;overflow-y:auto">
+    <div id="lista-lotes" style="max-height: 520px; overflow-y: auto">
       <div class="loading"><span class="spinner"></span></div>
     </div>
   </div>
 
   <!-- Mapa -->
-  <div style="display:flex;flex-direction:column;gap:14px">
-
-    <div class="card" style="flex:1">
+  <div style="display: flex; flex-direction: column; gap: 14px">
+    <div class="card" style="flex: 1">
       <div class="card-head">
         <span class="card-title" id="mapa-titulo">Seleccioná un lote</span>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-ghost" id="btn-toggle-semillas" onclick="toggleCapaSemillas()" style="display:none">
+        <div style="display: flex; gap: 6px">
+          <button
+            class="btn btn-sm btn-ghost"
+            id="btn-toggle-semillas"
+            onclick="toggleCapaSemillas()"
+            style="display: none"
+          >
             Semillas
           </button>
-          <button class="btn btn-sm btn-ghost" id="btn-export" onclick="exportarGeoJSON()" style="display:none">
+          <button
+            class="btn btn-sm btn-ghost"
+            id="btn-export"
+            onclick="exportarGeoJSON()"
+            style="display: none"
+          >
             ↓ GeoJSON
           </button>
         </div>
       </div>
 
-      <div style="position:relative;border-radius:0 0 var(--radius) var(--radius);overflow:hidden">
-        <div id="vx-mapa" style="height:420px;background:var(--surface2)"></div>
+      <div
+        style="
+          position: relative;
+          border-radius: 0 0 var(--radius) var(--radius);
+          overflow: hidden;
+        "
+      >
+        <div
+          id="vx-mapa"
+          style="height: 420px; background: var(--surface2)"
+        ></div>
 
         <!-- Leyenda -->
-        <div id="vx-leyenda" style="display:none;position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,0.75);border-radius:8px;padding:10px 14px;z-index:1000;font-size:11px;color:#fff;line-height:2">
-          <div style="display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:50px;height:6px;background:linear-gradient(to right,#ff1744,#ffb300,#ffea00,#00e676);border-radius:3px"></span></div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-top:2px">
-            <span>Tapado</span><span id="leyenda-mid">–</span><span>Óptimo+</span>
+        <div
+          id="vx-leyenda"
+          style="
+            display: none;
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.75);
+            border-radius: 8px;
+            padding: 10px 14px;
+            z-index: 1000;
+            font-size: 11px;
+            color: #fff;
+            line-height: 2;
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 8px">
+            <span
+              style="
+                display: inline-block;
+                width: 50px;
+                height: 6px;
+                background: linear-gradient(
+                  to right,
+                  #ff1744,
+                  #ffb300,
+                  #ffea00,
+                  #00e676
+                );
+                border-radius: 3px;
+              "
+            ></span>
+          </div>
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              font-size: 10px;
+              color: #aaa;
+              margin-top: 2px;
+            "
+          >
+            <span>Tapado</span><span id="leyenda-mid">–</span
+            ><span>Óptimo+</span>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Stats del lote seleccionado -->
-    <div class="card" id="card-stats-lote" style="display:none">
-      <div class="card-head"><span class="card-title" id="stats-lote-nombre">–</span></div>
+    <div class="card" id="card-stats-lote" style="display: none">
+      <div class="card-head">
+        <span class="card-title" id="stats-lote-nombre">–</span>
+      </div>
       <div class="card-body">
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-            <div style="font-family:var(--font-m);font-size:18px;color:var(--lime)" id="stat-semillas">–</div>
-            <div style="font-size:10px;color:var(--muted2);margin-top:2px">Semillas totales</div>
+        <div
+          style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px"
+        >
+          <div
+            style="
+              background: var(--surface2);
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              padding: 10px;
+              text-align: center;
+            "
+          >
+            <div
+              style="
+                font-family: var(--font-m);
+                font-size: 18px;
+                color: var(--lime);
+              "
+              id="stat-semillas"
+            >
+              –
+            </div>
+            <div style="font-size: 10px; color: var(--muted2); margin-top: 2px">
+              Semillas totales
+            </div>
           </div>
-          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-            <div style="font-family:var(--font-m);font-size:18px;color:var(--blue)" id="stat-duracion">–</div>
-            <div style="font-size:10px;color:var(--muted2);margin-top:2px">Duración (min)</div>
+          <div
+            style="
+              background: var(--surface2);
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              padding: 10px;
+              text-align: center;
+            "
+          >
+            <div
+              style="
+                font-family: var(--font-m);
+                font-size: 18px;
+                color: var(--blue);
+              "
+              id="stat-duracion"
+            >
+              –
+            </div>
+            <div style="font-size: 10px; color: var(--muted2); margin-top: 2px">
+              Duración (min)
+            </div>
           </div>
-          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
-            <div style="font-family:var(--font-m);font-size:18px;color:var(--teal)" id="stat-cultivo">–</div>
-            <div style="font-size:10px;color:var(--muted2);margin-top:2px">Cultivo</div>
+          <div
+            style="
+              background: var(--surface2);
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              padding: 10px;
+              text-align: center;
+            "
+          >
+            <div
+              style="
+                font-family: var(--font-m);
+                font-size: 18px;
+                color: var(--teal);
+              "
+              id="stat-cultivo"
+            >
+              –
+            </div>
+            <div style="font-size: 10px; color: var(--muted2); margin-top: 2px">
+              Cultivo
+            </div>
           </div>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
 <!-- Leaflet -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="/css/leaflet.min.css" />
+<script src="/js/leaflet.min.js"></script>
 
 <script src="/js/vistax-mapa.js?v=1"></script>
-
