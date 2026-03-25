@@ -203,7 +203,7 @@ function initMapa() {
   if (_mapa) return;
   _mapa = L.map("mapa", { zoomControl: true, preferCanvas: true })
             .setView([-34.6, -60.0], 10);
-
+window._mapa = _mapa;
   const _satLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     { attribution: "Esri", maxNativeZoom: 17, maxZoom: 22 }
