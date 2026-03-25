@@ -1,19 +1,11 @@
 // ============================================================
-//  OrbitX Cloud — routes/vistax.js
+//  OrbitX Cloud — routes/vistax.js  v2
 //  Recibe, almacena y sirve datos sincronizados de VistaX
-//
-//  POST /api/vistax/sync        — agente sube archivos
-//  GET  /api/vistax/lotes       — listar lotes sincronizados
-//  GET  /api/vistax/lote/:id    — detalle de un lote
-//  GET  /api/vistax/geojson/:id — GeoJSON de densidad
-//  GET  /api/vistax/semillas/:id — GeoJSON de semillas
-//  GET  /api/vistax/perfil      — configuración de máquina activa
-//  GET  /api/vistax/alertas     — logs de alertas
-//  GET  /api/vistax/stats       — estadísticas del establecimiento
 // ============================================================
 
 const router = require("express").Router();
 const db     = require("../services/couchdb");
+const { deviceAuth } = require("./devices");
 
 function getEstabDB(slug) { return db.getDB(slug); }
 
@@ -36,29 +28,66 @@ async function _upsert(estabDB, id, data) {
 }
 
 // ============================================================
-//  POST /api/vistax/sync
-//  El agente sube archivos de VistaX
-//  Headers: X-Device-ID, X-Auth-Token, X-Estab-Slug
-//  Body: { ruta_rel, nombre, subtipo, lote_id, hash_md5, tamano, contenido, ts }
+//  Normalización de subtipos
+//  El agente puede enviar distintos subtipos según el archivo.
+//  Los normalizamos a los que usa el servidor internamente.
+//
+//  Agente envía:           Servidor usa:
+//  vistax_implemento    →  vistax_perfil
+//  vistax_lote_geojson  →  vistax_densidad
+//  vistax_semillas      →  vistax_semillas  (sin cambio)
+//  vistax_lote_json     →  vistax_meta
+//  vistax_settings      →  vistax_settings  (sin cambio)
+//  vistax_file          →  vistax_archivo
 // ============================================================
-router.post("/sync", async (req, res) => {
+const SUBTIPO_MAP = {
+  "vistax_implemento":   "vistax_perfil",
+  "vistax_lote_geojson": "vistax_densidad",
+  "vistax_lote_json":    "vistax_meta",
+  "vistax_file":         "vistax_archivo",
+};
+
+function normalizarSubtipo(subtipo) {
+  return SUBTIPO_MAP[subtipo] || subtipo || "vistax_archivo";
+}
+
+// ============================================================
+//  Extraer lote_id del nombre del archivo
+//  Ejemplo: "lote_1774445764100.geojson" → "lote_1774445764100"
+//           "lote_1774445764100_semillas.geojson" → "lote_1774445764100"
+//           "lote_1774445764100_meta.json" → "lote_1774445764100"
+// ============================================================
+function extraerLoteId(nombre, lote_id_recibido) {
+  if (lote_id_recibido) return lote_id_recibido;
+  const match = (nombre || "").match(/^(lote_\d+)/);
+  return match ? match[1] : null;
+}
+
+// ============================================================
+//  POST /api/vistax/sync
+//  Llamado por el agente con X-Auth-Token (deviceAuth igual que AOG)
+// ============================================================
+router.post("/sync", deviceAuth, async (req, res) => {
   const estabSlug = req.headers["x-estab-slug"];
   const deviceId  = req.headers["x-device-id"];
 
-  if (!estabSlug) return res.status(400).json({ error: "x-estab-slug requerido" });
+  if (!estabSlug || estabSlug === "unassigned")
+    return res.status(400).json({ error: "x-estab-slug requerido" });
 
   const { ruta_rel, nombre, subtipo, lote_id, hash_md5, tamano, contenido, ts } = req.body;
   if (!ruta_rel || contenido === undefined)
     return res.status(400).json({ error: "ruta_rel y contenido requeridos" });
 
   try {
-    const estabDB = getEstabDB(estabSlug);
-    const safeRel = ruta_rel.replace(/[/\\:*?"<>|]/g, "_");
-    const docId   = `vistax_${estabSlug}_${safeRel}`.slice(0, 200);
+    const estabDB     = getEstabDB(estabSlug);
+    const subtipoNorm = normalizarSubtipo(subtipo);
+    const loteId      = extraerLoteId(nombre, lote_id);
+    const safeRel     = ruta_rel.replace(/[/\\:*?"<>|]/g, "_");
+    const docId       = `vistax_${estabSlug}_${safeRel}`.slice(0, 200);
 
-    // Guardar versión histórica si el contenido cambió (solo para GeoJSON finales)
+    // Guardar versión histórica si el contenido cambió (solo GeoJSON finales)
     const subtipoCritico = ["vistax_densidad", "vistax_semillas", "vistax_perfil"];
-    if (subtipoCritico.includes(subtipo)) {
+    if (subtipoCritico.includes(subtipoNorm)) {
       try {
         const existing = await estabDB.get(docId);
         if (existing.hash_md5 && existing.hash_md5 !== hash_md5) {
@@ -67,7 +96,8 @@ router.post("/sync", async (req, res) => {
             tipo:        "vistax_historial",
             doc_ref:     docId,
             orgSlug:     estabSlug,
-            subtipo,     lote_id,
+            subtipo:     subtipoNorm,
+            lote_id:     loteId,
             hash_md5:    existing.hash_md5,
             device_id:   existing.device_id,
             ts:          existing.ts || Date.now(),
@@ -79,15 +109,19 @@ router.post("/sync", async (req, res) => {
 
     await _upsert(estabDB, docId, {
       tipo:      "vistax_archivo",
-      subtipo:   subtipo || "vistax_archivo",
+      subtipo:   subtipoNorm,
       orgSlug:   estabSlug,
-      ruta_rel,  nombre, lote_id: lote_id || null,
-      hash_md5,  tamano: tamano || 0,
-      contenido, device_id: deviceId,
-      ts: ts || Date.now(),
+      ruta_rel,
+      nombre,
+      lote_id:   loteId,
+      hash_md5,
+      tamano:    tamano || 0,
+      contenido,
+      device_id: deviceId,
+      ts:        ts || Date.now(),
     });
 
-    console.log(`[VistaX] ✓ ${deviceId} → ${ruta_rel} (${subtipo})`);
+    console.log(`[VistaX] ✓ ${deviceId} → ${ruta_rel} (${subtipo} → ${subtipoNorm})`);
     res.json({ ok: true });
   } catch(e) {
     console.error("[VistaX/sync]", e.message);
@@ -97,13 +131,11 @@ router.post("/sync", async (req, res) => {
 
 // ============================================================
 //  GET /api/vistax/lotes
-//  Lista todos los lotes con su metadata
 // ============================================================
 router.get("/lotes", async (req, res) => {
   try {
     const estabDB = getEstabDB(req.user.estabSlug);
 
-    // Buscar todos los _meta.json sincronizados
     const metas = await _findAll(estabDB, {
       tipo:    "vistax_archivo",
       subtipo: "vistax_meta",
@@ -122,14 +154,13 @@ router.get("/lotes", async (req, res) => {
         duracionMin:   meta.duracionMin   || 0,
         device_id:     doc.device_id,
         ts_sync:       doc.ts,
-        tiene_densidad: false,  // se completa abajo
+        tiene_densidad: false,
         tiene_semillas: false,
       };
     });
 
-    // Verificar qué lotes tienen GeoJSON disponibles
-    const geojsons  = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_densidad"  });
-    const semillas  = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_semillas"  });
+    const geojsons = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_densidad" });
+    const semillas = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_semillas" });
     const geojsonIds = new Set(geojsons.map(d => d.lote_id).filter(Boolean));
     const semillaIds = new Set(semillas.map(d => d.lote_id).filter(Boolean));
 
@@ -143,7 +174,7 @@ router.get("/lotes", async (req, res) => {
 });
 
 // ============================================================
-//  GET /api/vistax/lote/:id — detalle completo
+//  GET /api/vistax/lote/:id
 // ============================================================
 router.get("/lote/:id", async (req, res) => {
   try {
@@ -155,13 +186,7 @@ router.get("/lote/:id", async (req, res) => {
 
     if (!docs.length) return res.status(404).json({ error: "Lote no encontrado" });
 
-    const result = {
-      lote_id:  req.params.id,
-      meta:     null,
-      densidad: null,
-      semillas: null,
-      alertas:  null,
-    };
+    const result = { lote_id:req.params.id, meta:null, densidad:null, semillas:null, alertas:null };
 
     docs.forEach(doc => {
       switch (doc.subtipo) {
@@ -185,7 +210,7 @@ router.get("/lote/:id", async (req, res) => {
 });
 
 // ============================================================
-//  GET /api/vistax/geojson/:id — GeoJSON de densidad
+//  GET /api/vistax/geojson/:id
 // ============================================================
 router.get("/geojson/:id", async (req, res) => {
   try {
@@ -196,18 +221,14 @@ router.get("/geojson/:id", async (req, res) => {
       lote_id: req.params.id,
     });
 
-    if (!docs.length) return res.status(404).json({ error: "GeoJSON de densidad no encontrado" });
-
-    try {
-      res.json(JSON.parse(docs[0].contenido));
-    } catch {
-      res.status(500).json({ error: "GeoJSON inválido" });
-    }
+    if (!docs.length) return res.status(404).json({ error: "GeoJSON no encontrado" });
+    try { res.json(JSON.parse(docs[0].contenido)); }
+    catch { res.status(500).json({ error: "GeoJSON inválido" }); }
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================================
-//  GET /api/vistax/semillas/:id — GeoJSON de semillas
+//  GET /api/vistax/semillas/:id
 // ============================================================
 router.get("/semillas/:id", async (req, res) => {
   try {
@@ -219,17 +240,13 @@ router.get("/semillas/:id", async (req, res) => {
     });
 
     if (!docs.length) return res.status(404).json({ error: "GeoJSON de semillas no encontrado" });
-
-    try {
-      res.json(JSON.parse(docs[0].contenido));
-    } catch {
-      res.status(500).json({ error: "GeoJSON inválido" });
-    }
+    try { res.json(JSON.parse(docs[0].contenido)); }
+    catch { res.status(500).json({ error: "GeoJSON inválido" }); }
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================================
-//  GET /api/vistax/perfil — configuración de máquina activa
+//  GET /api/vistax/perfil
 // ============================================================
 router.get("/perfil", async (req, res) => {
   try {
@@ -241,7 +258,6 @@ router.get("/perfil", async (req, res) => {
 
     if (!docs.length) return res.status(404).json({ error: "Sin perfiles sincronizados" });
 
-    // El más reciente
     const ultimo = docs.sort((a, b) => b.ts - a.ts)[0];
     try {
       res.json({
@@ -250,14 +266,39 @@ router.get("/perfil", async (req, res) => {
         ts:        ultimo.ts,
         config:    JSON.parse(ultimo.contenido),
       });
-    } catch {
-      res.status(500).json({ error: "Perfil inválido" });
-    }
+    } catch { res.status(500).json({ error: "Perfil inválido" }); }
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================================
-//  GET /api/vistax/alertas?lote_id=... — logs de alertas
+//  GET /api/vistax/perfiles — todos los perfiles de sembradoras
+// ============================================================
+router.get("/perfiles", async (req, res) => {
+  try {
+    const estabDB = getEstabDB(req.user.estabSlug);
+    const docs    = await _findAll(estabDB, {
+      tipo:    "vistax_archivo",
+      subtipo: "vistax_perfil",
+    });
+
+    const perfiles = docs.map(doc => {
+      let config = {};
+      try { config = JSON.parse(doc.contenido); } catch {}
+      return {
+        id:        config.id || doc.nombre.replace(".json",""),
+        nombre:    config.nombre || doc.nombre,
+        surcos:    config.mapeo_sensores?.length || 0,
+        device_id: doc.device_id,
+        ts:        doc.ts,
+      };
+    });
+
+    res.json(perfiles.sort((a, b) => b.ts - a.ts));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================================
+//  GET /api/vistax/alertas
 // ============================================================
 router.get("/alertas", async (req, res) => {
   try {
@@ -266,7 +307,6 @@ router.get("/alertas", async (req, res) => {
     if (req.query.lote_id) selector.lote_id = req.query.lote_id;
 
     const docs = await _findAll(estabDB, selector);
-
     const alertas = [];
     docs.forEach(doc => {
       try {
@@ -288,7 +328,7 @@ router.get("/stats", async (req, res) => {
     const estabDB = getEstabDB(req.user.estabSlug);
     const docs    = await _findAll(estabDB, { tipo:"vistax_archivo" });
 
-    const lotes    = new Set(docs.filter(d => d.lote_id).map(d => d.lote_id));
+    const lotes   = new Set(docs.filter(d => d.lote_id).map(d => d.lote_id));
     const subtipos = docs.reduce((acc, d) => {
       acc[d.subtipo] = (acc[d.subtipo] || 0) + 1;
       return acc;
