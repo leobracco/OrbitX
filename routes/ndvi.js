@@ -121,9 +121,10 @@ router.get('/tile/:z/:x/:y', async (req, res) => {
     }
 
     // Cache de 1 hora — los tiles NDVI no cambian en el día
-    res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=3600');
-    tileResp.body.pipe(res);
+    const buffer = await tileResp.arrayBuffer();
+res.set('Content-Type', 'image/png');
+res.set('Cache-Control', 'public, max-age=3600');
+res.send(Buffer.from(buffer));
 
   } catch (e) {
     console.error('[ndvi/tile]', e.message);
