@@ -138,7 +138,7 @@ app.use(
 );
 
 // ── API 404 catch-all (JSON, no HTML) ────────────────────
-app.all("/api/*", (req, res) => {
+app.use("/api", (req, res) => {
   res.status(404).json({ error: "Ruta no encontrada", path: req.originalUrl });
 });
 
