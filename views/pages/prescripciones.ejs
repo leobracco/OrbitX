@@ -27,6 +27,7 @@
     <!-- Toolbar de herramientas (flotante sobre el mapa) -->
     <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:4px;background:rgba(0,0,0,0.8);border-radius:10px;padding:5px">
       <button id="tool-pan"      class="tool-btn active" onclick="setTool('pan')"      title="Mover mapa">✋</button>
+      <button id="tool-finish"   class="tool-btn" onclick="finishPolygon()"     title="Cerrar polígono actual" style="display:none;background:#7ac943;color:#000">✓ Cerrar</button>
       <div style="width:1px;background:rgba(255,255,255,0.15);margin:4px 2px"></div>
       <button id="tool-polygon"  class="tool-btn"        onclick="setTool('polygon')" title="Dibujar polígono">⬡</button>
       <button id="tool-rect"     class="tool-btn"        onclick="setTool('rect')"    title="Dibujar rectángulo">⬜</button>
@@ -408,6 +409,7 @@ function setTool(tool) {
       shapeOptions:{ color:PALETA[zonas.length%PALETA.length], weight:2, fillOpacity:0.35 }
     });
     activeDraw.enable();
+    document.getElementById('tool-finish').style.display = '';
   } else if (tool === 'rect') {
     activeDraw = new L.Draw.Rectangle(mapaL, {
       shapeOptions:{ color:PALETA[zonas.length%PALETA.length], weight:2, fillOpacity:0.35 }
@@ -418,13 +420,37 @@ function setTool(tool) {
   } else if (tool === 'delete') {
     mapaL.on('click.delete', e => {
       drawnItems.getLayers().forEach(l => {
-        if (l.getBounds ? l.getBounds().contains(e.latlng) : false) borrarZonaByLayer(l);
+        if (pointInPolygon(e.latlng, l)) borrarZonaByLayer(l);
       });
     });
   }
 
   if (tool !== 'edit') drawnItems.getLayers().forEach(l => l.editing?.disable());
   if (tool !== 'delete') mapaL.off('click.delete');
+  if (tool !== 'polygon') document.getElementById('tool-finish').style.display = 'none';
+}
+
+// Cerrar polígono que se está dibujando (botón ✓ Cerrar).
+function finishPolygon() {
+  if (activeDraw && activeDraw._markers && activeDraw._markers.length >= 3) {
+    activeDraw._finishShape();
+  }
+}
+
+// Point-in-polygon test (ray casting) para borrar polígonos irregulares.
+function pointInPolygon(latlng, layer) {
+  if (!layer.getLatLngs) return false;
+  const ring = layer.getLatLngs()[0] || layer.getLatLngs();
+  if (!ring || ring.length < 3) return false;
+  let inside = false;
+  const x = latlng.lat, y = latlng.lng;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].lat, yi = ring[i].lng;
+    const xj = ring[j].lat, yj = ring[j].lng;
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
+      inside = !inside;
+  }
+  return inside;
 }
 
 // ── Editar zona ───────────────────────────────────────────

@@ -64,3 +64,4 @@ aog_backups/
 # ── Coverage / test ────────────────────────────────────
 coverage/
 .nyc_output/
+.claude/

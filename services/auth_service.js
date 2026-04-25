@@ -98,7 +98,10 @@ async function getMemberships(uid) {
 // ════════════════════════════════════════════════════════════
 //  REGISTRO SELF-SERVICE
 // ════════════════════════════════════════════════════════════
-async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, org_ha, org_provincia }) {
+async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, org_ha, org_provincia, org_ciudad, org_lat, org_lon }) {
+  const req_ciudad = org_ciudad || "";
+  const req_lat = parseFloat(org_lat) || null;
+  const req_lon = parseFloat(org_lon) || null;
   const db = globalDB();
 
   // Verificar email duplicado
@@ -124,6 +127,9 @@ async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, 
     org_nombre, org_slug,
     org_ha:            parseInt(org_ha) || 0,
     org_provincia:     org_provincia || "",
+    org_ciudad:        req_ciudad || "",
+    org_lat:           req_lat || null,
+    org_lon:           req_lon || null,
     uid_reservado:     uid,
     token_verificacion: token,
     email_verificado:  false,
@@ -179,6 +185,7 @@ async function aprobarRegistro(regToken, superadminUID) {
     tipo: "org",
     nombre: reg.org_nombre, slug: reg.org_slug,
     ha_total: reg.org_ha, provincia: reg.org_provincia, pais: "Argentina",
+    ciudad: reg.org_ciudad || "", lat: reg.org_lat || null, lon: reg.org_lon || null,
     plan: "pro", plan_vence: null, activa: true, aprobada: true,
     modulos: ["vistax", "linex", "centrix"],
     limites: { usuarios_max: 20, dispositivos_max: 10, ha_max: null },

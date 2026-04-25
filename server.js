@@ -24,6 +24,10 @@ const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
 const routeLotesMaestro = require("./routes/lotes_maestro");
 const { router: routeIntegraciones } = require("./routes/integraciones");
+const routeTracking = require("./routes/tracking");
+const routePrescripcionesAPI = require("./routes/prescripciones_api");
+let routeNDVI;
+try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] ndvi.js:", e.message); }
 
 const app = express();
 const server = http.createServer(app);
@@ -100,6 +104,17 @@ app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
 app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
 app.use("/api/integraciones", auth.required, routeIntegraciones);
+if (routeNDVI) app.use("/api/ndvi", routeNDVI);
+// Tracking: POST position sin JWT (device auth), GET live/history con JWT.
+app.use("/api/tracking", (req, res, next) => {
+  if (req.method === "POST" && req.path === "/position") return next();
+  return auth.required(req, res, next);
+}, routeTracking);
+// Prescripciones: POST enviar con JWT, GET pendientes con device auth.
+app.use("/api/prescripciones", (req, res, next) => {
+  if (req.method === "GET" && req.path.startsWith("/pendientes")) return next();
+  return auth.required(req, res, next);
+}, routePrescripcionesAPI);
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 // /api/vistax/sync: sin JWT — usa X-Auth-Token del dispositivo (igual que aog/sync)
 app.use(
