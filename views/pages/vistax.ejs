@@ -51,13 +51,15 @@
 <div class="g2">
   <!-- Lista de lotes -->
   <div class="card">
-    <div class="card-head">
+    <div class="card-head" style="flex-wrap:wrap;gap:8px">
       <span class="card-title">Lotes de siembra</span>
-      <span style="font-size: 11px; color: var(--muted2)" id="total-lotes"
-        >–</span
-      >
+      <span style="font-size: 11px; color: var(--muted2)" id="total-lotes">–</span>
     </div>
-    <div id="lista-lotes" style="max-height: 520px; overflow-y: auto">
+    <div style="padding:8px 12px">
+      <input type="text" id="buscar-lote" placeholder="🔍 Buscar lote..." oninput="filtrarLotes()"
+        style="width:100%;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text1);font-size:13px;outline:none;font-family:var(--font-m)"/>
+    </div>
+    <div id="lista-lotes" style="max-height: 480px; overflow-y: auto">
       <div class="loading"><span class="spinner"></span></div>
     </div>
   </div>

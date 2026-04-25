@@ -615,4 +615,18 @@ router.get("/integraciones", requireAuth, requireAdmin, async (req, res) => {
     activeNav: "/integraciones",
   });
 });
+// ─────────────────────────────────────────────────────────
+// TRACKING — Mapa de tractores en vivo + historial
+// ─────────────────────────────────────────────────────────
+router.get("/tracking", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", {
+    ...base(req, { regBadge }),
+    title:   "Tracking",
+    page:    "tracking",
+    extraJs: "tracking-mapa.js",
+  });
+});
+
 module.exports = router;

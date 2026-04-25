@@ -79,12 +79,20 @@
       const url = `/api/ndvi/tile/${coords.z}/${coords.x}/${coords.y}?date=${fecha}`;
 
       Auth.fetch(url)
-        .then(r => r.blob())
+        .then(r => {
+          if (!r.ok) throw new Error('tile ' + r.status);
+          const ct = r.headers.get('content-type') || '';
+          if (!ct.startsWith('image/')) throw new Error('not image');
+          return r.blob();
+        })
         .then(blob => {
           tile.src = URL.createObjectURL(blob);
           done(null, tile);
         })
-        .catch(e => done(e, tile));
+        .catch(() => {
+          tile.src = '';
+          done(null, tile);
+        });
 
       return tile;
     }

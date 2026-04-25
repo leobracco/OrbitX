@@ -1,0 +1,85 @@
+<%# pages/tracking.ejs — Tracking de tractores en vivo + historial %>
+
+<div class="page-header">
+  <div>
+    <h2>Tracking de Vehículos</h2>
+    <p>Ubicación en vivo · Historial de recorrido · Módulos activos</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="trk-estado" style="font-size:11px;color:var(--muted2)">Cargando...</span>
+    <button class="btn btn-sm" onclick="cargarLive()">↻ Actualizar</button>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+  <div class="kpi lime">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Vehículos online</div>
+    <div class="kpi-val" id="kpi-online">–</div>
+    <div class="kpi-delta">últimos 5 min</div>
+  </div>
+  <div class="kpi blue">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">En movimiento</div>
+    <div class="kpi-val" id="kpi-moviendo">–</div>
+    <div class="kpi-delta">velocidad > 0.5 km/h</div>
+  </div>
+  <div class="kpi teal">
+    <div class="kpi-shine"></div>
+    <div class="kpi-label">Con campo abierto</div>
+    <div class="kpi-val" id="kpi-campo">–</div>
+    <div class="kpi-delta">trabajando en lote</div>
+  </div>
+</div>
+
+<div class="g2">
+  <!-- Lista de vehículos -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Vehículos</span>
+      <span id="trk-count" style="font-size:11px;color:var(--muted2)">–</span>
+    </div>
+    <div id="trk-lista" style="max-height:520px;overflow-y:auto">
+      <div class="loading"><span class="spinner"></span></div>
+    </div>
+
+    <!-- Historial -->
+    <div style="padding:12px;border-top:1px solid var(--border)">
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:6px;font-weight:600;font-family:var(--font-m)">Historial de recorrido</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="date" id="trk-fecha"
+          style="flex:1;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text1);font-size:12px;font-family:var(--font-m)"
+        />
+        <button class="btn btn-sm" onclick="cargarHistorial()" id="btn-historial" disabled>Ver</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mapa -->
+  <div class="card" style="flex:1">
+    <div class="card-head">
+      <span class="card-title" id="mapa-titulo">Mapa en vivo</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm btn-ghost" id="btn-limpiar-historial" onclick="limpiarHistorial()" style="display:none">Limpiar trail</button>
+        <button class="btn btn-sm btn-ghost" id="btn-centrar" onclick="centrarMapa()" style="display:none">Centrar</button>
+      </div>
+    </div>
+    <div style="position:relative;border-radius:0 0 var(--radius) var(--radius);overflow:hidden">
+      <div id="trk-mapa" style="height:520px;background:var(--surface2)"></div>
+
+      <!-- Leyenda -->
+      <div style="position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,0.75);border-radius:8px;padding:8px 12px;z-index:1000;font-size:10px;color:#ccc;line-height:1.8">
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#B8FF3C;display:inline-block"></span> En movimiento</div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#3C9EFF;display:inline-block"></span> Detenido</div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#555;display:inline-block"></span> Sin señal (>5min)</div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:3px;height:10px;background:#FFB03C;display:inline-block;border-radius:2px"></span> Historial</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Leaflet + Socket.IO -->
+<link rel="stylesheet" href="/css/leaflet.min.css"/>
+<script src="/js/leaflet.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>

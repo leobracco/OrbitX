@@ -104,7 +104,7 @@ app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
 app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
 app.use("/api/integraciones", auth.required, routeIntegraciones);
-if (routeNDVI) app.use("/api/ndvi", routeNDVI);
+if (routeNDVI) app.use("/api/ndvi", auth.required, routeNDVI);
 // Tracking: POST position sin JWT (device auth), GET live/history con JWT.
 app.use("/api/tracking", (req, res, next) => {
   if (req.method === "POST" && req.path === "/position") return next();

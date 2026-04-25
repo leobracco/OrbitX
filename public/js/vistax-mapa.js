@@ -42,10 +42,15 @@ function spmAColor(spm, objetivo) {
 }
 
 // ── Cargar lotes ─────────────────────────────────────────
+let _allLotes = [];
+const PAGE_SIZE = 30;
+let _currentPage = 0;
+
 async function cargarLotes() {
   try {
     const lotes = await Auth.get('/api/vistax/lotes');
     const stats = await Auth.get('/api/vistax/stats').catch(() => ({}));
+    _allLotes = lotes;
 
     document.getElementById('kpi-lotes').textContent          = lotes.length;
     document.getElementById('kpi-con-densidad').textContent   = lotes.filter(l=>l.tiene_densidad).length;
@@ -55,47 +60,80 @@ async function cargarLotes() {
       ? 'Último sync: ' + new Date(stats.ultimo_sync).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
       : 'Sin datos aún';
 
-    const lista = document.getElementById('lista-lotes');
-
-    if (!lotes.length) {
-      lista.innerHTML = `
-        <div class="empty-state" style="padding:40px">
-          <span class="icon">🌾</span>
-          <p>Sin lotes sincronizados aún.<br>
-          Verificá que el agente OrbitX esté corriendo<br>
-          con VISTAX_PATH configurado en el .env.</p>
-        </div>`;
-      return;
-    }
-
-    lista.innerHTML = lotes.map(l => {
-      const fecha = l.startTs ? new Date(l.startTs).toLocaleDateString('es-AR') : '–';
-      const hora  = l.startTs ? new Date(l.startTs).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '';
-      const activo = !l.endTs;
-      return `
-        <div onclick="verLote('${l.lote_id}', '${(l.nombre||'').replace(/'/g,"\\'")}', ${l.tiene_semillas})"
-          style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;transition:background .1s"
-          onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
-          <div style="width:34px;height:34px;border-radius:8px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">🌾</div>
-          <div style="flex:1;min-width:0">
-            <div class="td-main">${l.nombre || l.lote_id}</div>
-            <div style="display:flex;gap:5px;margin-top:3px;flex-wrap:wrap">
-              ${l.cultivo && l.cultivo!=='–' ? `<span class="badge badge-teal" style="font-size:9px">${l.cultivo}</span>` : ''}
-              ${l.tiene_densidad ? '<span class="badge badge-lime" style="font-size:9px">Densidad</span>' : ''}
-              ${l.tiene_semillas ? '<span class="badge badge-blue" style="font-size:9px">Semillas GPS</span>' : ''}
-              ${activo ? '<span class="badge badge-red" style="font-size:9px">● Grabando</span>' : ''}
-              ${l.totalSemillas > 0 ? `<span class="badge badge-gray" style="font-size:9px">${l.totalSemillas.toLocaleString('es-AR')} sem.</span>` : ''}
-            </div>
-          </div>
-          <div class="td-dim" style="font-size:10px;text-align:right;white-space:nowrap">
-            ${fecha}<br>${hora}
-          </div>
-        </div>`;
-    }).join('');
-
+    _currentPage = 0;
+    renderLotes();
   } catch(e) {
     document.getElementById('lista-lotes').innerHTML = `<div class="alert error show">${e.message}</div>`;
     document.getElementById('vx-estado').textContent = 'Error al cargar';
+  }
+}
+
+function filtrarLotes() {
+  _currentPage = 0;
+  renderLotes();
+}
+
+function renderLotes() {
+  const lista = document.getElementById('lista-lotes');
+  const query = (document.getElementById('buscar-lote')?.value || '').toLowerCase().trim();
+
+  let filtered = _allLotes;
+  if (query) {
+    filtered = _allLotes.filter(l =>
+      (l.nombre || l.lote_id || '').toLowerCase().includes(query) ||
+      (l.cultivo || '').toLowerCase().includes(query)
+    );
+  }
+
+  if (!filtered.length) {
+    lista.innerHTML = `
+      <div class="empty-state" style="padding:40px">
+        <span class="icon">🌾</span>
+        <p>${query ? 'Sin resultados para "'+query+'"' : 'Sin lotes sincronizados aún.'}</p>
+      </div>`;
+    document.getElementById('total-lotes').textContent = query ? `0 de ${_allLotes.length}` : '–';
+    return;
+  }
+
+  const start = 0;
+  const end = Math.min((_currentPage + 1) * PAGE_SIZE, filtered.length);
+  const visible = filtered.slice(start, end);
+
+  document.getElementById('total-lotes').textContent = query
+    ? `${filtered.length} de ${_allLotes.length} lotes`
+    : `${_allLotes.length} lote${_allLotes.length!==1?'s':''}`;
+
+  lista.innerHTML = visible.map(l => {
+    const fecha = l.startTs ? new Date(l.startTs).toLocaleDateString('es-AR') : '–';
+    const hora  = l.startTs ? new Date(l.startTs).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '';
+    const activo = !l.endTs;
+    return `
+      <div onclick="verLote('${l.lote_id}', '${(l.nombre||'').replace(/'/g,"\\'")}', ${l.tiene_semillas})"
+        style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;transition:background .1s"
+        onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+        <div style="width:34px;height:34px;border-radius:8px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">🌾</div>
+        <div style="flex:1;min-width:0">
+          <div class="td-main">${l.nombre || l.lote_id}</div>
+          <div style="display:flex;gap:5px;margin-top:3px;flex-wrap:wrap">
+            ${l.cultivo && l.cultivo!=='–' ? `<span class="badge badge-teal" style="font-size:9px">${l.cultivo}</span>` : ''}
+            ${l.tiene_densidad ? '<span class="badge badge-lime" style="font-size:9px">Densidad</span>' : ''}
+            ${l.tiene_semillas ? '<span class="badge badge-blue" style="font-size:9px">Semillas GPS</span>' : ''}
+            ${activo ? '<span class="badge badge-red" style="font-size:9px">● Grabando</span>' : ''}
+            ${l.totalSemillas > 0 ? `<span class="badge badge-gray" style="font-size:9px">${l.totalSemillas.toLocaleString('es-AR')} sem.</span>` : ''}
+          </div>
+        </div>
+        <div class="td-dim" style="font-size:10px;text-align:right;white-space:nowrap">
+          ${fecha}<br>${hora}
+        </div>
+      </div>`;
+  }).join('');
+
+  // Botón "Ver más" si hay más lotes.
+  if (end < filtered.length) {
+    lista.innerHTML += `
+      <div onclick="_currentPage++;renderLotes()" style="padding:12px;text-align:center;cursor:pointer;color:var(--lime);font-size:12px;font-weight:600;font-family:var(--font-m)">
+        Ver más (${filtered.length - end} restantes)
+      </div>`;
   }
 }
 
