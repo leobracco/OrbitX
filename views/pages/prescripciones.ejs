@@ -206,8 +206,8 @@
         <div style="font-size:11px;color:var(--muted2);margin-top:2px">Formato exacto compatible con QuantiX</div>
       </button>
       <button class="btn btn-ghost" style="text-align:left;padding:12px 14px" onclick="exportarGeoJSON()">
-        <div style="font-weight:500;color:#fff">🗺 GeoJSON — QGIS</div>
-        <div style="font-size:11px;color:var(--muted2);margin-top:2px">Para editar en QGIS o convertir a otro formato</div>
+        <div style="font-weight:500;color:#fff">🗺 GeoJSON — QuantiX / QGIS</div>
+        <div style="font-size:11px;color:var(--muted2);margin-top:2px">Compatible directo con QuantiX y QGIS</div>
       </button>
     </div>
     <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-exportar')">Cerrar</button>
@@ -969,7 +969,7 @@ function buildDBF(zonas) {
   ];
   const recordSize = 1 + fields.reduce((s,f)=>s+f.len,0);
   const headerSize = 32 + fields.length*32 + 1;
-  const fileSize   = headerSize + zonas.length * recordSize;
+  const fileSize   = headerSize + zonas.length * recordSize + 1; // +1 for EOF marker
 
   const buf  = new ArrayBuffer(fileSize);
   const view = new DataView(buf);
