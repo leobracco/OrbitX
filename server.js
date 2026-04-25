@@ -23,7 +23,7 @@ const routeAOG = require("./routes/aog");
 const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
 const routeLotesMaestro = require("./routes/lotes_maestro");
-const routeIntegraciones = require("./routes/integraciones");
+const { router: routeIntegraciones } = require("./routes/integraciones");
 
 const app = express();
 const server = http.createServer(app);
