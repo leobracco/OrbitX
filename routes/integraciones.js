@@ -8,7 +8,18 @@ const crypto     = require('crypto');
 const { getDB }  = require('../services/couchdb');
 
 // ── Cifrado AES-256-CBC ───────────────────────────────────
-const CIPHER_KEY = Buffer.from(process.env.ORBITX_CIPHER_KEY, 'hex'); // 32 bytes
+// 32 bytes para AES-256. Si ORBITX_CIPHER_KEY no está en .env, generar una fija.
+let CIPHER_KEY;
+try {
+  const envKey = process.env.ORBITX_CIPHER_KEY;
+  if (envKey && envKey.length === 64) {
+    CIPHER_KEY = Buffer.from(envKey, 'hex');
+  } else {
+    CIPHER_KEY = crypto.createHash('sha256').update('orbitx-default-key-cambiar-en-produccion').digest();
+  }
+} catch {
+  CIPHER_KEY = crypto.createHash('sha256').update('orbitx-default-key-cambiar-en-produccion').digest();
+}
 
 function encrypt(text) {
   const iv  = crypto.randomBytes(16);

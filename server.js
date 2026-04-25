@@ -22,6 +22,8 @@ const routePanel = require("./routes/panel"); // SSR panel
 const routeAOG = require("./routes/aog");
 const { router: routeDevices } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
+const routeLotesMaestro = require("./routes/lotes_maestro");
+const routeIntegraciones = require("./routes/integraciones");
 
 const app = express();
 const server = http.createServer(app);
@@ -96,6 +98,8 @@ app.use("/api/sync", auth.required, routeSync);
 app.use("/api/lotes", auth.required, routeLotes);
 app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
+app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
+app.use("/api/integraciones", auth.required, routeIntegraciones);
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 // /api/vistax/sync: sin JWT — usa X-Auth-Token del dispositivo (igual que aog/sync)
 app.use(
@@ -132,6 +136,11 @@ app.use(
   },
   routeDevices,
 );
+
+// ── API 404 catch-all (JSON, no HTML) ────────────────────
+app.all("/api/*", (req, res) => {
+  res.status(404).json({ error: "Ruta no encontrada", path: req.originalUrl });
+});
 
 app.get("/health", async (req, res) => {
   const couchOk = await db.ping();
