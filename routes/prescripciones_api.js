@@ -123,4 +123,36 @@ router.get("/pendientes/:id/contenido", async (req, res) => {
   }
 });
 
+// ── GET /api/prescripciones/tractores ──────────────────────
+// Lista los dispositivos asignados al establecimiento del usuario.
+router.get("/tractores", async (req, res) => {
+  try {
+    const estab = req.user?.estabSlug;
+    if (!estab) return res.json([]);
+
+    const globalDB = db.getDB("global");
+    let docs = [];
+    try {
+      const r = await globalDB.find({ selector: { tipo: "device" }, limit: 200 });
+      docs = r.docs;
+    } catch {
+      const all = await globalDB.list({ include_docs: true });
+      docs = all.rows.map(r => r.doc).filter(d => d.tipo === "device");
+    }
+
+    const ahora = Date.now();
+    const tractores = docs
+      .filter(d => d.estab_slug === estab && !d.bloqueado)
+      .map(d => ({
+        device_id: d.device_id,
+        nombre:    d.nombre || d.device_id,
+        online:    d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 1000,
+      }));
+
+    res.json(tractores);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

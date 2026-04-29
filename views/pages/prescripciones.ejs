@@ -271,6 +271,22 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="modal-enviar" style="z-index:25000">
+  <div class="modal" style="width:440px;background:var(--surface);border:1px solid var(--border2)">
+    <div class="modal-title">📡 Enviar a Tractor</div>
+    <p style="color:var(--dim);font-size:13px;margin:8px 0 16px">Seleccioná el tractor destino. La prescripción se sincronizará automáticamente.</p>
+    <div id="enviar-nombre" style="font-weight:600;margin-bottom:12px;color:var(--lime)"></div>
+    <select id="enviar-tractor" style="width:100%;padding:10px 12px;background:var(--bg);color:var(--fg);border:1px solid var(--border2);border-radius:8px;font-size:14px;margin-bottom:16px">
+      <option value="">Cargando tractores...</option>
+    </select>
+    <div id="enviar-status" style="font-size:13px;min-height:20px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-enviar')">Cancelar</button>
+      <button class="btn btn-lime" style="flex:1" onclick="confirmarEnviar()">Enviar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Leaflet + Leaflet.draw -->
 <link rel="stylesheet" href="/lib/leaflet/leaflet.min.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
@@ -672,6 +688,16 @@ function confirmarGuardar() {
   localStorage.setItem('orbitx_presc', JSON.stringify(lista.slice(0,30)));
   actualizarBadge();
   closeModal('modal-guardar');
+
+  // Ofrecer enviar al tractor después de guardar.
+  const savedIdx = JSON.parse(localStorage.getItem('orbitx_presc')||'[]')
+    .findIndex(p => p.id === _prescId);
+  if (savedIdx >= 0) {
+    setTimeout(() => {
+      if (confirm('¿Enviar "' + nombre + '" a un tractor?'))
+        abrirEnviar(savedIdx);
+    }, 300);
+  }
 }
 
 // ── Cargar guardada ───────────────────────────────────────
@@ -694,6 +720,7 @@ function renderGuardadas() {
         <div class="td-dim">${p.fecha} · ${p.zonas} zonas</div>
       </div>
       <button class="btn btn-sm btn-lime-outline" onclick="cargarGuardada(${i})">Cargar</button>
+      <button class="btn btn-sm btn-lime-outline" onclick="abrirEnviar(${i})" title="Enviar a tractor">📡</button>
       <button class="btn btn-sm btn-ghost" onclick="exportarGuardada(${i})">↓</button>
       <button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="borrarGuardada(${i})">✕</button>
     </div>`).join('');
@@ -1255,6 +1282,88 @@ function renderVistaGeneral(lista, filtro = 'semilla') {
   }
 
   setTimeout(() => window._mapaVista.invalidateSize(), 200);
+}
+
+// ── Enviar a tractor ─────────────────────────────────────
+let _enviarIdx = null;
+
+async function abrirEnviar(i) {
+  _enviarIdx = i;
+  const lista = JSON.parse(localStorage.getItem('orbitx_presc')||'[]');
+  if (!lista[i]) return;
+  document.getElementById('enviar-nombre').textContent = lista[i].nombre;
+  document.getElementById('enviar-status').textContent = '';
+
+  const sel = document.getElementById('enviar-tractor');
+  sel.innerHTML = '<option value="">Cargando...</option>';
+  openModal('modal-enviar');
+
+  try {
+    const tractores = await Auth.get('/api/prescripciones/tractores');
+    if (!tractores.length) {
+      sel.innerHTML = '<option value="">No hay tractores registrados</option>';
+      return;
+    }
+    sel.innerHTML = tractores.map(t =>
+      `<option value="${t.device_id}">${t.nombre} ${t.online ? '🟢' : '⚫'}</option>`
+    ).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error: ' + e.message + '</option>';
+  }
+}
+
+async function confirmarEnviar() {
+  const device_id = document.getElementById('enviar-tractor').value;
+  if (!device_id) return;
+
+  const lista = JSON.parse(localStorage.getItem('orbitx_presc')||'[]');
+  const p = lista[_enviarIdx];
+  if (!p) return;
+
+  const statusEl = document.getElementById('enviar-status');
+  statusEl.textContent = 'Enviando...';
+  statusEl.style.color = 'var(--lime)';
+
+  try {
+    // Construir GeoJSON completo.
+    const features = (p.data || []).map(z => {
+      const feat = z.geojson?.type === 'Feature' ? z.geojson :
+                   { type:'Feature', geometry: z.geojson, properties:{} };
+      feat.properties = {
+        ...feat.properties,
+        nombre:        z.nombre,
+        semilla:       z.semilla,
+        ferti_linea:   z.ferti_linea,
+        ferti_costado: z.ferti_costado,
+      };
+      return feat;
+    });
+
+    const geojson = JSON.stringify({
+      type: 'FeatureCollection',
+      properties: {
+        prescription_dosis_variable: true,
+        nombre: p.nombre,
+        units: p.units || {},
+      },
+      features
+    });
+
+    await Auth.post('/api/prescripciones/enviar', {
+      device_id,
+      nombre:    p.nombre,
+      contenido: geojson,
+      producto:  'quantix'
+    });
+
+    statusEl.textContent = '✓ Enviada al tractor';
+    statusEl.style.color = 'var(--lime)';
+    toast('✓ Enviada', p.nombre, 'lime');
+    setTimeout(() => closeModal('modal-enviar'), 1500);
+  } catch (e) {
+    statusEl.textContent = '✕ Error: ' + e.message;
+    statusEl.style.color = 'var(--red)';
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────
