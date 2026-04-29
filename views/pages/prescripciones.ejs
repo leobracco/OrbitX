@@ -24,6 +24,15 @@
   <div class="presc-mapa-wrap" style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
     <div id="mapa-presc" style="height:100%;width:100%;background:var(--surface2)"></div>
 
+    <!-- Buscador de ubicación (flotante) -->
+    <div style="position:absolute;top:12px;right:12px;z-index:1001;display:flex;gap:4px">
+      <input id="geo-search" type="text" placeholder="Buscar ciudad, campo, dirección..."
+        style="width:260px;padding:8px 12px;background:rgba(0,0,0,0.85);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:8px;font-size:13px;backdrop-filter:blur(6px)"
+        onkeydown="if(event.key==='Enter')buscarUbicacion()">
+      <button onclick="buscarUbicacion()" style="padding:6px 12px;background:rgba(0,0,0,0.85);color:var(--lime);border:1px solid rgba(255,255,255,0.2);border-radius:8px;cursor:pointer;font-size:15px" title="Buscar">🔍</button>
+    </div>
+    <div id="geo-results" style="position:absolute;top:50px;right:12px;z-index:1001;max-height:240px;overflow-y:auto;display:none;background:rgba(10,10,14,0.95);border:1px solid rgba(255,255,255,0.15);border-radius:8px;width:280px;backdrop-filter:blur(6px)"></div>
+
     <!-- Toolbar de herramientas (flotante sobre el mapa) -->
     <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;gap:4px;background:rgba(0,0,0,0.8);border-radius:10px;padding:5px">
       <button id="tool-pan"      class="tool-btn active" onclick="setTool('pan')"      title="Mover mapa">✋</button>
@@ -1283,6 +1292,50 @@ function renderVistaGeneral(lista, filtro = 'semilla') {
 
   setTimeout(() => window._mapaVista.invalidateSize(), 200);
 }
+
+// ── Buscador de ubicación (Nominatim) ────────────────────
+async function buscarUbicacion() {
+  const q = document.getElementById('geo-search').value.trim();
+  if (!q) return;
+  const div = document.getElementById('geo-results');
+  div.style.display = 'block';
+  div.innerHTML = '<div style="padding:12px;color:var(--dim);font-size:13px">Buscando...</div>';
+
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=8&q=' + encodeURIComponent(q), {
+      headers: { 'Accept-Language': 'es' }
+    });
+    const results = await r.json();
+
+    if (!results.length) {
+      div.innerHTML = '<div style="padding:12px;color:var(--dim);font-size:13px">Sin resultados</div>';
+      return;
+    }
+
+    div.innerHTML = results.map((r, i) => `
+      <div onclick="irAUbicacion(${r.lat},${r.lon},'${r.display_name.replace(/'/g,'\\\'').substring(0,60)}')"
+        style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.08);font-size:13px;color:#fff;transition:background 0.15s"
+        onmouseover="this.style.background='rgba(164,186,62,0.15)'" onmouseout="this.style.background='transparent'">
+        <div style="font-weight:500">${r.display_name.split(',').slice(0,2).join(',')}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">${r.display_name.split(',').slice(2,4).join(',')}</div>
+      </div>`).join('');
+  } catch (e) {
+    div.innerHTML = '<div style="padding:12px;color:var(--red);font-size:13px">Error: ' + e.message + '</div>';
+  }
+}
+
+function irAUbicacion(lat, lon, nombre) {
+  mapaL.setView([lat, lon], 15);
+  document.getElementById('geo-results').style.display = 'none';
+  document.getElementById('geo-search').value = nombre;
+}
+
+// Cerrar resultados al clickear fuera
+document.addEventListener('click', e => {
+  const div = document.getElementById('geo-results');
+  if (div && !e.target.closest('#geo-search') && !e.target.closest('#geo-results'))
+    div.style.display = 'none';
+});
 
 // ── Enviar a tractor ─────────────────────────────────────
 let _enviarIdx = null;
