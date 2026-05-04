@@ -1,89 +1,25 @@
-<%# pages/vehiculos.ejs — Configuración de vehículos AOG %>
+<%# pages/vehiculos.ejs — Configuración de vehículos AOG (lazy load) %>
 
 <div class="page-header">
   <div>
     <h2>Vehículos</h2>
     <p>Configuración sincronizada desde AgOpenGPS</p>
   </div>
-  <a href="/vehiculos" class="btn">↻ Actualizar</a>
+  <div style="display:flex;gap:8px">
+    <input type="text" id="veh-search" placeholder="Buscar por nombre, device, org…"
+      oninput="vehBuscar(this.value)"
+      style="background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:7px 12px;border-radius:8px;font-size:13px;outline:none;width:240px"/>
+    <button class="btn" onclick="vehCargar(true)">↻</button>
+  </div>
 </div>
 
-<% if (!vehiculos || !vehiculos.length) { %>
-  <div class="empty-state">
-    <span class="icon">🚜</span>
-    <p>No hay vehículos sincronizados.<br>
-    Guardá la configuración del vehículo en AOG<br>
-    y el agente la subirá automáticamente.</p>
-  </div>
-<% } else { %>
+<div id="veh-status" style="font-size:11px;color:var(--ap-muted);margin-bottom:12px">–</div>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
-  <% vehiculos.forEach((v, vi) => { %>
-  <div class="card" style="display:flex;flex-direction:column">
+<div id="veh-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
 
-    <!-- Header -->
-    <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)">
-      <div style="width:40px;height:40px;border-radius:10px;background:var(--lime-dim);border:1px solid rgba(184,255,60,0.2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🚜</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-family:var(--font-h);font-size:14px;color:#fff"><%= v.nombre || v.nombre_archivo %></div>
-        <div style="font-size:11px;color:var(--muted2);margin-top:2px">
-          <%= v.estab_slug %> · <%= v.device_id || '–' %> · <%= fmtDate(v.ts) %>
-        </div>
-      </div>
-      <button class="btn btn-sm btn-ghost" onclick="toggleDetalle(<%= vi %>)">Ver todo</button>
-    </div>
-
-    <!-- Grupos de parámetros -->
-    <div style="padding:12px 16px;flex:1">
-      <% v.grupos.forEach((g, gi) => { %>
-        <% if (gi === 0 || gi < 3) { %>
-        <div style="margin-bottom:10px" id="grupo-<%= vi %>-<%= gi %>">
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px"><%= g.grupo %></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-            <% g.filas.forEach(f => { %>
-            <div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border-radius:6px;padding:5px 8px;gap:6px">
-              <span style="font-size:11px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><%= f.label %></span>
-              <span style="font-family:var(--font-m);font-size:12px;color:var(--lime);flex-shrink:0">
-                <%= typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : f.valor %>
-                <% if (f.unidad) { %><span style="color:var(--muted2);font-size:10px"><%= f.unidad %></span><% } %>
-              </span>
-            </div>
-            <% }) %>
-          </div>
-        </div>
-        <% } %>
-        <% if (gi >= 3) { %>
-        <div class="detalle-extra-<%= vi %>" style="display:none;margin-bottom:10px">
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px"><%= g.grupo %></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-            <% g.filas.forEach(f => { %>
-            <div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border-radius:6px;padding:5px 8px;gap:6px">
-              <span style="font-size:11px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><%= f.label %></span>
-              <span style="font-family:var(--font-m);font-size:12px;color:var(--lime);flex-shrink:0">
-                <%= typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : f.valor %>
-                <% if (f.unidad) { %><span style="color:var(--muted2);font-size:10px"><%= f.unidad %></span><% } %>
-              </span>
-            </div>
-            <% }) %>
-          </div>
-        </div>
-        <% } %>
-      <% }) %>
-    </div>
-
-    <!-- Footer: XML crudo -->
-    <div style="padding:0 16px 14px">
-      <button class="btn btn-ghost" style="width:100%;font-size:11px"
-        onclick="verXML('<%= vi %>')">
-        Ver XML completo
-      </button>
-    </div>
-
-  </div>
-  <% }) %>
+<div id="veh-mas" style="text-align:center;margin-top:16px;display:none">
+  <button class="btn" onclick="vehMas()">Cargar más →</button>
 </div>
-
-<% } %>
 
 <!-- Modal XML -->
 <div class="modal-backdrop" id="modal-xml">
@@ -91,33 +27,108 @@
     <div class="modal-title" id="modal-xml-nombre">–</div>
     <div class="modal-sub">Archivo XML de AgOpenGPS</div>
     <pre id="modal-xml-content"
-      style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--font-m);font-size:11px;color:var(--text);overflow:auto;flex:1;white-space:pre-wrap;word-break:break-all;min-height:120px">
+      style="margin-top:14px;background:var(--ap-bg);border:1px solid var(--ap-border);border-radius:8px;padding:14px;font-family:monospace;font-size:11px;color:var(--ap-text);overflow:auto;flex:1;white-space:pre-wrap;word-break:break-all;min-height:120px">
     </pre>
     <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-xml')">Cerrar</button>
   </div>
 </div>
 
 <script>
-const _vehiculosData = <%- JSON.stringify(vehiculosRaw) %>;
+let _vehItems = [];
+let _vehSkip  = 0;
+let _vehLim   = 10;
+let _vehTotal = 0;
+let _vehQ     = "";
+let _vehTO    = null;
 
-function toggleDetalle(vi) {
-  const extras = document.querySelectorAll(`.detalle-extra-${vi}`);
-  const btn    = event.target;
-  const oculto = extras[0]?.style.display === 'none';
-  extras.forEach(e => e.style.display = oculto ? 'block' : 'none');
-  btn.textContent = oculto ? 'Menos' : 'Ver todo';
+async function vehCargar(reset = true) {
+  if (reset) { _vehSkip = 0; _vehItems = []; document.getElementById("veh-grid").innerHTML = '<div class="loading"><span class="spinner"></span> Cargando…</div>'; }
+  try {
+    const params = new URLSearchParams({ limit: _vehLim, skip: _vehSkip });
+    if (_vehQ) params.set("q", _vehQ);
+    const r = await Auth.get(`/api/aog/vehiculos?${params}`);
+    const items = r.items || [];
+    _vehTotal = r.total || items.length;
+    _vehItems = reset ? items : _vehItems.concat(items);
+    renderVeh();
+  } catch (e) {
+    document.getElementById("veh-grid").innerHTML = `<div class="alert error show">${e.message}</div>`;
+  }
 }
 
-async function verXML(vi) {
-  const v = _vehiculosData[vi];
+function renderVeh() {
+  const grid = document.getElementById("veh-grid");
+  document.getElementById("veh-status").textContent = `${_vehItems.length} de ${_vehTotal} vehículos`;
+
+  if (!_vehItems.length) {
+    grid.innerHTML = `<div class="empty-state"><span class="icon">🚜</span><p>${_vehQ ? "Sin resultados." : "No hay vehículos sincronizados todavía."}</p></div>`;
+    document.getElementById("veh-mas").style.display = "none";
+    return;
+  }
+
+  grid.innerHTML = _vehItems.map((v, vi) => `
+    <div class="card" style="display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--ap-border)">
+        <div style="width:38px;height:38px;border-radius:8px;background:var(--ap-green-dim);border:1px solid rgba(164,186,62,0.25);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🚜</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600;color:var(--ap-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.nombre || v.nombre_archivo)}</div>
+          <div style="font-size:11px;color:var(--ap-muted);margin-top:2px">${escapeHtml(v.estab_slug)} · ${escapeHtml(v.device_id || '–')} · ${fmtDate(v.ts)}</div>
+        </div>
+      </div>
+      <div style="padding:12px 16px;flex:1">
+        ${(v.grupos || []).slice(0, 3).map(g => `
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${escapeHtml(g.grupo)}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+              ${(g.filas || []).map(f => `
+                <div style="display:flex;justify-content:space-between;align-items:center;background:var(--ap-bg);border-radius:6px;padding:5px 8px;gap:6px">
+                  <span style="font-size:11px;color:var(--ap-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(f.label)}</span>
+                  <span style="font-family:monospace;font-size:12px;color:var(--ap-green);flex-shrink:0">${typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : escapeHtml(String(f.valor))}${f.unidad ? `<span style="color:var(--ap-muted);font-size:10px"> ${escapeHtml(f.unidad)}</span>` : ''}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="padding:0 16px 14px">
+        <button class="btn btn-ghost" style="width:100%;font-size:11px" onclick="vehVerXML(${vi})">Ver XML completo</button>
+      </div>
+    </div>
+  `).join("");
+
+  document.getElementById("veh-mas").style.display = (_vehItems.length < _vehTotal) ? "block" : "none";
+}
+
+async function vehMas() {
+  _vehSkip += _vehLim;
+  await vehCargar(false);
+}
+
+function vehBuscar(q) {
+  clearTimeout(_vehTO);
+  _vehTO = setTimeout(() => { _vehQ = q.trim(); vehCargar(true); }, 300);
+}
+
+async function vehVerXML(vi) {
+  const v = _vehItems[vi];
   if (!v) return;
-  document.getElementById('modal-xml-nombre').textContent = v.nombre_archivo;
-  openModal('modal-xml');
+  document.getElementById("modal-xml-nombre").textContent = v.nombre_archivo;
+  openModal("modal-xml");
   try {
     const d = await Auth.get('/api/aog/archivo?ruta=' + encodeURIComponent(v.ruta_rel));
     document.getElementById('modal-xml-content').textContent = d.contenido || '(vacío)';
-  } catch(e) {
+  } catch (e) {
     document.getElementById('modal-xml-content').textContent = 'Error: ' + e.message;
   }
 }
+
+function fmtDate(ts) {
+  if (!ts) return "–";
+  return new Date(ts).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", year:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+document.addEventListener("DOMContentLoaded", () => vehCargar(true));
 </script>

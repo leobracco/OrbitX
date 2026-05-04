@@ -43,7 +43,7 @@ function spmAColor(spm, objetivo) {
 
 // ── Cargar lotes ─────────────────────────────────────────
 let _allLotes = [];
-const PAGE_SIZE = 30;
+const PAGE_SIZE = 10;
 let _currentPage = 0;
 
 async function cargarLotes() {
@@ -131,8 +131,8 @@ function renderLotes() {
   // Botón "Ver más" si hay más lotes.
   if (end < filtered.length) {
     lista.innerHTML += `
-      <div onclick="_currentPage++;renderLotes()" style="padding:12px;text-align:center;cursor:pointer;color:var(--lime);font-size:12px;font-weight:600;font-family:var(--font-m)">
-        Ver más (${filtered.length - end} restantes)
+      <div onclick="_currentPage++;renderLotes()" style="padding:12px;text-align:center;cursor:pointer;color:var(--ap-green);font-size:12px;font-weight:600;font-family:monospace">
+        Cargar 10 más (${filtered.length - end} restantes)
       </div>`;
   }
 }

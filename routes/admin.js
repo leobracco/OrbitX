@@ -1,9 +1,12 @@
-// routes/admin.js  — Solo owners/admins (protegido por auth.adminOnly en server.js)
-const router = require("express").Router();
-const db     = require("../services/couchdb");
+// routes/admin.js — Endpoints administrativos
+// El middleware auth.adminOnly aplicado en server.js permite owner/admin_org/superadmin,
+// pero los endpoints CROSS-ORG de acá deben restringirse a superadmin para no leakear data.
+const router  = require("express").Router();
+const db      = require("../services/couchdb");
+const { soloSuperadmin } = require("../middleware/auth");
 
-// GET /api/admin/stats  — resumen global de la plataforma
-router.get("/stats", async (req, res) => {
+// GET /api/admin/stats — resumen GLOBAL de la plataforma (cross-org)
+router.get("/stats", soloSuperadmin, async (req, res) => {
   try {
     const establecimientos = await db.getEstablecimientos();
     const stats = await Promise.all(
@@ -27,17 +30,14 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// POST /api/admin/establecimiento  — crear nuevo establecimiento
-router.post("/establecimiento", async (req, res) => {
+// POST /api/admin/establecimiento — crear nueva org. Solo superadmin.
+router.post("/establecimiento", soloSuperadmin, async (req, res) => {
   try {
     const { nombre, slug, ha_total, provincia } = req.body;
     if (!nombre || !slug)
-      return res.status(400).json({ error: "nombre y slug son requeridos" });
+      return res.status(400).json({ error: "Hace falta nombre y slug" });
 
-    // Crear la DB en CouchDB
     await db.bootstrapEstablecimiento(slug);
-
-    // Guardar el documento en orbitx_global
     await db.upsertEstablecimiento({ nombre, slug, ha_total, provincia });
 
     console.log(`[Admin] Establecimiento creado: ${slug}`);
@@ -47,29 +47,27 @@ router.post("/establecimiento", async (req, res) => {
   }
 });
 
-// GET /api/admin/usuarios  — listar todos los usuarios
-router.get("/usuarios", async (req, res) => {
+// GET /api/admin/usuarios — listado de TODOS los usuarios. Solo superadmin.
+// Para listar usuarios de tu propia org usá /api/auth/equipo.
+router.get("/usuarios", soloSuperadmin, async (req, res) => {
   try {
     const gdb = db.getDB("global");
     let docs = [];
-    // Intentar con find()
     try {
       const r = await gdb.find({ selector: { tipo: "usuario" }, limit: 500 });
       docs = r.docs;
     } catch {
-      // Fallback: list all
       const all = await gdb.list({ include_docs: true });
       docs = all.rows.map(r => r.doc).filter(d => d.tipo === "usuario");
     }
-    // No exponer password_hash ni reset_token
     res.json(docs.map(({ password_hash, reset_token, reset_token_exp, ...safe }) => safe));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// DELETE /api/admin/usuario/:uid  — desactivar usuario
-router.delete("/usuario/:uid", async (req, res) => {
+// DELETE /api/admin/usuario/:uid — desactivar usuario a nivel plataforma. Solo superadmin.
+router.delete("/usuario/:uid", soloSuperadmin, async (req, res) => {
   try {
     const globalDB = db.getDB("global");
     const doc      = await globalDB.get(`usr_${req.params.uid}`);

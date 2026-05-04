@@ -1,126 +1,245 @@
-<%# pages/integraciones.ejs %>
-<%# Solo visible para owner / admin_org %>
+<%# pages/integraciones.ejs — Catálogo de integraciones + Mis notificaciones %>
 
 <div class="page-header">
   <div>
     <h2>Integraciones</h2>
-    <p>Conectá servicios externos a tu establecimiento</p>
+    <p>Servicios externos provistos por Agro Parallel + tus preferencias de notificaciones</p>
   </div>
 </div>
 
-<div style="max-width:560px">
+<div id="alert-int" class="alert" style="margin-bottom:14px"></div>
 
-  <!-- ══ Copernicus Data Space ══════════════════════════ -->
-  <div class="card" style="margin-bottom:16px">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="width:36px;height:36px;background:var(--surface2);border-radius:8px;
-                  display:flex;align-items:center;justify-content:center;font-size:18px">🛰</div>
-      <div>
-        <div style="font-weight:500;font-size:14px">Copernicus Data Space</div>
-        <div style="font-size:12px;color:var(--text-dim)">NDVI · Sentinel-2 · Gratis hasta 10.000 PU/mes</div>
-      </div>
-      <div style="margin-left:auto">
-        <span id="cop-badge" class="badge badge-gray">No configurado</span>
-      </div>
-    </div>
-
-    <div id="cop-info" style="display:none;margin-bottom:12px;font-size:12px;color:var(--text-dim)"></div>
-
-    <div id="cop-form" style="display:flex;flex-direction:column;gap:10px">
-      <div class="field">
-        <label>Client ID</label>
-        <input type="text" id="cop-client-id"
-          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          style="font-family:monospace;font-size:12px"/>
-      </div>
-      <div class="field">
-        <label>Client Secret</label>
-        <input type="password" id="cop-client-secret" placeholder="••••••••••••••••"/>
-      </div>
-      <div class="field">
-        <label>Instance ID (WMS de Sentinel Hub Dashboard)</label>
-        <input type="text" id="cop-instance-id"
-          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          style="font-family:monospace;font-size:12px"/>
-      </div>
-
-      <div style="font-size:11px;color:var(--text-dim);line-height:1.6;
-                  background:var(--surface2);padding:10px;border-radius:8px">
-        <strong style="color:var(--text)">¿Cómo obtener estas credenciales?</strong><br>
-        1. Registrate gratis en
-        <a href="https://dataspace.copernicus.eu" target="_blank">dataspace.copernicus.eu</a><br>
-        2. En Sentinel Hub Dashboard → Configuration Utility → New configuration (tipo WMS)<br>
-        3. Copiá el <em>Instance ID</em> de esa configuración<br>
-        4. En Account → OAuth clients → New client → copiá Client ID y Secret
-      </div>
-
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="guardarCopernicus()">Guardar</button>
-        <button class="btn btn-ghost" id="cop-btn-eliminar"
-          style="display:none;color:var(--red)" onclick="eliminarCopernicus()">Eliminar</button>
-      </div>
-    </div>
+<!-- ── Catálogo (read-only) ───────────────────────────── -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-head"><span class="card-title">Servicios disponibles</span></div>
+  <div class="card-body">
+    <p style="font-size:12px;color:var(--ap-muted);margin-bottom:12px;line-height:1.6">
+      Estos servicios los administra Agro Parallel de forma centralizada. No necesitás cargar credenciales.
+    </p>
+    <div id="int-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"></div>
   </div>
-
-  <!-- Más integraciones futuras acá -->
-
 </div>
+
+<!-- ── Notificaciones por org ─────────────────────────── -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-head">
+    <span class="card-title">Mis notificaciones</span>
+    <button class="btn btn-sm" onclick="probarNotif()">Probar envío</button>
+  </div>
+  <div class="card-body">
+    <p style="font-size:12px;color:var(--ap-muted);margin-bottom:14px;line-height:1.6">
+      Configurá a quién y por qué canal querés recibir alertas y avisos. Las credenciales son globales — vos solo cargás los destinatarios.
+    </p>
+
+    <!-- Telegram -->
+    <div style="border:1px solid var(--ap-border);border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:18px">✈</span>
+        <span style="flex:1;font-weight:600;color:var(--ap-text)">Telegram</span>
+        <label class="switch"><input type="checkbox" id="tg-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label>Chat IDs (uno por línea)</label>
+        <textarea id="tg-chats" rows="2" placeholder="1234567890&#10;987654321"
+          style="width:100%;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:12px;outline:none;resize:vertical"></textarea>
+      </div>
+      <p style="font-size:11px;color:var(--ap-muted);margin-top:6px">
+        Para sacar tu chat ID: en Telegram buscá <span class="td-mono">@userinfobot</span>, mandale /start y copiá el número.
+      </p>
+    </div>
+
+    <!-- WhatsApp -->
+    <div style="border:1px solid var(--ap-border);border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:18px">💬</span>
+        <span style="flex:1;font-weight:600;color:var(--ap-text)">WhatsApp</span>
+        <label class="switch"><input type="checkbox" id="wa-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label>Números (E.164 sin + ni espacios, uno por línea)</label>
+        <textarea id="wa-nums" rows="2" placeholder="5493510000000&#10;5493400000000"
+          style="width:100%;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:12px;outline:none;resize:vertical"></textarea>
+      </div>
+    </div>
+
+    <!-- Email -->
+    <div style="border:1px solid var(--ap-border);border-radius:8px;padding:14px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:18px">✉</span>
+        <span style="flex:1;font-weight:600;color:var(--ap-text)">Email</span>
+        <label class="switch"><input type="checkbox" id="em-enabled"/><span class="slider"></span></label>
+      </div>
+      <div class="field">
+        <label>Mails (uno por línea)</label>
+        <textarea id="em-tos" rows="2" placeholder="encargado@campo.com&#10;agronomo@campo.com"
+          style="width:100%;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:12px;outline:none;resize:vertical"></textarea>
+      </div>
+    </div>
+
+    <!-- Eventos -->
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ap-muted);margin-bottom:10px">¿Qué querés recibir y por qué canal?</div>
+      <div class="table-wrap">
+        <table class="data-table" id="tabla-eventos">
+          <thead>
+            <tr>
+              <th>Evento</th>
+              <th style="text-align:center">✈ Telegram</th>
+              <th style="text-align:center">💬 WhatsApp</th>
+              <th style="text-align:center">✉ Email</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="guardarNotif()">Guardar preferencias</button>
+  </div>
+</div>
+
+<style>
+.switch { position:relative; display:inline-block; width:36px; height:20px; }
+.switch input { display:none; }
+.slider {
+  position:absolute; cursor:pointer; inset:0; background:var(--ap-bg);
+  border:1px solid var(--ap-border); border-radius:20px; transition:0.2s;
+}
+.slider:before {
+  content:""; position:absolute; height:14px; width:14px; left:2px; top:2px;
+  background:var(--ap-muted); border-radius:50%; transition:0.2s;
+}
+.switch input:checked + .slider { background:rgba(164,186,62,0.2); border-color:var(--ap-green); }
+.switch input:checked + .slider:before { background:var(--ap-green); transform:translateX(15px); }
+</style>
 
 <script>
-(async () => {
-  try {
-    const r = await Auth.get('/api/integraciones/copernicus');
-    const badge = document.getElementById('cop-badge');
-    const info  = document.getElementById('cop-info');
-    const btnEl = document.getElementById('cop-btn-eliminar');
+const TOKEN = localStorage.getItem("orbitx_token") || "";
+const auth = (extra) => Object.assign({ "Authorization": `Bearer ${TOKEN}` }, extra || {});
 
-    if (r.configurado) {
-      badge.textContent = 'Activo';
-      badge.className   = 'badge badge-lime';
-      btnEl.style.display = 'inline-flex';
-      if (r.configurado_at) {
-        info.style.display = 'block';
-        info.textContent   = 'Configurado el ' +
-          new Date(r.configurado_at).toLocaleString('es-AR',
-            { day:'2-digit', month:'2-digit', year:'numeric',
-              hour:'2-digit', minute:'2-digit' });
-      }
-    }
-  } catch(e) { console.error(e); }
+// ── Catálogo ─────────────────────────────────────────────
+(async () => {
+  const cont = document.getElementById("int-list");
+  cont.innerHTML = '<div class="loading"><span class="spinner"></span> Cargando…</div>';
+  try {
+    const r = await fetch("/api/integraciones", { headers: auth() });
+    const j = await r.json();
+    const items = j.integraciones || [];
+    cont.innerHTML = items.map(it => `
+      <div style="background:var(--ap-bg);border:1px solid var(--ap-border);border-radius:8px;padding:12px">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <div style="width:32px;height:32px;background:var(--ap-card);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">${it.icono}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;color:var(--ap-text)">${it.nombre}</div>
+            <div style="font-size:11px;color:var(--ap-muted);line-height:1.5">${it.descripcion}</div>
+          </div>
+        </div>
+        <div style="margin-top:10px"><span class="badge ${it.activa ? 'badge-lime' : 'badge-gray'}">${it.activa ? '● Activa' : '○ Sin configurar'}</span></div>
+      </div>
+    `).join("");
+  } catch (e) {
+    cont.innerHTML = `<div class="alert error show">Error: ${e.message}</div>`;
+  }
 })();
 
-async function guardarCopernicus() {
-  const client_id     = document.getElementById('cop-client-id').value.trim();
-  const client_secret = document.getElementById('cop-client-secret').value.trim();
-  const instance_id   = document.getElementById('cop-instance-id').value.trim();
+// ── Notificaciones ──────────────────────────────────────
+let _eventos = [];
+let _config  = null;
 
-  if (!client_id || !client_secret || !instance_id) {
-    return toast('Faltan datos', 'Completá los tres campos', 'amber');
-  }
-
+async function cargarNotif() {
   try {
-    await Auth.post('/api/integraciones/copernicus', { client_id, client_secret, instance_id });
-    toast('✓ Integración guardada', 'NDVI disponible en el mapa de lotes', 'lime');
-    document.getElementById('cop-badge').textContent = 'Activo';
-    document.getElementById('cop-badge').className   = 'badge badge-lime';
-    document.getElementById('cop-btn-eliminar').style.display = 'inline-flex';
-    // Limpiar los campos sensibles de la UI
-    document.getElementById('cop-client-secret').value = '';
-  } catch(e) {
-    toast('Error', e.message, 'red');
+    const r = await fetch("/api/notif-org", { headers: auth() });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Error");
+    _eventos = j.eventos || [];
+    _config  = j.notificaciones;
+    pintarNotif();
+  } catch (e) {
+    showAlert("No se pudo cargar la config: " + e.message, "error");
   }
 }
 
-async function eliminarCopernicus() {
-  if (!confirm('¿Eliminar las credenciales de Copernicus? El NDVI dejará de funcionar.')) return;
+function pintarNotif() {
+  if (!_config) return;
+  document.getElementById("tg-enabled").checked = !!_config.telegram?.enabled;
+  document.getElementById("wa-enabled").checked = !!_config.whatsapp?.enabled;
+  document.getElementById("em-enabled").checked = !!_config.email?.enabled;
+  document.getElementById("tg-chats").value = (_config.telegram?.chat_ids || []).join("\n");
+  document.getElementById("wa-nums").value  = (_config.whatsapp?.numeros  || []).join("\n");
+  document.getElementById("em-tos").value   = (_config.email?.to          || []).join("\n");
+
+  const tbody = document.querySelector("#tabla-eventos tbody");
+  tbody.innerHTML = _eventos.map(e => {
+    const ev = _config.eventos?.[e.clave] || { telegram: true, whatsapp: true, email: true };
+    return `
+      <tr>
+        <td><div style="font-weight:500">${e.nombre}</div><div class="td-dim">${e.descripcion}</div></td>
+        <td style="text-align:center"><label class="switch"><input type="checkbox" data-ev="${e.clave}" data-canal="telegram" ${ev.telegram ? "checked" : ""}/><span class="slider"></span></label></td>
+        <td style="text-align:center"><label class="switch"><input type="checkbox" data-ev="${e.clave}" data-canal="whatsapp" ${ev.whatsapp ? "checked" : ""}/><span class="slider"></span></label></td>
+        <td style="text-align:center"><label class="switch"><input type="checkbox" data-ev="${e.clave}" data-canal="email" ${ev.email ? "checked" : ""}/><span class="slider"></span></label></td>
+      </tr>
+    `;
+  }).join("");
+}
+
+async function guardarNotif() {
+  const eventos = {};
+  document.querySelectorAll('#tabla-eventos input[type="checkbox"]').forEach(cb => {
+    const ev    = cb.dataset.ev;
+    const canal = cb.dataset.canal;
+    if (!eventos[ev]) eventos[ev] = {};
+    eventos[ev][canal] = cb.checked;
+  });
+
+  const body = {
+    telegram: {
+      enabled:  document.getElementById("tg-enabled").checked,
+      chat_ids: document.getElementById("tg-chats").value.split("\n").map(s => s.trim()).filter(Boolean),
+    },
+    whatsapp: {
+      enabled: document.getElementById("wa-enabled").checked,
+      numeros: document.getElementById("wa-nums").value.split("\n").map(s => s.trim()).filter(Boolean),
+    },
+    email: {
+      enabled: document.getElementById("em-enabled").checked,
+      to:      document.getElementById("em-tos").value.split("\n").map(s => s.trim()).filter(Boolean),
+    },
+    eventos,
+  };
+
   try {
-    await Auth.del('/api/integraciones/copernicus');
-    toast('Credenciales eliminadas', '', 'amber');
-    document.getElementById('cop-badge').textContent = 'No configurado';
-    document.getElementById('cop-badge').className   = 'badge badge-gray';
-    document.getElementById('cop-btn-eliminar').style.display = 'none';
-  } catch(e) {
-    toast('Error', e.message, 'red');
+    const r = await fetch("/api/notif-org", {
+      method:  "PUT",
+      headers: auth({ "Content-Type": "application/json" }),
+      body:    JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Error");
+    showAlert("✓ Preferencias guardadas", "success");
+    cargarNotif();
+  } catch (e) {
+    showAlert("✗ " + e.message, "error");
   }
 }
+
+async function probarNotif() {
+  showAlert("Mandando prueba a todos los canales habilitados…", "info");
+  try {
+    const r = await fetch("/api/notif-org/test", { method: "POST", headers: auth() });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || `${j.fallos || 0} fallos`);
+    showAlert(`✓ Prueba enviada — ${j.enviados}/${j.total} canales OK`, "success");
+  } catch (e) {
+    showAlert("✗ " + e.message, "error");
+  }
+}
+
+function showAlert(msg, tipo) {
+  const a = document.getElementById("alert-int");
+  a.textContent = msg;
+  a.className = `alert show ${tipo === "error" ? "error" : tipo === "success" ? "success" : "info"}`;
+  if (tipo !== "error") setTimeout(() => a.classList.remove("show"), 4000);
+}
+
+document.addEventListener("DOMContentLoaded", cargarNotif);
 </script>

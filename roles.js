@@ -23,7 +23,7 @@ const ROLES = {
     label: "Super Admin",
     descripcion: "Agro Parallel — acceso total a la plataforma",
     nivel: 100,
-    color: "#B8FF3C"
+    color: "#A4BA3E"
   },
   owner: {
     label: "Dueño del campo",
@@ -54,6 +54,12 @@ const ROLES = {
     descripcion: "Alertas en tiempo real y su máquina",
     nivel: 30,
     color: "#FB923C"
+  },
+  member: {
+    label: "Miembro",
+    descripcion: "Acceso general de lectura a la organización",
+    nivel: 20,
+    color: "#A4BA3E"
   },
   viewer: {
     label: "Solo lectura",

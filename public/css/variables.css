@@ -1,44 +1,89 @@
-/* variables.css — Design tokens OrbitX */
+/* variables.css — Design tokens Agro Parallel · OrbitX */
 :root {
-  --bg:        #050810;
-  --surface:   rgba(255,255,255,0.04);
-  --surface2:  rgba(255,255,255,0.07);
-  --border:    rgba(255,255,255,0.08);
-  --border2:   rgba(255,255,255,0.14);
-  --lime:      #B8FF3C;
-  --lime-dim:  rgba(184,255,60,0.10);
-  --lime-glow: rgba(184,255,60,0.20);
-  --blue:      #3C9EFF;
-  --blue-dim:  rgba(60,158,255,0.10);
-  --teal:      #3CFFCF;
-  --red:       #FF4444;
-  --red-dim:   rgba(255,68,68,0.10);
-  --amber:     #FFB03C;
-  --amber-dim: rgba(255,176,60,0.10);
-  --text:      #E2E8F0;
-  --muted:     #4A5568;
-  --muted2:    #718096;
-  --font-h:    'Clash Display', sans-serif;
-  --font-b:    'Geist', sans-serif;
-  --font-m:    'Geist Mono', monospace;
+  /* ── Paleta Agro Parallel ─────────────────────────────── */
+  --ap-green:    #A4BA3E;             /* Verde primario: acciones, activos, datos positivos */
+  --ap-green-2:  #25CC71;             /* Verde secundario / hover */
+  --ap-yellow:   #F5C400;             /* Advertencias */
+  --ap-red:      #E74C3E;             /* Errores, destructivo */
+  --ap-blue:     #3C9EFF;             /* Info / outline terciario */
+
+  --ap-green-dim:  rgba(164,186,62,0.10);
+  --ap-green-glow: rgba(164,186,62,0.22);
+  --ap-yellow-dim: rgba(245,196,0,0.10);
+  --ap-red-dim:    rgba(231,76,62,0.10);
+  --ap-blue-dim:   rgba(60,158,255,0.10);
+
+  --ap-bg-deep: #121618;              /* Fondo más oscuro */
+  --ap-bg:      #1A1F25;              /* Fondo principal */
+  --ap-card:    #232830;              /* Cards / paneles */
+  --ap-border:  #3D333B;              /* Bordes / divisores */
+  --ap-border-soft: rgba(255,255,255,0.06);
+
+  --ap-text:    #E6E6E6;              /* Texto principal */
+  --ap-muted:   #9AA3AD;              /* Texto secundario */
+  --ap-muted-2: #6F7882;              /* Texto terciario / placeholders */
+
+  /* ── Tipografía: Inter (autohospedable, vía Google Fonts) ── */
+  --ap-font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ap-font-mono: "Inter", ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+
+  /* ── Métricas ───────────────────────────────────────────── */
   --sidebar-w: 240px;
   --topbar-h:  56px;
-  --radius:    12px;
+  --radius:    8px;                   /* Cards 8px (identidad oficial) */
+  --radius-lg: 12px;
+
+  /* ══════════════════════════════════════════════════════════
+     Aliases legacy: el código histórico usa --lime/--blue/etc.
+     Apuntamos a los nuevos tokens para no romper nada y permitir
+     migración gradual. NO usar en código nuevo.
+     ══════════════════════════════════════════════════════════ */
+  --bg:        var(--ap-bg-deep);
+  --surface:   var(--ap-card);
+  --surface2:  var(--ap-bg);
+  --border:    var(--ap-border-soft);
+  --border2:   var(--ap-border);
+  --lime:      var(--ap-green);
+  --lime-dim:  var(--ap-green-dim);
+  --lime-glow: var(--ap-green-glow);
+  --blue:      var(--ap-blue);
+  --blue-dim:  var(--ap-blue-dim);
+  --teal:      var(--ap-green-2);
+  --red:       var(--ap-red);
+  --red-dim:   var(--ap-red-dim);
+  --amber:     var(--ap-yellow);
+  --amber-dim: var(--ap-yellow-dim);
+  --text:      var(--ap-text);
+  --muted:     var(--ap-muted-2);
+  --muted2:    var(--ap-muted);
+  --font-h:    var(--ap-font);
+  --font-b:    var(--ap-font);
+  --font-m:    var(--ap-font-mono);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
-body { background: var(--bg); color: var(--text); font-family: var(--font-b); overflow: hidden; }
+body {
+  background: var(--ap-bg-deep);
+  color: var(--ap-text);
+  font-family: var(--ap-font);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
 
+/* Glow sutil de fondo (subtle, no distrae) */
 body::before {
   content: '';
   position: fixed; inset: 0;
   background:
-    radial-gradient(ellipse 100% 60% at 20% 0%,  rgba(184,255,62,0.03) 0%, transparent 50%),
-    radial-gradient(ellipse 80%  50% at 90% 100%, rgba(60,158,255,0.03) 0%, transparent 50%);
+    radial-gradient(ellipse 100% 60% at 20% 0%,  rgba(164,186,62,0.04) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 50% at 90% 100%, rgba(37,204,113,0.025) 0%, transparent 55%);
   pointer-events: none;
 }
 
-::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: var(--ap-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ap-muted-2); }

@@ -32,8 +32,10 @@ function loteId(nombre) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  GET /api/lotes-maestro
-//  Lista todos los lotes con resumen de capas
+//  GET /api/lotes-maestro?limit=50&skip=0&q=&lite=1
+//  Lista lotes con resumen de capas. Paginado y con búsqueda server-side.
+//  - lite=1 → solo nombre + cultivo + ts_ultimo (sin parsear AOG/vistax/capas).
+//  - Sin lite → comportamiento completo (más pesado).
 // ══════════════════════════════════════════════════════════
 router.get("/", async (req, res) => {
   try {
@@ -41,97 +43,153 @@ router.get("/", async (req, res) => {
     const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
     if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
 
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const skip  = Math.max(parseInt(req.query.skip)  || 0, 0);
+    const q     = (req.query.q || "").trim().toLowerCase();
+    const lite  = req.query.lite === "1" || req.query.lite === "true";
+
     const estabDB = getDB(slug);
 
-    // Traer lotes maestros
-    const maestros = await findAll(estabDB, { tipo: "lote_maestro" });
+    // Asegurar índices Mango (idempotente, fast no-op si ya existen).
+    estabDB.createIndex({ index: { fields: ["tipo", "ts"] } }).catch(() => {});
+    estabDB.createIndex({ index: { fields: ["tipo", "es_lote"] } }).catch(() => {});
 
-    // Traer lotes AOG (lote_nombre únicos)
-    const aogDocs = await findAll(estabDB, { tipo: "aog_archivo", es_lote: true }, 2000);
+    // Lotes maestros (livianos, pocos por org).
+    const maestros = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
+
+    // Lotes AOG: solo los campos mínimos. Cap a 2000 docs (los más recientes ya alcanzan).
+    let aogDocsLight = [];
+    try {
+      const r = await estabDB.find({
+        selector: { tipo: "aog_archivo", es_lote: true },
+        fields:   ["lote_nombre", "subtipo", "ts"],
+        limit:    2000,
+      });
+      aogDocsLight = r.docs;
+    } catch {
+      const all = await findAll(estabDB, { tipo: "aog_archivo", es_lote: true }, 2000);
+      aogDocsLight = all.map(d => ({ lote_nombre: d.lote_nombre, subtipo: d.subtipo, ts: d.ts }));
+    }
+
     const aogLotes = {};
-    aogDocs.forEach(d => {
+    aogDocsLight.forEach(d => {
       const n = d.lote_nombre || "?";
       if (!aogLotes[n]) aogLotes[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
       if (d.subtipo === "boundary" || d.subtipo === "boundary_kml") aogLotes[n].tiene_boundary = true;
       if (d.subtipo === "sections_coverage")                         aogLotes[n].tiene_sections = true;
       if (d.subtipo === "field_origin")                              aogLotes[n].tiene_origen   = true;
-      if ((d.ts || 0) > aogLotes[n].ts)                            aogLotes[n].ts = d.ts;
+      if ((d.ts || 0) > aogLotes[n].ts)                              aogLotes[n].ts = d.ts;
       aogLotes[n].archivos++;
     });
 
-    // Traer capas externas
-    const capas = await findAll(estabDB, { tipo: "lote_capa" }, 2000);
+    // Construir set unificado de nombres de lote.
+    const nombresMaestros = new Set(maestros.map(m => m.nombre));
+    const todosNombres = new Set([...nombresMaestros, ...Object.keys(aogLotes)]);
+
+    // Aplicar búsqueda + sort por ts_ultimo descendente.
+    let lista = [];
+    for (const nombre of todosNombres) {
+      const m   = maestros.find(x => x.nombre === nombre);
+      const aog = aogLotes[nombre] || null;
+      const tsUltimo = Math.max(m?.updated_at || 0, aog?.ts || 0);
+      lista.push({ nombre, m, aog, tsUltimo });
+    }
+
+    if (q) {
+      lista = lista.filter(it =>
+        it.nombre.toLowerCase().includes(q) ||
+        (it.m?.cultivo || "").toLowerCase().includes(q) ||
+        (it.m?.tags || []).some(t => String(t).toLowerCase().includes(q))
+      );
+    }
+
+    lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+
+    const total = lista.length;
+    const pagina = lista.slice(skip, skip + limit);
+
+    // Modo lite: armar el resultado solo con maestro + aog (sin parsear capas/vistax).
+    if (lite) {
+      const resultado = pagina.map(({ nombre, m, aog, tsUltimo }) => ({
+        _id:           m?._id || loteId(nombre),
+        nombre,
+        cultivo:       m?.cultivo || null,
+        temporada:     m?.temporada || null,
+        ha_estimadas:  m?.ha_estimadas || null,
+        tags:          m?.tags || [],
+        tiene_maestro: !!m,
+        aog,
+        ts_ultimo:     tsUltimo,
+      }));
+      return res.json({ items: resultado, total, limit, skip });
+    }
+
+    // Modo completo: solo para los lotes de la página, traemos vistax + capas.
+    const nombresPagina = pagina.map(p => p.nombre);
+
+    // Capas externas — solo de los lotes de esta página.
+    let capas = [];
+    try {
+      const r = await estabDB.find({
+        selector: { tipo: "lote_capa", lote_ref: { $in: nombresPagina } },
+        limit:    2000,
+      });
+      capas = r.docs;
+    } catch {
+      const all = await findAll(estabDB, { tipo: "lote_capa" }, 5000);
+      capas = all.filter(c => nombresPagina.includes(c.lote_ref));
+    }
     const capasPorLote = {};
     capas.forEach(c => {
       if (!capasPorLote[c.lote_ref]) capasPorLote[c.lote_ref] = [];
       capasPorLote[c.lote_ref].push({ subtipo: c.subtipo, nombre: c.nombre, ts: c.ts });
     });
 
-    // Traer reportes VistaX
-    const vxMetas = await findAll(estabDB, { tipo: "vistax_archivo", subtipo: "vistax_meta" }, 500);
+    // Reportes VistaX — solo los meta y filtrados por la página.
+    let vxMetas = [];
+    try {
+      const r = await estabDB.find({
+        selector: { tipo: "vistax_archivo", subtipo: "vistax_meta" },
+        fields:   ["contenido", "lote_id", "ts"],
+        limit:    1000,
+      });
+      vxMetas = r.docs;
+    } catch {
+      vxMetas = await findAll(estabDB, { tipo: "vistax_archivo", subtipo: "vistax_meta" }, 1000);
+    }
     const vxPorLote = {};
     vxMetas.forEach(v => {
       let meta = {};
-      try { meta = JSON.parse(v.contenido); } catch {}
+      try { meta = JSON.parse(v.contenido || "{}"); } catch {}
       const nombre = meta.nombre || v.lote_id;
-      if (nombre) vxPorLote[nombre] = { lote_id: v.lote_id, cultivo: meta.cultivo, totalSemillas: meta.totalSemillas, ts: v.ts };
+      if (nombre && nombresPagina.includes(nombre)) {
+        vxPorLote[nombre] = { lote_id: v.lote_id, cultivo: meta.cultivo, totalSemillas: meta.totalSemillas, ts: v.ts };
+      }
     });
 
-    // Unificar: lotes maestros + lotes AOG sin maestro
-    const resultado = [];
-
-    // Primero los maestros (incluyen toda la info)
-    const maestrosNombres = new Set(maestros.map(m => m.nombre));
-    for (const m of maestros) {
-      const aog  = aogLotes[m.nombre] || null;
-      const caps = capasPorLote[m.nombre] || [];
-      const vx   = vxPorLote[m.nombre] || null;
-      resultado.push({
-        _id:            m._id,
-        nombre:         m.nombre,
-        cultivo:        m.cultivo || vx?.cultivo || null,
-        temporada:      m.temporada || null,
-        ha_estimadas:   m.ha_estimadas || null,
-        tags:           m.tags || [],
-        notas:          m.notas || "",
-        tiene_maestro:  true,
-        // AOG
-        aog:            aog,
-        // VistaX
-        vistax:         vx,
-        // Capas externas
-        capas:          caps,
-        capas_count:    caps.length,
-        ts_ultimo:      Math.max(m.updated_at || 0, aog?.ts || 0, vx?.ts || 0, ...caps.map(c => c.ts || 0)),
-      });
-    }
-
-    // Lotes AOG sin maestro → aparecen igual pero sin metadata extra
-    for (const [nombre, aog] of Object.entries(aogLotes)) {
-      if (maestrosNombres.has(nombre)) continue;
-      const vx   = vxPorLote[nombre] || null;
+    const resultado = pagina.map(({ nombre, m, aog, tsUltimo }) => {
       const caps = capasPorLote[nombre] || [];
-      resultado.push({
-        _id:           loteId(nombre),
+      const vx   = vxPorLote[nombre]    || null;
+      return {
+        _id:           m?._id || loteId(nombre),
         nombre,
-        cultivo:       vx?.cultivo || null,
-        temporada:     null,
-        ha_estimadas:  null,
-        tags:          [],
-        notas:         "",
-        tiene_maestro: false,
+        cultivo:       m?.cultivo || vx?.cultivo || null,
+        temporada:     m?.temporada || null,
+        ha_estimadas:  m?.ha_estimadas || null,
+        tags:          m?.tags || [],
+        notas:         m?.notas || "",
+        tiene_maestro: !!m,
         aog,
         vistax:        vx,
         capas:         caps,
         capas_count:   caps.length,
-        ts_ultimo:     Math.max(aog.ts || 0, vx?.ts || 0, ...caps.map(c => c.ts || 0)),
-      });
-    }
+        ts_ultimo:     Math.max(tsUltimo, vx?.ts || 0, ...caps.map(c => c.ts || 0)),
+      };
+    });
 
-    resultado.sort((a, b) => (b.ts_ultimo || 0) - (a.ts_ultimo || 0));
-    res.json(resultado);
+    res.json({ items: resultado, total, limit, skip });
 
-  } catch(e) {
+  } catch (e) {
     console.error("[lotes-maestro/list]", e.message);
     res.status(500).json({ error: e.message });
   }
@@ -363,6 +421,140 @@ router.get("/:nombre/debug-capas", async (req, res) => {
     });
   } catch(e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  POST /api/lotes-maestro/crear
+//  Crea un lote nuevo con boundary y lo encola para descarga al device.
+//  Body: { nombre, boundary: [[lat,lon],...], device_id?, cultivo?, temporada?, ha_estimadas?, tags?, notas? }
+//
+//  Genera Field.txt + Boundary.txt + boundary.kml en formato AOG y los
+//  guarda como aog_archivo + aog_descarga_pendiente. El agente OrbitX-Sync
+//  los baja vía /api/aog/pendientes-descarga y los pone en Fields/<nombre>/.
+// ══════════════════════════════════════════════════════════
+router.post("/crear", async (req, res) => {
+  try {
+    const aogWriter = require("../lib/aog_writer");
+    const jwtUser = req.jwtUser || req.user;
+    const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
+
+    const { nombre, boundary, device_id, cultivo, temporada, ha_estimadas, tags, notas, origen } = req.body || {};
+    if (!nombre || typeof nombre !== "string" || nombre.length < 2)
+      return res.status(400).json({ error: "Pasá un nombre válido (mínimo 2 caracteres)" });
+    if (!Array.isArray(boundary) || boundary.length < 3)
+      return res.status(400).json({ error: "El boundary necesita al menos 3 puntos" });
+
+    // Validar puntos.
+    const ring = boundary.map(p => {
+      if (Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number") return [p[0], p[1]];
+      if (p && typeof p.lat === "number" && typeof p.lon === "number") return [p.lat, p.lon];
+      if (p && typeof p.lat === "number" && typeof p.lng === "number") return [p.lat, p.lng];
+      throw new Error("Punto inválido en boundary");
+    });
+
+    // Origen: si no lo pasan, usamos el centroide.
+    const orig = origen && typeof origen.lat === "number" && typeof origen.lon === "number"
+      ? origen
+      : aogWriter.centroide(ring);
+
+    const ha = aogWriter.calcularHectareas(ring);
+
+    const fieldTxt    = aogWriter.generarFieldTxt({ nombre, origen: orig });
+    const boundaryTxt = aogWriter.generarBoundaryTxt({ rings: [ring] });
+    const kml         = aogWriter.generarKML({ nombre, ring });
+
+    const estabDB = getDB(slug);
+    const now     = Date.now();
+    const safeRel = nombre.replace(/[\\/:*?"<>|]/g, "_");
+
+    // 1) Doc lote_maestro.
+    await upsert(estabDB, loteId(nombre), {
+      tipo:         "lote_maestro",
+      nombre,
+      cultivo:      cultivo || null,
+      temporada:    temporada || null,
+      ha_estimadas: ha_estimadas != null ? ha_estimadas : Number(ha.toFixed(2)),
+      ha_calculadas: Number(ha.toFixed(2)),
+      tags:         Array.isArray(tags) ? tags : [],
+      notas:        notas || "",
+      origen:       orig,
+      boundary_geojson: { type: "Polygon", coordinates: [ring.map(([lat, lon]) => [lon, lat]).concat([[ring[0][1], ring[0][0]]])] },
+      creado_desde: "orbitx",
+      creado_por:   jwtUser?.uid ? `usr_${jwtUser.uid}` : "system",
+      created_at:   now,
+      updated_at:   now,
+    });
+
+    // 2) Docs aog_archivo (fuente de verdad cloud).
+    const archivos = [
+      { subtipo: "field_origin",  ruta_rel: `Fields/${safeRel}/Field.txt`,    nombre: "Field.txt",    contenido: fieldTxt },
+      { subtipo: "boundary",      ruta_rel: `Fields/${safeRel}/Boundary.txt`, nombre: "Boundary.txt", contenido: boundaryTxt },
+      { subtipo: "boundary_kml",  ruta_rel: `Fields/${safeRel}/boundary.kml`, nombre: "boundary.kml", contenido: kml },
+    ];
+
+    for (const a of archivos) {
+      const docId = `aog_${slug}_${a.ruta_rel.replace(/[/\\:*?"<>|]/g, "_")}`.slice(0, 200);
+      await upsert(estabDB, docId, {
+        tipo:        "aog_archivo",
+        ruta_rel:    a.ruta_rel,
+        nombre:      a.nombre,
+        subtipo:     a.subtipo,
+        es_lote:     true,
+        lote_nombre: nombre,
+        contenido:   a.contenido,
+        tamano:      Buffer.byteLength(a.contenido, "utf8"),
+        ts:          now,
+        creado_desde: "orbitx",
+        synced_at:   null,
+      });
+    }
+
+    // 3) Encolar descarga al device si fue indicado.
+    let encolados = 0;
+    if (device_id) {
+      // Validar que el device pertenezca a la org del usuario.
+      const globalDB = db.getDB("global");
+      const dev = await globalDB.get(`device_${device_id}`).catch(() => null);
+      const esSA = jwtUser?.rol_global === "superadmin";
+      if (!dev) return res.status(404).json({ error: "Dispositivo no encontrado" });
+      if (!esSA && dev.estab_slug !== slug)
+        return res.status(403).json({ error: "Ese tractor no es de tu organización" });
+
+      for (const a of archivos) {
+        await estabDB.insert({
+          _id:       `aog_descarga_${slug}_${now}_${a.subtipo}`,
+          tipo:      "aog_descarga_pendiente",
+          ruta_rel:  a.ruta_rel,
+          nombre:    a.nombre,
+          subtipo:   a.subtipo,
+          contenido: a.contenido,
+          device_id,
+          entregado: false,
+          ts:        now,
+          origen_creacion: "lote_creado_orbitx",
+          lote_nombre: nombre,
+        });
+        encolados++;
+      }
+
+      // Notif por socket si está conectado.
+      if (req.io) req.io.to(`maquina:${device_id}`).emit("lote:nuevo", { nombre, ts: now });
+    }
+
+    res.json({
+      ok:           true,
+      lote:         nombre,
+      ha_calculadas: Number(ha.toFixed(2)),
+      origen:       orig,
+      archivos:     archivos.length,
+      encolados,
+      device_id:    device_id || null,
+    });
+  } catch (e) {
+    console.error("[lotes-maestro/crear]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 

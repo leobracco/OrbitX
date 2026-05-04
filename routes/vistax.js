@@ -135,13 +135,18 @@ router.post("/sync", deviceAuth, async (req, res) => {
 router.get("/lotes", async (req, res) => {
   try {
     const estabDB = getEstabDB(req.user.estabSlug);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const skip  = Math.max(parseInt(req.query.skip)  || 0, 0);
+    const q     = (req.query.q || "").trim().toLowerCase();
 
+    // Solo metas (livianas), no traemos densidad/semillas (pesados).
+    estabDB.createIndex({ index: { fields: ["tipo", "subtipo"] } }).catch(() => {});
     const metas = await _findAll(estabDB, {
       tipo:    "vistax_archivo",
       subtipo: "vistax_meta",
-    });
+    }, 2000);
 
-    const lotes = metas.map(doc => {
+    let lotes = metas.map(doc => {
       let meta = {};
       try { meta = JSON.parse(doc.contenido); } catch {}
       return {
@@ -159,18 +164,46 @@ router.get("/lotes", async (req, res) => {
       };
     });
 
-    const geojsons = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_densidad" });
-    const semillas = await _findAll(estabDB, { tipo:"vistax_archivo", subtipo:"vistax_semillas" });
-    const geojsonIds = new Set(geojsons.map(d => d.lote_id).filter(Boolean));
-    const semillaIds = new Set(semillas.map(d => d.lote_id).filter(Boolean));
+    if (q) {
+      lotes = lotes.filter(l =>
+        (l.nombre  || "").toLowerCase().includes(q) ||
+        (l.cultivo || "").toLowerCase().includes(q)
+      );
+    }
+    lotes.sort((a, b) => (b.startTs || 0) - (a.startTs || 0));
 
-    lotes.forEach(l => {
-      l.tiene_densidad = geojsonIds.has(l.lote_id);
-      l.tiene_semillas = semillaIds.has(l.lote_id);
-    });
+    const total  = lotes.length;
+    const pagina = lotes.slice(skip, skip + limit);
 
-    res.json(lotes.sort((a, b) => (b.startTs || 0) - (a.startTs || 0)));
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    // Banderas tiene_densidad/tiene_semillas: pedimos SOLO los IDs de la página.
+    const ids = pagina.map(l => l.lote_id).filter(Boolean);
+    if (ids.length) {
+      try {
+        const [gj, se] = await Promise.all([
+          estabDB.find({
+            selector: { tipo: "vistax_archivo", subtipo: "vistax_densidad", lote_id: { $in: ids } },
+            fields:   ["lote_id"], limit: ids.length,
+          }).then(r => r.docs).catch(() => []),
+          estabDB.find({
+            selector: { tipo: "vistax_archivo", subtipo: "vistax_semillas", lote_id: { $in: ids } },
+            fields:   ["lote_id"], limit: ids.length,
+          }).then(r => r.docs).catch(() => []),
+        ]);
+        const setG = new Set(gj.map(d => d.lote_id).filter(Boolean));
+        const setS = new Set(se.map(d => d.lote_id).filter(Boolean));
+        pagina.forEach(l => {
+          l.tiene_densidad = setG.has(l.lote_id);
+          l.tiene_semillas = setS.has(l.lote_id);
+        });
+      } catch {}
+    }
+
+    // Compat: si no piden paginación, devolvemos array (como antes); si piden, objeto.
+    if (req.query.limit || req.query.skip || req.query.q) {
+      return res.json({ items: pagina, total, limit, skip });
+    }
+    res.json(pagina);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================================

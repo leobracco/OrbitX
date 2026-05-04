@@ -1,0 +1,98 @@
+<%# pages/firmwares.ejs — Gestión OTA de firmwares %>
+
+<div class="page-header">
+  <div>
+    <h2>Firmwares</h2>
+    <p>Catálogo de versiones por producto · OTA y logs de actualización</p>
+  </div>
+  <% if (isSA) { %>
+  <button class="btn btn-primary" onclick="abrirSubir()">⬆ Subir firmware</button>
+  <% } %>
+</div>
+
+<div id="fw-alert" class="alert" style="margin-bottom:14px"></div>
+
+<!-- Selector de producto -->
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px" id="fw-prods"></div>
+
+<!-- Catálogo -->
+<div class="card" style="margin-bottom:16px">
+  <div class="card-head"><span class="card-title" id="fw-titulo">Versiones disponibles</span></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Versión</th>
+          <th>Hash SHA256</th>
+          <th>Tamaño</th>
+          <th>Subido</th>
+          <th>Changelog</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="fw-rows"><tr><td colspan="6" class="loading"><span class="spinner"></span> Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Logs OTA -->
+<div class="card">
+  <div class="card-head"><span class="card-title">Historial de actualizaciones OTA</span></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th>Dispositivo</th>
+          <th>Producto</th>
+          <th>Versión</th>
+          <th>Resultado</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody id="fw-logs"><tr><td colspan="6" class="loading"><span class="spinner"></span> Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal subir -->
+<% if (isSA) { %>
+<div class="modal-backdrop" id="modal-subir">
+  <div class="modal" style="width:480px">
+    <div class="modal-title">Subir firmware</div>
+    <div class="modal-sub">Solo Agro Parallel puede subir firmwares</div>
+
+    <div class="form-grid">
+      <div class="field"><label>Producto</label>
+        <select id="up-producto">
+          <option value="VistaX">VistaX</option>
+          <option value="SoilX">SoilX</option>
+          <option value="SignalX">SignalX</option>
+          <option value="CowX">CowX</option>
+          <option value="QuantiX">QuantiX</option>
+          <option value="LineX">LineX</option>
+          <option value="SectionX">SectionX</option>
+          <option value="StormX">StormX</option>
+          <option value="CacaoIO">CacaoIO</option>
+          <option value="HBValvulas">HBValvulas</option>
+        </select>
+      </div>
+      <div class="field"><label>Versión (semver)</label><input id="up-version" placeholder="1.2.3"/></div>
+      <div class="field field-full"><label>Changelog</label>
+        <textarea id="up-changelog" rows="4" placeholder="Qué cambia en esta versión"></textarea>
+      </div>
+      <div class="field field-full"><label>Archivo .bin</label><input type="file" id="up-archivo" accept=".bin"/></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="cerrarSubir()">Cancelar</button>
+      <button class="btn btn-primary" onclick="subirFirmware()">Subir</button>
+    </div>
+  </div>
+</div>
+<% } %>
+
+<script>
+window.IS_SA = <%- isSA ? 'true' : 'false' %>;
+</script>
+<script src="/js/firmwares.js"></script>

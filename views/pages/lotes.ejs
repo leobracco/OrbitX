@@ -12,6 +12,82 @@
              padding:7px 12px;border-radius:8px;font-family:var(--font-b);font-size:13px;
              outline:none;width:200px"/>
     <a href="/lotes" class="btn">↻</a>
+    <button class="btn btn-primary" onclick="abrirCrearLote()">+ Crear lote</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- MODAL: crear lote (dibujar boundary y enviar a AOG)    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-crear">
+  <div class="modal" style="width:860px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;padding:0">
+
+    <div style="padding:16px 20px;border-bottom:1px solid var(--ap-border);display:flex;align-items:center;gap:12px">
+      <div class="modal-title" style="margin:0;flex:1">Crear lote</div>
+      <span id="cl-ha" style="font-size:12px;color:var(--ap-muted)">0 ha</span>
+      <button class="btn btn-sm btn-ghost" onclick="closeModal('modal-crear')">✕</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 320px;gap:0;flex:1;overflow:hidden">
+      <div style="position:relative;background:#000">
+        <div id="cl-mapa" style="height:100%;min-height:420px"></div>
+        <div style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.78);color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;line-height:1.6;pointer-events:none;max-width:280px">
+          🖱 Click para agregar puntos<br>
+          ↩ Click en el primer punto para cerrar<br>
+          ⌫ Doble click para borrar el último<br>
+          Buscá tu campo en el ícono 🔍
+        </div>
+      </div>
+
+      <div style="padding:18px;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--ap-border);overflow-y:auto">
+        <div id="cl-alert" class="alert"></div>
+
+        <div class="field">
+          <label>Nombre del lote</label>
+          <input type="text" id="cl-nombre" placeholder="Lote 12 / La Esperanza"/>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label>Cultivo</label>
+            <input type="text" id="cl-cultivo" placeholder="Soja"/>
+          </div>
+          <div class="field">
+            <label>Temporada</label>
+            <input type="text" id="cl-temporada" placeholder="2026/27"/>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Tags (separados por coma)</label>
+          <input type="text" id="cl-tags" placeholder="riego, nuevo"/>
+        </div>
+
+        <div class="field">
+          <label>Notas</label>
+          <textarea id="cl-notas" rows="2"
+            style="background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px 10px;border-radius:6px;font-size:12px;outline:none;resize:vertical"></textarea>
+        </div>
+
+        <div style="border-top:1px solid var(--ap-border);padding-top:12px;margin-top:6px">
+          <div style="font-size:11px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Enviar a AOG</div>
+          <div class="field">
+            <label>Tractor destino (opcional)</label>
+            <select id="cl-device">
+              <option value="">— Solo guardar en cloud —</option>
+            </select>
+          </div>
+          <p style="font-size:11px;color:var(--ap-muted);margin-top:6px;line-height:1.5">
+            Si elegís un tractor, OrbitX-Sync va a bajar Field.txt + Boundary.txt + KML al toque y aparece en AgOpenGPS al abrir el field.
+          </p>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:auto">
+          <button class="btn btn-ghost" onclick="clLimpiar()">Limpiar</button>
+          <button class="btn btn-primary" style="flex:1" onclick="clGuardar()">Guardar lote</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -231,6 +307,10 @@
 .capa-row:last-child { border-bottom:none; }
 </style>
 
+<!-- Leaflet (para el dibujo de boundary al crear lote) -->
+<link rel="stylesheet" href="/lib/leaflet/leaflet.min.css"/>
+<script src="/lib/leaflet/leaflet.min.js"></script>
+
 <script>
 // ── Estado ─────────────────────────────────────────────────
 let _lotes     = [];
@@ -250,19 +330,34 @@ const SUBTIPO_LABEL = {
   csv:'CSV',nota:'Nota',imagen:'Foto',otro:'Otro',
 };
 
-// ── Cargar lotes ──────────────────────────────────────────
-async function cargarLotes() {
+// ── Cargar lotes (paginado server-side) ────────────────────
+let _skip      = 0;
+let _limit     = 10;
+let _total     = 0;
+let _filtroQ   = "";
+let _filtroTO  = null;
+
+async function cargarLotes(reset = true) {
+  if (reset) { _skip = 0; _lotes = []; }
   try {
-    _lotes = await Auth.get('/api/lotes-maestro');
+    const params = new URLSearchParams({ limit: _limit, skip: _skip, lite: "1" });
+    if (_filtroQ) params.set("q", _filtroQ);
+    const r = await Auth.get(`/api/lotes-maestro?${params}`);
+
+    // Compat: si el endpoint viejo todavía devuelve array, lo aceptamos.
+    const items = Array.isArray(r) ? r : (r.items || []);
+    _total = Array.isArray(r) ? items.length : (r.total || items.length);
+
+    _lotes = reset ? items : _lotes.concat(items);
 
     // KPIs
-    document.getElementById('kpi-total').textContent = _lotes.length;
-    document.getElementById('kpi-aog').textContent   = _lotes.filter(l => l.aog?.tiene_boundary).length;
-    document.getElementById('kpi-vx').textContent    = _lotes.filter(l => l.vistax).length;
-    document.getElementById('kpi-capas').textContent = _lotes.reduce((s,l) => s + (l.capas_count||0), 0);
+    document.getElementById('kpi-total').textContent = _total;
+    document.getElementById('kpi-aog').textContent   = _lotes.filter(l => l.aog?.tiene_boundary).length + (reset ? '' : '+');
+    document.getElementById('kpi-vx').textContent    = _lotes.filter(l => l.vistax).length + (reset ? '' : '+');
+    document.getElementById('kpi-capas').textContent = '–';
 
     renderTabla(_lotes);
-  } catch(e) {
+  } catch (e) {
     document.getElementById('card-lotes').innerHTML =
       `<div class="alert error show" style="margin:16px">${e.message}</div>`;
   }
@@ -273,10 +368,11 @@ function renderTabla(lista) {
   if (!lista.length) {
     card.innerHTML = `<div class="empty-state" style="padding:50px">
       <span class="icon">🌾</span>
-      <p>Sin lotes sincronizados.<br>Instalá el agente en el tractor.</p>
+      <p>${_filtroQ ? 'Sin resultados para tu búsqueda.' : 'Sin lotes sincronizados.<br>Instalá el agente en el tractor.'}</p>
     </div>`;
     return;
   }
+  const hayMas = lista.length < _total;
 
   card.innerHTML = `
     <div class="table-wrap">
@@ -329,17 +425,27 @@ function renderTabla(lista) {
           </tr>`).join('')}
         </tbody>
       </table>
+      <div style="padding:14px;text-align:center;border-top:1px solid var(--ap-border)">
+        <span style="font-size:11px;color:var(--ap-muted);margin-right:12px">
+          Mostrando ${lista.length} de ${_total}
+        </span>
+        ${hayMas ? `<button class="btn btn-sm" onclick="cargarMasLotes()">Cargar 10 más →</button>` : ""}
+      </div>
     </div>`;
 }
 
+async function cargarMasLotes() {
+  _skip += _limit;
+  await cargarLotes(false);
+}
+
+// Búsqueda server-side con debounce.
 function filtrarLotes(q) {
-  if (!q.trim()) { renderTabla(_lotes); return; }
-  const filtered = _lotes.filter(l =>
-    l.nombre.toLowerCase().includes(q.toLowerCase()) ||
-    (l.cultivo||'').toLowerCase().includes(q.toLowerCase()) ||
-    (l.tags||[]).some(t => t.toLowerCase().includes(q.toLowerCase()))
-  );
-  renderTabla(filtered);
+  clearTimeout(_filtroTO);
+  _filtroTO = setTimeout(() => {
+    _filtroQ = q.trim();
+    cargarLotes(true);
+  }, 280);
 }
 
 // ── Abrir lote ────────────────────────────────────────────
@@ -649,4 +755,194 @@ async function analizarConIA() {
 }
 
 document.addEventListener('DOMContentLoaded', cargarLotes);
+
+// ═══════════════════════════════════════════════════════════
+// CREAR LOTE — modal con dibujo de boundary en mapa Leaflet
+// ═══════════════════════════════════════════════════════════
+let _clMapa = null, _clMarkers = [], _clPoly = null, _clPuntos = [];
+
+async function abrirCrearLote() {
+  // Reset
+  _clPuntos = [];
+  document.getElementById("cl-nombre").value    = "";
+  document.getElementById("cl-cultivo").value   = "";
+  document.getElementById("cl-temporada").value = "";
+  document.getElementById("cl-tags").value      = "";
+  document.getElementById("cl-notas").value     = "";
+  document.getElementById("cl-ha").textContent  = "0 ha";
+  document.getElementById("cl-alert").className = "alert";
+
+  openModal("modal-crear");
+
+  // Cargar dispositivos disponibles para el selector.
+  cargarDevicesCrearLote();
+
+  // Inicializar mapa después que el modal sea visible (Leaflet necesita el size).
+  setTimeout(() => initMapaCrearLote(), 50);
+}
+
+async function cargarDevicesCrearLote() {
+  const sel = document.getElementById("cl-device");
+  sel.innerHTML = '<option value="">— Solo guardar en cloud —</option>';
+  try {
+    const devs = await Auth.get("/api/devices");
+    (Array.isArray(devs) ? devs : []).forEach(d => {
+      const op = document.createElement("option");
+      op.value = d.device_id;
+      op.textContent = `${d.nombre || d.device_id}${d.online ? " · online" : ""}`;
+      sel.appendChild(op);
+    });
+  } catch {}
+}
+
+function initMapaCrearLote() {
+  if (_clMapa) {
+    _clMapa.invalidateSize();
+    clLimpiar();
+    return;
+  }
+  _clMapa = L.map("cl-mapa", { zoomControl: true }).setView([-34.6, -60.0], 6);
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Esri", maxNativeZoom: 17, maxZoom: 22 }
+  ).addTo(_clMapa);
+
+  // Buscador de ubicación (geocoder simple via Nominatim).
+  const buscador = L.control({ position: "topright" });
+  buscador.onAdd = () => {
+    const div = L.DomUtil.create("div");
+    div.innerHTML = `<input id="cl-buscar" placeholder="🔍 Buscar dirección…"
+      style="background:rgba(0,0,0,0.8);border:1px solid #555;color:#fff;padding:7px 10px;border-radius:6px;font-size:12px;width:220px;outline:none"/>`;
+    L.DomEvent.disableClickPropagation(div);
+    return div;
+  };
+  buscador.addTo(_clMapa);
+
+  setTimeout(() => {
+    const inp = document.getElementById("cl-buscar");
+    if (!inp) return;
+    inp.addEventListener("keydown", async e => {
+      if (e.key !== "Enter") return;
+      const q = inp.value.trim();
+      if (!q) return;
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`);
+        const j = await r.json();
+        if (j[0]) {
+          _clMapa.setView([parseFloat(j[0].lat), parseFloat(j[0].lon)], 16);
+        }
+      } catch {}
+    });
+  }, 100);
+
+  _clMapa.on("click", clOnClick);
+  _clMapa.on("dblclick", clBorrarUltimo);
+}
+
+function clOnClick(e) {
+  const punto = [e.latlng.lat, e.latlng.lng];
+
+  // Si el click está cerca del primer punto Y ya hay 3+, cerrar el polígono.
+  if (_clPuntos.length >= 3) {
+    const p0 = _clMapa.latLngToContainerPoint(_clPuntos[0]);
+    const pc = _clMapa.latLngToContainerPoint(e.latlng);
+    if (Math.hypot(pc.x - p0.x, pc.y - p0.y) < 14) {
+      clRedibujar(true);
+      return;
+    }
+  }
+
+  _clPuntos.push(punto);
+  clRedibujar();
+}
+
+function clBorrarUltimo() {
+  if (!_clPuntos.length) return;
+  _clPuntos.pop();
+  clRedibujar();
+}
+
+function clRedibujar(cerrado) {
+  _clMarkers.forEach(m => _clMapa.removeLayer(m));
+  _clMarkers = [];
+  if (_clPoly) { _clMapa.removeLayer(_clPoly); _clPoly = null; }
+
+  _clPuntos.forEach((p, i) => {
+    const m = L.circleMarker(p, {
+      radius: i === 0 ? 7 : 5,
+      color: i === 0 ? "#A4BA3E" : "#fff",
+      weight: 2, fillColor: i === 0 ? "#A4BA3E" : "#fff", fillOpacity: 1,
+    }).addTo(_clMapa);
+    _clMarkers.push(m);
+  });
+
+  if (_clPuntos.length >= 2) {
+    if (cerrado || _clPuntos.length >= 3) {
+      _clPoly = L.polygon(_clPuntos, {
+        color: "#A4BA3E", weight: 2, fillColor: "#A4BA3E", fillOpacity: 0.20,
+      }).addTo(_clMapa);
+    } else {
+      _clPoly = L.polyline(_clPuntos, { color: "#A4BA3E", weight: 2, dashArray: "4 6" }).addTo(_clMapa);
+    }
+  }
+
+  // Calcular hectáreas (shoelace en proyección equirectangular local).
+  let ha = 0;
+  if (_clPuntos.length >= 3) {
+    const meanLat = _clPuntos.reduce((s, p) => s + p[0], 0) / _clPuntos.length * Math.PI / 180;
+    const mLon = 111320 * Math.cos(meanLat);
+    const mLat = 110540;
+    let acc = 0;
+    for (let i = 0; i < _clPuntos.length; i++) {
+      const [lat1, lon1] = _clPuntos[i];
+      const [lat2, lon2] = _clPuntos[(i + 1) % _clPuntos.length];
+      acc += (lon1 * mLon * lat2 * mLat - lon2 * mLon * lat1 * mLat);
+    }
+    ha = Math.abs(acc / 2) / 10000;
+  }
+  document.getElementById("cl-ha").textContent = `${ha.toFixed(2)} ha · ${_clPuntos.length} puntos`;
+}
+
+function clLimpiar() {
+  _clPuntos = [];
+  clRedibujar();
+}
+
+async function clGuardar() {
+  const alert = document.getElementById("cl-alert");
+  alert.className = "alert";
+
+  const nombre    = document.getElementById("cl-nombre").value.trim();
+  const cultivo   = document.getElementById("cl-cultivo").value.trim();
+  const temporada = document.getElementById("cl-temporada").value.trim();
+  const tags      = document.getElementById("cl-tags").value.split(",").map(s => s.trim()).filter(Boolean);
+  const notas     = document.getElementById("cl-notas").value.trim();
+  const device_id = document.getElementById("cl-device").value;
+
+  if (!nombre) { alert.className = "alert error show"; alert.textContent = "Pasá el nombre del lote"; return; }
+  if (_clPuntos.length < 3) { alert.className = "alert error show"; alert.textContent = "Dibujá al menos 3 puntos"; return; }
+
+  try {
+    const r = await Auth.post("/api/lotes-maestro/crear", {
+      nombre,
+      boundary: _clPuntos,
+      cultivo: cultivo || null,
+      temporada: temporada || null,
+      tags,
+      notas,
+      device_id: device_id || null,
+    });
+
+    closeModal("modal-crear");
+    if (typeof toast === "function") {
+      toast("✓ Lote creado",
+            `${r.ha_calculadas} ha${r.encolados ? ` · enviado a ${r.device_id}` : ""}`,
+            "lime");
+    }
+    cargarLotes(true);
+  } catch (e) {
+    alert.className = "alert error show";
+    alert.textContent = e.message || "No pudimos guardar el lote";
+  }
+}
 </script>

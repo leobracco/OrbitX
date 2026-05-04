@@ -61,6 +61,10 @@ ecosystem.config.js.bak
 # (se guardan en CouchDB, no en el repo)
 aog_backups/
 
+# ── Firmwares OTA ──────────────────────────────────────
+# Los .bin son binarios grandes que se sirven desde disco; no van al repo.
+firmwares/
+
 # ── Coverage / test ────────────────────────────────────
 coverage/
 .nyc_output/

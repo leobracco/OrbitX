@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <%- include('partials/head', { title: invitacion ? `Invitación a ${invitacion.orgNombre}` : 'Invitación' }) %>
+</head>
+<body>
+
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;position:relative;z-index:1">
+  <div style="width:100%;max-width:440px;background:rgba(26,31,37,0.95);border:1px solid var(--ap-border);border-radius:14px;padding:32px;backdrop-filter:blur(20px)">
+
+    <!-- Logo -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+      <img src="/img/brand/favicon.png" alt="Agro Parallel" width="36" height="36" style="border-radius:7px"/>
+      <div style="line-height:1.1">
+        <div style="font-size:18px;font-weight:700;color:#fff">Orbit<span style="color:var(--ap-green)">X</span></div>
+        <div style="font-size:11px;color:var(--ap-muted)">por Agro Parallel</div>
+      </div>
+    </div>
+
+    <% if (error) { %>
+      <h2 style="font-size:18px;color:#fff;margin-bottom:8px;font-weight:700">No pudimos cargar la invitación</h2>
+      <p style="font-size:13px;color:var(--ap-muted);line-height:1.6;margin-bottom:18px"><%= error %></p>
+      <a href="/login" class="btn btn-primary" style="text-decoration:none">Ir al login</a>
+
+    <% } else { %>
+      <h2 style="font-size:18px;color:#fff;margin-bottom:6px;font-weight:700">Te invitaron a <%= invitacion.orgNombre %></h2>
+      <p style="font-size:13px;color:var(--ap-muted);margin-bottom:18px;line-height:1.6">
+        <b style="color:var(--ap-text)"><%= invitacion.invitadoPor || "Un admin" %></b> te sumó como
+        <span class="badge badge-lime" style="display:inline-block"><%= invitacion.rol_label || invitacion.rol %></span>
+      </p>
+
+      <div id="alert" class="alert" style="margin-bottom:14px"></div>
+
+      <div class="form-grid" style="grid-template-columns:1fr">
+        <div class="field"><label>Email</label>
+          <input type="email" id="email" value="<%= invitacion.emailDestino %>" readonly style="opacity:0.7"/>
+        </div>
+        <div class="field"><label>Tu nombre</label>
+          <input type="text" id="nombre" placeholder="Nombre y apellido"/>
+        </div>
+        <div class="field"><label>Contraseña</label>
+          <input type="password" id="pass" placeholder="Mínimo 8 caracteres"/>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" style="width:100%;margin-top:14px;justify-content:center" onclick="aceptar()">Aceptar invitación</button>
+      <p style="font-size:11px;color:var(--ap-muted);text-align:center;margin-top:12px">
+        El link vence el <%= new Date(invitacion.expira_at).toLocaleString("es-AR") %>
+      </p>
+    <% } %>
+  </div>
+</div>
+
+<script>
+async function aceptar() {
+  const nombre = document.getElementById("nombre").value.trim();
+  const pass   = document.getElementById("pass").value;
+  const alert  = document.getElementById("alert");
+  alert.className = "alert";
+
+  if (!nombre)         return showErr("Pasá tu nombre");
+  if (pass.length < 8) return showErr("La contraseña debe tener al menos 8 caracteres");
+
+  try {
+    const r = await fetch(`/api/auth/invitacion/<%= invitacion ? invitacion.token : '' %>/aceptar`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ nombre, password: pass, esNuevoUsuario: true }),
+    });
+    const j = await r.json();
+    if (!r.ok) return showErr(j.error || "No pudimos aceptar la invitación");
+
+    localStorage.setItem("orbitx_token", j.token);
+    document.cookie = `orbitx_token=${j.token};path=/;max-age=${30*24*3600};SameSite=Strict`;
+    window.location.href = "/dashboard";
+  } catch (e) {
+    showErr("Error de conexión: " + e.message);
+  }
+}
+function showErr(msg) {
+  const alert = document.getElementById("alert");
+  alert.textContent = msg;
+  alert.className = "alert error show";
+}
+</script>
+
+</body>
+</html>

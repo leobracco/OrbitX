@@ -353,6 +353,11 @@ async function seleccionarLote(nombreEnc, estabSlug) {
       }
 
       if (bounds.length) _mapa.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
+
+      // Avisar a OrbitNDVI con el boundary del lote (para análisis satelital).
+      if (typeof OrbitNDVI !== "undefined" && lote.boundary?.length > 2) {
+        OrbitNDVI.setLoteBoundary(lote.boundary, lote.nombre || _loteActual);
+      }
     }
 
     // Pill activo
@@ -998,6 +1003,7 @@ function limpiarMapa() {
   document.getElementById("panel-capas").style.display   = "none";
   document.getElementById("leyenda-capas").innerHTML     = "";
   document.getElementById("mapa-estado").textContent     = _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
+  if (typeof OrbitNDVI !== "undefined") OrbitNDVI.setLoteBoundary(null);
 }
 
 // ── Loading helpers ────────────────────────────────────────

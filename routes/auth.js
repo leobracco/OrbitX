@@ -7,8 +7,12 @@ const { ROLES, rolesQuePuedeAsignar } = require("../roles");
 // ── Registro self-service ────────────────────────────────────
 router.post("/registro", async (req, res) => {
   try {
-    await svc.iniciarRegistro(req.body);
-    res.json({ ok:true, mensaje:"Revisá tu email para verificar tu cuenta" });
+    const meta = {
+      ip:         req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
+      user_agent: req.headers["user-agent"] || null,
+    };
+    await svc.iniciarRegistro(req.body, meta);
+    res.json({ ok:true, mensaje:"Tu solicitud está siendo revisada por Agro Parallel" });
   } catch(e) { res.status(e.status||500).json({ error: e.message||"Error interno" }); }
 });
 
@@ -126,7 +130,11 @@ router.get("/invitacion/:token", async (req, res) => {
 
 router.post("/invitacion/:token/aceptar", async (req, res) => {
   try {
-    const r = await svc.aceptarInvitacion(req.params.token, req.body);
+    const meta = {
+      ip:         req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
+      user_agent: req.headers["user-agent"] || null,
+    };
+    const r = await svc.aceptarInvitacion(req.params.token, req.body, meta);
     res.json(r);
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });

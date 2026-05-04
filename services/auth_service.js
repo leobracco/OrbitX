@@ -7,6 +7,8 @@ const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 const crypto = require("crypto");
 const { ROLES, puedeInvitar } = require("../roles");
+const notifyAdmin = require("../lib/notify-admin");
+const emailLib    = require("../lib/email");
 
 const SECRET = process.env.JWT_SECRET || "orbitx-dev-secret";
 
@@ -98,7 +100,7 @@ async function getMemberships(uid) {
 // ════════════════════════════════════════════════════════════
 //  REGISTRO SELF-SERVICE
 // ════════════════════════════════════════════════════════════
-async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, org_ha, org_provincia, org_ciudad, org_lat, org_lon }) {
+async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, org_ha, org_provincia, org_ciudad, org_lat, org_lon }, meta = {}) {
   const req_ciudad = org_ciudad || "";
   const req_lat = parseFloat(org_lat) || null;
   const req_lon = parseFloat(org_lon) || null;
@@ -141,6 +143,22 @@ async function iniciarRegistro({ nombre, email, password, telefono, org_nombre, 
   });
 
   console.log(`[Auth] Registro pendiente: ${email} → ${org_nombre}`);
+
+  // Notificar al admin global por Telegram (no bloqueante).
+  notifyAdmin.notifyNewUser(
+    { nombre, email, telefono, org_nombre },
+    {
+      ip:         meta.ip || null,
+      user_agent: meta.user_agent || null,
+      estado:     "pendiente de aprobación",
+      via_invitacion: false,
+    }
+  ).catch(e => console.error("[Auth] notifyNewUser:", e.message));
+
+  // Mail al usuario: "recibimos tu solicitud" (no bloqueante).
+  emailLib.enviarRegistroRecibido({ nombre, email, org_nombre })
+    .catch(e => console.error("[Auth] enviarRegistroRecibido:", e.message));
+
   return { token, email, org_slug };
 }
 
@@ -212,6 +230,19 @@ async function aprobarRegistro(regToken, superadminUID) {
   await db.insert({ ...reg, estado: "aprobado", aprobado_por: superadminUID, updated_at: now });
 
   console.log(`[Auth] ✓ Aprobado: ${reg.org_slug} (owner: ${reg.uid_reservado})`);
+
+  // Mail al usuario: cuenta activa.
+  emailLib.enviarRegistroAprobado(
+    { nombre: reg.nombre, email: reg.email },
+    { nombre: reg.org_nombre, slug: reg.org_slug },
+  ).catch(e => console.error("[Auth] enviarRegistroAprobado:", e.message));
+
+  // Telegram al admin: nueva org aprobada.
+  notifyAdmin.notifyNewOrg(
+    { nombre: reg.org_nombre, slug: reg.org_slug, ha_total: reg.org_ha, provincia: reg.org_provincia, owner_uid: `usr_${reg.uid_reservado}` },
+    { owner_nombre: reg.nombre },
+  ).catch(() => {});
+
   return { uid: reg.uid_reservado, org_slug: reg.org_slug };
 }
 
@@ -220,6 +251,11 @@ async function rechazarRegistro(regToken, superadminUID, motivo) {
   const reg = await db.get(`reg_${regToken}`).catch(() => null);
   if (!reg) throw { status: 404, message: "Registro no encontrado" };
   await db.insert({ ...reg, estado: "rechazado", motivo_rechazo: motivo, updated_at: Date.now() });
+
+  emailLib.enviarRegistroRechazado(
+    { nombre: reg.nombre, email: reg.email, org_nombre: reg.org_nombre },
+    motivo,
+  ).catch(e => console.error("[Auth] enviarRegistroRechazado:", e.message));
 }
 
 // ════════════════════════════════════════════════════════════
@@ -288,6 +324,7 @@ async function crearInvitacion({ emailDestino, nombreDestino, orgSlug, rolAsigna
   let invitadorNombre = "";
   try { const inv = await db.get(invitadoPorUID); invitadorNombre = inv.nombre; } catch {}
 
+  const expira_at = now + 48 * 60 * 60 * 1000;
   await db.insert({
     _id: `inv_${token}`,
     tipo: "invitacion",
@@ -299,12 +336,23 @@ async function crearInvitacion({ emailDestino, nombreDestino, orgSlug, rolAsigna
     invitado_por_uid: invitadoPorUID,
     invitado_por_nombre: invitadorNombre,
     token, estado: "pendiente", uid_aceptante: null,
-    expira_at: now + 48 * 60 * 60 * 1000,
+    expira_at,
     aceptada_at: null, created_at: now
   });
 
   await registrarAudit(orgSlug, invitadoPorUID, "invitacion.crear", { email: emailDestino, rol: rolAsignado });
-  return { token, expira_at: now + 48 * 60 * 60 * 1000 };
+
+  // Mail al invitado.
+  emailLib.enviarInvitacion({
+    email_destino:        emailDestino,
+    orgNombre,
+    rol_asignado:         rolAsignado,
+    invitado_por_nombre:  invitadorNombre,
+    token,
+    expira_at,
+  }).catch(e => console.error("[Auth] enviarInvitacion:", e.message));
+
+  return { token, expira_at };
 }
 
 async function getInvitacion(token) {
@@ -319,7 +367,7 @@ async function getInvitacion(token) {
   return doc;
 }
 
-async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }) {
+async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }, meta = {}) {
   const db  = globalDB();
   const inv = await getInvitacion(token);
   const now = Date.now();
@@ -358,6 +406,20 @@ async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }) {
 
   await db.insert({ ...inv, estado: "aceptada", uid_aceptante: `usr_${uid}`, aceptada_at: now });
   await registrarAudit(inv.orgSlug, `usr_${uid}`, "invitacion.aceptar", { rol: inv.rol_asignado });
+
+  // Notificar al admin solo si es un usuario realmente nuevo en la plataforma.
+  if (esNuevoUsuario !== false) {
+    notifyAdmin.notifyNewUser(
+      { nombre: nombre || inv.email_destino, email: inv.email_destino, org_nombre: inv.orgNombre },
+      {
+        ip:         meta.ip || null,
+        user_agent: meta.user_agent || null,
+        estado:     `activo · rol ${inv.rol_asignado}`,
+        via_invitacion: true,
+        org_nombre: inv.orgNombre,
+      }
+    ).catch(e => console.error("[Auth] notifyNewUser invit:", e.message));
+  }
 
   const memberships = await getMemberships(uid);
   const jwtToken    = await signJWT(uid, inv.orgSlug, memberships);
@@ -453,10 +515,14 @@ async function getAuditLog(orgSlug, limit = 100) {
 async function solicitarReset(email) {
   const db   = globalDB();
   const user = await findUser(db, email);
-  if (!user) return; // Silencioso
+  if (!user) return; // Silencioso por seguridad (no revelar si el mail existe).
   const token = genToken(32);
   await db.insert({ ...user, reset_token: token, reset_token_exp: Date.now() + 3600000, updated_at: Date.now() });
-  console.log(`[Auth] Reset token para ${email}: ${token}`); // Log en dev, email en prod
+  console.log(`[Auth] Reset token para ${email}: ${token}`);
+
+  emailLib.enviarResetPassword({ nombre: user.nombre, email: user.email }, token)
+    .catch(e => console.error("[Auth] enviarResetPassword:", e.message));
+
   return token;
 }
 

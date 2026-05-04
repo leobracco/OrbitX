@@ -1,42 +1,61 @@
 // routes/ndvi.js
 // Proxy de tiles NDVI desde Copernicus Data Space (Sentinel Hub WMS).
-// El token OAuth2 se obtiene con las credenciales de CADA org, se cachea
-// en memoria por 10 minutos y se refresca automáticamente.
-// El frontend NUNCA ve el token de Copernicus — solo llama /api/ndvi/tile/...
+// Las credenciales son GLOBALES de Agro Parallel (configuradas en /config).
+// El token OAuth2 se cachea en memoria por su tiempo de vida.
 
-const router   = require('express').Router();
-const { getDB } = require('../services/couchdb');
-const { decrypt } = require('./integraciones');
+const router  = require("express").Router();
+const fs      = require("fs");
+const path    = require("path");
+const crypto  = require("crypto");
+const cfg     = require("../services/config_sistema");
+const indices = require("../lib/indices_satelitales");
 
-// Cache de tokens por org: { [estabSlug]: { token, expiresAt } }
-const tokenCache = new Map();
+// Cache global de token (todas las orgs comparten el mismo).
+let tokenCache = { token: null, expiresAt: 0 };
 
-// ── Obtener (o renovar) el token OAuth2 de Copernicus ────
-async function getCopernicusToken(estabSlug) {
-  const cached = tokenCache.get(estabSlug);
-  // Reutilizar si le quedan más de 30 segundos de vida
-  if (cached && cached.expiresAt > Date.now() + 30_000) {
-    return cached.token;
+// Cache en disco de imágenes NDVI por (geometría + fecha).
+// Cada imagen pesa ~50-200 KB y se reusa mucho — lo persistimos.
+const NDVI_CACHE_DIR = path.resolve(__dirname, "..", ".cache", "ndvi");
+function ensureCacheDir() { if (!fs.existsSync(NDVI_CACHE_DIR)) fs.mkdirSync(NDVI_CACHE_DIR, { recursive: true }); }
+function cacheKey(payload) {
+  return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+// Evalscript NDVI estándar (sale a vivir inline en el request — no depende del dashboard).
+const EVALSCRIPT_NDVI = `//VERSION=3
+function setup() {
+  return { input: [{ bands: ["B04", "B08", "dataMask"] }], output: { bands: 4 } };
+}
+function evaluatePixel(s) {
+  const ndvi = (s.B08 - s.B04) / (s.B08 + s.B04);
+  if (ndvi < 0.0)  return [0.05, 0.05, 0.05, s.dataMask];
+  if (ndvi < 0.2)  return [0.75, 0.75, 0.00, s.dataMask];
+  if (ndvi < 0.4)  return [0.60, 0.85, 0.20, s.dataMask];
+  if (ndvi < 0.6)  return [0.30, 0.70, 0.20, s.dataMask];
+  return                 [0.05, 0.45, 0.05, s.dataMask];
+}`;
+
+async function getCopernicusToken() {
+  if (tokenCache.token && tokenCache.expiresAt > Date.now() + 30_000)
+    return tokenCache.token;
+
+  const client_id     = await cfg.get("COPERNICUS_CLIENT_ID");
+  const client_secret = await cfg.get("COPERNICUS_CLIENT_SECRET");
+
+  if (!client_id || !client_secret) {
+    throw Object.assign(
+      new Error("Copernicus sin configurar — pedile a Agro Parallel que cargue las credenciales"),
+      { status: 402 }
+    );
   }
-
-  const db     = getDB('global');
-  const orgDoc = await db.get(`org_${estabSlug}`);
-  const coper  = orgDoc.integraciones?.copernicus;
-
-  if (!coper?.activo) {
-    throw Object.assign(new Error('Copernicus no configurado para esta org'), { status: 402 });
-  }
-
-  const client_id     = decrypt(coper.client_id);
-  const client_secret = decrypt(coper.client_secret);
 
   const r = await fetch(
-    'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token',
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
     {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      method:  "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body:    new URLSearchParams({
-        grant_type:    'client_credentials',
+        grant_type:    "client_credentials",
         client_id,
         client_secret,
       }),
@@ -44,20 +63,24 @@ async function getCopernicusToken(estabSlug) {
   );
 
   if (!r.ok) {
-    const err = await r.text().catch(() => '');
+    const err = await r.text().catch(() => "");
     throw Object.assign(
-      new Error(`Copernicus OAuth error ${r.status}: ${err}`),
+      new Error(`Copernicus OAuth ${r.status}: ${err.slice(0, 200)}`),
       { status: 502 }
     );
   }
 
   const data = await r.json();
-  tokenCache.set(estabSlug, {
+  tokenCache = {
     token:     data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
-  });
+  };
   return data.access_token;
 }
+
+// Invalidar cache cuando se cambian credenciales (lo llama config_sistema vía evento futuro;
+// por ahora se invalida solo cuando el token expira).
+function invalidarToken() { tokenCache = { token: null, expiresAt: 0 }; }
 
 // ── Conversión tile XYZ → BBOX EPSG:3857 ─────────────────
 function tileToBbox(z, x, y) {
@@ -68,35 +91,24 @@ function tileToBbox(z, x, y) {
   const west  = x       / Math.pow(2, z) * 360 - 180;
   const east  = (x + 1) / Math.pow(2, z) * 360 - 180;
   const lonToM = lon => lon * R * Math.PI / 180;
-  const latToM = n   => Math.log(Math.tan(Math.PI / 4 + Math.atan(Math.sinh(n)) / 2)) * R;
+  const latToM = nn  => Math.log(Math.tan(Math.PI / 4 + Math.atan(Math.sinh(nn)) / 2)) * R;
   return `${lonToM(west)},${latToM(n1)},${lonToM(east)},${latToM(n)}`;
 }
 
 // ══════════════════════════════════════════════════════════
 //  GET /api/ndvi/tile/:z/:x/:y
-//  Parámetros query opcionales:
-//    date     = YYYY-MM-DD  (default: hoy)
-//    opacity  = 0-1         (solo informativo para el cliente)
 // ══════════════════════════════════════════════════════════
-router.get('/tile/:z/:x/:y', async (req, res) => {
+router.get("/tile/:z/:x/:y", async (req, res) => {
   try {
-    const { estabSlug } = req.user;
-    const { z, x, y }  = req.params;
+    const { z, x, y } = req.params;
     const date = req.query.date || new Date().toISOString().slice(0, 10);
 
-    // Leer instance_id de esta org
-    const db          = getDB('global');
-    const orgDoc      = await db.get(`org_${estabSlug}`);
-    const coper       = orgDoc.integraciones?.copernicus;
-    if (!coper?.activo) {
-      return res.status(402).json({ error: 'Copernicus no configurado' });
-    }
-    const instance_id = decrypt(coper.instance_id);
+    const instance_id = await cfg.get("COPERNICUS_INSTANCE_ID");
+    if (!instance_id)
+      return res.status(402).json({ error: "Copernicus sin configurar" });
 
-    // Obtener token (con caché)
-    const token = await getCopernicusToken(estabSlug);
+    const token = await getCopernicusToken();
 
-    // Armar URL WMS de Sentinel Hub
     const bbox   = tileToBbox(z, x, y);
     const wmsUrl = [
       `https://sh.dataspace.copernicus.eu/ogc/wms/${instance_id}`,
@@ -109,78 +121,220 @@ router.get('/tile/:z/:x/:y', async (req, res) => {
       `&TRANSPARENT=true`,
       `&BBOX=${bbox}`,
       `&TIME=${date}/${date}`,
-    ].join('');
+    ].join("");
 
     const tileResp = await fetch(wmsUrl, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!tileResp.ok) {
-      console.error('[ndvi/tile] Sentinel Hub error:', tileResp.status);
-      return res.status(tileResp.status).json({ error: 'Error al obtener tile' });
+      const body = await tileResp.text().catch(() => "");
+      console.error("[ndvi/tile] Sentinel Hub error:", tileResp.status, "→", body.slice(0, 600).replace(/\s+/g, " "));
+      console.error("[ndvi/tile] URL:", wmsUrl);
+      return res.status(tileResp.status).json({
+        error:  "Sentinel Hub rechazó el tile",
+        status: tileResp.status,
+        detalle: body.slice(0, 400),
+      });
     }
 
-    // Cache de 1 hora — los tiles NDVI no cambian en el día
     const buffer = await tileResp.arrayBuffer();
-res.set('Content-Type', 'image/png');
-res.set('Cache-Control', 'public, max-age=3600');
-res.send(Buffer.from(buffer));
-
+    res.set("Content-Type",  "image/png");
+    res.set("Cache-Control", "public, max-age=3600");
+    res.send(Buffer.from(buffer));
   } catch (e) {
-    console.error('[ndvi/tile]', e.message);
+    console.error("[ndvi/tile]", e.message);
     res.status(e.status || 500).json({ error: e.message });
   }
 });
 
 // ══════════════════════════════════════════════════════════
-//  GET /api/ndvi/fechas-disponibles?bbox=minLng,minLat,maxLng,maxLat
-//  Devuelve las fechas de imágenes disponibles para un lote
+//  GET /api/ndvi/fechas-disponibles?bbox=...
 // ══════════════════════════════════════════════════════════
-router.get('/fechas-disponibles', async (req, res) => {
+router.get("/fechas-disponibles", async (req, res) => {
   try {
-    const { estabSlug } = req.user;
     const { bbox, dias = 90 } = req.query;
-    if (!bbox) return res.status(400).json({ error: 'bbox requerido' });
+    if (!bbox) return res.status(400).json({ error: "Hace falta el bbox" });
 
-    const token  = await getCopernicusToken(estabSlug);
+    const token  = await getCopernicusToken();
     const desde  = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
     const hasta  = new Date().toISOString().slice(0, 10);
-    const [minLng, minLat, maxLng, maxLat] = bbox.split(',');
+    const [minLng, minLat, maxLng, maxLat] = bbox.split(",");
 
-    const catalogUrl = 'https://sh.dataspace.copernicus.eu/api/v1/catalog/1.0.0/search';
-    const body = {
-      collections: ['sentinel-2-l2a'],
-      datetime:    `${desde}T00:00:00Z/${hasta}T23:59:59Z`,
-      bbox:        [parseFloat(minLng), parseFloat(minLat), parseFloat(maxLng), parseFloat(maxLat)],
-      limit:       50,
-      fields: { include: ['properties.datetime', 'properties.eo:cloud_cover'] }
-    };
-
-    const r = await fetch(catalogUrl, {
-      method:  'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type':  'application/json',
-      },
-      body: JSON.stringify(body),
+    const r = await fetch("https://sh.dataspace.copernicus.eu/api/v1/catalog/1.0.0/search", {
+      method:  "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        collections: ["sentinel-2-l2a"],
+        datetime:    `${desde}T00:00:00Z/${hasta}T23:59:59Z`,
+        bbox:        [parseFloat(minLng), parseFloat(minLat), parseFloat(maxLng), parseFloat(maxLat)],
+        limit:       50,
+        fields: { include: ["properties.datetime", "properties.eo:cloud_cover"] }
+      }),
     });
 
-    if (!r.ok) return res.status(r.status).json({ error: 'Error catalog Copernicus' });
+    if (!r.ok) return res.status(r.status).json({ error: "Error catalog Copernicus" });
 
     const data   = await r.json();
     const fechas = (data.features || [])
       .map(f => ({
         fecha:       f.properties.datetime?.slice(0, 10),
-        cloud_cover: Math.round(f.properties['eo:cloud_cover'] || 0),
+        cloud_cover: Math.round(f.properties["eo:cloud_cover"] || 0),
       }))
       .filter(f => f.fecha)
       .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
     res.json({ fechas });
   } catch (e) {
-    console.error('[ndvi/fechas]', e.message);
-    res.status(500).json({ error: e.message });
+    console.error("[ndvi/fechas]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
+// ══════════════════════════════════════════════════════════
+//  Sentinel Hub Process API — pide UNA imagen recortada al polígono.
+//  Mucho más eficiente que WMS tile-by-tile y NO requiere configurar
+//  un layer en el dashboard (el evalscript va inline en el body).
+// ══════════════════════════════════════════════════════════
+async function processAPI({ geometry, desde, hasta, width, height, evalscript, maxCloudCoverage }) {
+  const token = await getCopernicusToken();
+
+  const body = {
+    input: {
+      bounds: {
+        geometry,
+        properties: { crs: "http://www.opengis.net/def/crs/OGC/1.3/CRS84" },
+      },
+      data: [{
+        type: "sentinel-2-l2a",
+        dataFilter: {
+          timeRange:        { from: `${desde}T00:00:00Z`, to: `${hasta}T23:59:59Z` },
+          mosaickingOrder:  "leastCC",
+          maxCloudCoverage: maxCloudCoverage ?? 30,
+        },
+      }],
+    },
+    output: {
+      width:  width  || 1024,
+      height: height || 1024,
+      responses: [{ identifier: "default", format: { type: "image/png" } }],
+    },
+    evalscript: evalscript || EVALSCRIPT_NDVI,
+  };
+
+  const r = await fetch("https://sh.dataspace.copernicus.eu/api/v1/process", {
+    method:  "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type":  "application/json",
+      "Accept":        "image/png",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => "");
+    throw Object.assign(new Error(`Process API ${r.status}: ${txt.slice(0, 300)}`), { status: r.status });
+  }
+  return Buffer.from(await r.arrayBuffer());
+}
+
+// ══════════════════════════════════════════════════════════
+//  POST /api/ndvi/lote
+//  Body: {
+//    geometry: <GeoJSON Polygon en lon/lat>,
+//    date: "YYYY-MM-DD" (opcional; si no, usa últimos 30 días con leastCC),
+//    width: 1024, height: 1024 (opcional)
+//  }
+//  Devuelve: image/png recortada al polígono.
+// ══════════════════════════════════════════════════════════
+router.post("/lote", async (req, res) => {
+  try {
+    const { geometry, date, width, height, indice, evalscript, maxCloudCoverage } = req.body || {};
+    if (!geometry || !geometry.type)
+      return res.status(400).json({ error: "Pasá geometry con un GeoJSON válido" });
+
+    // Resolver evalscript: el del índice elegido > el inline custom > NDVI por default.
+    const claveIdx  = (indice || "ndvi").toLowerCase();
+    const finalEval = evalscript || (() => {
+      try { return indices.getEvalscript(claveIdx); }
+      catch { return EVALSCRIPT_NDVI; }
+    })();
+
+    const hasta = date || new Date().toISOString().slice(0, 10);
+    const desde = date || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
+    const key = cacheKey({ geometry, desde, hasta, width, height, indice: claveIdx, evalCustom: !!evalscript });
+    ensureCacheDir();
+    const cachePath = path.join(NDVI_CACHE_DIR, `${key}.png`);
+
+    if (fs.existsSync(cachePath)) {
+      res.set("Content-Type",  "image/png");
+      res.set("Cache-Control", "public, max-age=86400");
+      res.set("X-Cache",       "HIT");
+      res.set("X-Indice",      claveIdx);
+      fs.createReadStream(cachePath).pipe(res);
+      return;
+    }
+
+    const png = await processAPI({
+      geometry, desde, hasta,
+      width:  width  || 1024,
+      height: height || 1024,
+      evalscript: finalEval,
+      maxCloudCoverage,
+    });
+
+    fs.promises.writeFile(cachePath, png).catch(e => console.warn("[ndvi/lote] cache write:", e.message));
+
+    res.set("Content-Type",  "image/png");
+    res.set("Cache-Control", "public, max-age=86400");
+    res.set("X-Cache",       "MISS");
+    res.set("X-Indice",      claveIdx);
+    res.send(png);
+  } catch (e) {
+    console.error("[ndvi/lote]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// GET /api/ndvi/indices — catálogo de índices disponibles + leyenda.
+router.get("/indices", (req, res) => {
+  res.json({ indices: indices.catalogo() });
+});
+
+// ══════════════════════════════════════════════════════════
+//  GET /api/ndvi/lote/bbox  — devuelve el bbox del polígono (helper para Leaflet imageOverlay).
+//  Lo agregamos para que el frontend no tenga que recalcular.
+//  Acepta el polígono por query (encoded JSON) o body POST.
+// ══════════════════════════════════════════════════════════
+function calcularBbox(geom) {
+  const acc = { minLng: Infinity, maxLng: -Infinity, minLat: Infinity, maxLat: -Infinity };
+  function visitar(coords) {
+    if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+      const [lng, lat] = coords;
+      if (lng < acc.minLng) acc.minLng = lng;
+      if (lng > acc.maxLng) acc.maxLng = lng;
+      if (lat < acc.minLat) acc.minLat = lat;
+      if (lat > acc.maxLat) acc.maxLat = lat;
+    } else if (Array.isArray(coords)) {
+      coords.forEach(visitar);
+    }
+  }
+  visitar(geom.coordinates || []);
+  return acc;
+}
+
+router.post("/lote/bbox", (req, res) => {
+  try {
+    const { geometry } = req.body || {};
+    if (!geometry?.coordinates) return res.status(400).json({ error: "geometry inválida" });
+    res.json(calcularBbox(geometry));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Exponer helpers para reuso.
 module.exports = router;
+module.exports.invalidarToken = invalidarToken;
+module.exports.processAPI     = processAPI;
+module.exports.EVALSCRIPT_NDVI = EVALSCRIPT_NDVI;

@@ -1,8 +1,5 @@
 // public/js/auth.js
-// ════════════════════════════════════════════════
-//  OrbitX Auth Guard — incluir en index.html (dashboard)
-//  Redirige a /login si no hay token válido
-// ════════════════════════════════════════════════
+// OrbitX Auth Guard — redirige a /login si no hay token válido
 
 const Auth = (() => {
 

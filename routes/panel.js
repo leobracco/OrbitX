@@ -87,6 +87,38 @@ router.get("/logout", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
+// INVITACIÓN — landing pública para aceptar (link del mail)
+// ─────────────────────────────────────────────────────────
+router.get("/invitacion/:token", async (req, res) => {
+  const svc   = require("../services/auth_service");
+  const ROLES = require("../roles").ROLES;
+  let invitacion = null, error = null;
+  try {
+    const inv = await svc.getInvitacion(req.params.token);
+    invitacion = {
+      token:        inv.token,
+      orgNombre:    inv.orgNombre,
+      orgSlug:      inv.orgSlug,
+      rol:          inv.rol_asignado,
+      rol_label:    ROLES[inv.rol_asignado]?.label || inv.rol_asignado,
+      invitadoPor:  inv.invitado_por_nombre,
+      emailDestino: inv.email_destino,
+      expira_at:    inv.expira_at,
+    };
+  } catch (e) {
+    error = e.message || "Invitación no válida";
+  }
+  res.render("invitacion", { invitacion, error });
+});
+
+// ─────────────────────────────────────────────────────────
+// RESET PASSWORD — landing pública (link del mail)
+// ─────────────────────────────────────────────────────────
+router.get("/reset-password/:token", (req, res) => {
+  res.render("reset-password", { token: req.params.token });
+});
+
+// ─────────────────────────────────────────────────────────
 // DASHBOARD — filtrado por rol
 // ─────────────────────────────────────────────────────────
 router.get(["/", "/dashboard"], requireAuth, async (req, res) => {
@@ -187,6 +219,16 @@ router.get("/roles", requireAuth, requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────
 router.get("/grupos", requireAuth, requireAdmin, (req, res) => {
   res.render("layout", { ...base(req), title:"Grupos", page:"grupos" });
+});
+
+// ─────────────────────────────────────────────────────────
+// FIRMWARES — gestión OTA
+// owner/admin/SA pueden ver el catálogo. Solo SA sube/elimina.
+// ─────────────────────────────────────────────────────────
+router.get("/firmwares", requireAuth, requireAdmin, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Firmwares", page: "firmwares" });
 });
 
 // ─────────────────────────────────────────────────────────
@@ -355,18 +397,21 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
 // COUCHDB — solo superadmin
 // ─────────────────────────────────────────────────────────
 router.get("/couchdb", requireAuth, requireSuperadmin, async (req, res) => {
-  const couchInfo = { version:"–", dbs:0, docs:0, url:"–", dbList:[] };
+  const couchInfo = { version: "–", dbs: 0, docs: 0, url: "–", dbList: [] };
   try {
     const nano = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
     const info = await nano.info();
     const dbs  = await nano.db.list();
+    // Solo bases del producto OrbitX. Filtramos las internas de Couch (_users,
+    // _replicator, _global_changes) y cualquier otra base ajena al producto.
+    const dbList = dbs.filter(n => n.startsWith("orbitx_"));
     couchInfo.version = info.version;
-    couchInfo.dbs     = dbs.length;
-    couchInfo.dbList  = dbs;
+    couchInfo.dbs     = dbList.length;
+    couchInfo.dbList  = dbList;
     couchInfo.url     = (process.env.COUCHDB_URL || "").replace(/:\/\/.*@/, "://***@") || "http://localhost:5984";
-  } catch(e) { console.error("[Panel/couchdb]", e.message); }
-  const regBadge = await getRegBadge(req.app.locals.globalDB).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"CouchDB", page:"couchdb", couchInfo });
+  } catch (e) { console.error("[Panel/couchdb]", e.message); }
+  const regBadge = await getRegBadge(req.app.locals.globalDB).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "CouchDB", page: "couchdb", couchInfo });
 });
 
 // ─────────────────────────────────────────────────────────
@@ -433,53 +478,10 @@ function extraerNombreVehiculo(xmlStr, fallback) {
 }
 
 router.get("/vehiculos", requireAuth, async (req, res) => {
-  const db     = req.app.locals.globalDB;
-  const SA     = isSA(req);
-  const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
-  let vehiculos = [], vehiculosRaw = [];
-
-  try {
-    const nano = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
-    let slugs  = [];
-
-    if (SA) {
-      const docs = await getAllDocs(db);
-      slugs = docs.filter(d => d.tipo==="org").map(o => o.slug);
-    } else if (miSlug) {
-      slugs = [miSlug];
-    }
-
-    for (const slug of slugs) {
-      try {
-        const estabDB = nano.db.use(`orbitx_${slug}`);
-        const r = await estabDB.find({
-          selector: { tipo:"aog_archivo", subtipo:"vehicle_config" },
-          limit: 100,
-        });
-        const { parseVehicleXML, formatearVehiculo } = require("../services/aog_vehicle_parser");
-        r.docs.forEach(d => {
-          const raw    = parseVehicleXML(d.contenido);
-          const grupos = formatearVehiculo(raw) || [];
-          const nombre = extraerNombreVehiculo(d.contenido, d.nombre?.replace(/\.xml$/i,""));
-          vehiculos.push({
-            nombre,
-            nombre_archivo: d.nombre,
-            device_id:      d.device_id,
-            estab_slug:     slug,
-            ts:             d.ts,
-            ruta_rel:       d.ruta_rel,
-            grupos,
-          });
-          vehiculosRaw.push({ nombre_archivo:d.nombre, ruta_rel:d.ruta_rel||"" });
-        });
-      } catch {}
-    }
-
-    vehiculos.sort((a,b) => (b.ts||0) - (a.ts||0));
-  } catch(e) { console.error("[Panel/vehiculos]", e.message); }
-
-  const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Vehículos", page:"vehiculos", vehiculos, vehiculosRaw });
+  // Render vacío — los datos se cargan vía /api/aog/vehiculos con paginación.
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Vehículos", page: "vehiculos" });
 });
 
 // ─────────────────────────────────────────────────────────
@@ -559,8 +561,31 @@ router.get("/aog", requireAuth, (req, res) => res.redirect("/configuraciones"));
 // ─────────────────────────────────────────────────────────
 router.get("/config", requireAuth, requireSuperadmin, async (req, res) => {
   const db = req.app.locals.globalDB;
-  const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Configuración del sistema", page:"config" });
+  const regBadge = await getRegBadge(db).catch(() => 0);
+
+  const envVars = [
+    "PORT","COUCHDB_URL","JWT_SECRET","DEVICE_MASTER_TOKEN","ANTHROPIC_API_KEY",
+    "CORS_ORIGIN","BASE_URL","TELEGRAM_ADMIN_BOT_TOKEN","TELEGRAM_ADMIN_CHAT_ID",
+    "SMTP_HOST","SMTP_USER","SMTP_PASS","WHATSAPP_API_VERSION","FIRMWARE_DIR",
+  ];
+  const envSet = {};
+  envVars.forEach(v => { envSet[v] = !!process.env[v]; });
+
+  const config = {
+    port:      process.env.PORT || 4000,
+    nodeEnv:   process.env.NODE_ENV || "development",
+    corsOrigin:process.env.CORS_ORIGIN || "*",
+    couchUrl:  (process.env.COUCHDB_URL || "").replace(/:\/\/.*@/, "://***@") || "http://localhost:5984",
+    hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    envSet,
+  };
+
+  res.render("layout", {
+    ...base(req, { regBadge }),
+    title: "Configuración del sistema",
+    page:  "config",
+    config,
+  });
 });
 
 // ─────────────────────────────────────────────────────────

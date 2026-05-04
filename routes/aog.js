@@ -24,6 +24,112 @@ async function _upsert(estabDB, id, data) {
   await estabDB.insert({ _id:id, ...(rev?{_rev:rev}:{}), ...data });
 }
 
+// ══════════════════════════════════════════════════════════
+//  GET /api/aog/vehiculos?slug=&limit=&skip=&q=
+//  Lista paginada de configuraciones de vehículo (XML).
+//  Devuelve solo metadata + grupos parseados; el XML crudo se pide aparte.
+// ══════════════════════════════════════════════════════════
+function extraerNombreVehiculo(xmlStr, fallback) {
+  if (!xmlStr) return fallback || "Vehículo sin nombre";
+  try {
+    let m = xmlStr.match(/<Name[^>]*>\s*([^<]+)\s*<\/Name>/i);
+    if (m) return m[1].trim();
+    m = xmlStr.match(/\bName\s*=\s*"([^"]+)"/i);
+    if (m) {
+      const v = m[1].trim();
+      if (v.length > 2 && (!/^[a-z]/.test(v) || v.includes(" "))) return v;
+    }
+    m = xmlStr.match(/<Description[^>]*>\s*([^<]+)\s*<\/Description>/i);
+    if (m) return m[1].trim();
+    return fallback || "Vehículo sin nombre";
+  } catch { return fallback || "Vehículo sin nombre"; }
+}
+
+router.get("/vehiculos", async (req, res) => {
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const SA      = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+
+    const limit = Math.min(parseInt(req.query.limit) || 24, 100);
+    const skip  = Math.max(parseInt(req.query.skip)  || 0, 0);
+    const q     = (req.query.q || "").trim().toLowerCase();
+    const slugFiltro = req.query.slug || null;
+
+    // Slugs a recorrer.
+    let slugs = [];
+    if (slugFiltro) {
+      // Solo SA puede pedir un slug específico distinto al suyo.
+      if (!SA && slugFiltro !== miSlug)
+        return res.status(403).json({ error: "Sin acceso a esa organización" });
+      slugs = [slugFiltro];
+    } else if (SA) {
+      // Listar todas las DBs orbitx_*.
+      try {
+        const nano   = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
+        const allDBs = await nano.db.list();
+        slugs = allDBs.filter(n => n.startsWith("orbitx_") && n !== "orbitx_global").map(n => n.replace("orbitx_", ""));
+      } catch {}
+    } else if (miSlug) {
+      slugs = [miSlug];
+    }
+
+    // Traer metadata mínima de cada DB (sin el contenido XML).
+    let items = [];
+    for (const slug of slugs) {
+      try {
+        const estabDB = db.getDB(slug);
+        const r = await estabDB.find({
+          selector: { tipo: "aog_archivo", subtipo: "vehicle_config" },
+          fields:   ["_id", "nombre", "device_id", "ts", "ruta_rel"],
+          limit:    200,
+        });
+        r.docs.forEach(d => items.push({
+          _id:            d._id,
+          nombre_archivo: d.nombre,
+          device_id:      d.device_id,
+          estab_slug:     slug,
+          ts:             d.ts,
+          ruta_rel:       d.ruta_rel,
+        }));
+      } catch (e) { /* db sin docs, ignorar */ }
+    }
+
+    // Filtro y orden.
+    if (q) {
+      items = items.filter(v =>
+        (v.nombre_archivo || "").toLowerCase().includes(q) ||
+        (v.device_id      || "").toLowerCase().includes(q) ||
+        (v.estab_slug     || "").toLowerCase().includes(q)
+      );
+    }
+    items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    const total = items.length;
+    const pagina = items.slice(skip, skip + limit);
+
+    // Para los items de la página, traer el XML y parsear (es lo costoso).
+    const detalle = await Promise.all(pagina.map(async (it) => {
+      try {
+        const estabDB = db.getDB(it.estab_slug);
+        const doc     = await estabDB.get(it._id);
+        const raw     = parseVehicleXML(doc.contenido);
+        const grupos  = formatearVehiculo(raw) || [];
+        return {
+          ...it,
+          nombre: extraerNombreVehiculo(doc.contenido, doc.nombre?.replace(/\.xml$/i, "")),
+          grupos,
+        };
+      } catch { return { ...it, nombre: it.nombre_archivo, grupos: [] }; }
+    }));
+
+    res.json({ items: detalle, total, limit, skip });
+  } catch (e) {
+    console.error("[aog/vehiculos]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ══════════════════════════════════════════════════
 //  POST /api/aog/sync  — agente del tractor sube archivo
 // ══════════════════════════════════════════════════

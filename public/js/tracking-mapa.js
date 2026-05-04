@@ -7,7 +7,7 @@ let capaHistorial = null;  // L.polyline del historial
 let selectedDevice = null;
 let refreshTimer = null;
 
-const COLOR_MOVING  = "#B8FF3C";
+const COLOR_MOVING  = "#A4BA3E";
 const COLOR_STOPPED = "#3C9EFF";
 const COLOR_OFFLINE = "#555";
 const COLOR_TRAIL   = "#FFB03C";

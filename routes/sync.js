@@ -8,10 +8,12 @@ const agraria = require("../services/agraria");
 // También funciona como endpoint REST por si el tractor no usa PouchDB nativo
 router.post("/batch", async (req, res) => {
   const deviceId  = req.user.uid;
-  const estabSlug = req.headers["x-estab-slug"] || req.user.estabSlug;
+  // estabSlug autoritativo: viene de auth.required (doc del device o JWT del usuario).
+  // No confiamos en el header del cliente para esto.
+  const estabSlug = req.user.estabSlug;
 
   if (!estabSlug || estabSlug === "unknown")
-    return res.status(400).json({ error: "x-estab-slug header requerido" });
+    return res.status(400).json({ error: "El dispositivo no está asignado a ningún establecimiento" });
 
   const { payload } = req.body;
   if (!Array.isArray(payload) || payload.length === 0)

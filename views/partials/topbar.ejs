@@ -3,9 +3,117 @@
   <button class="hamburger" onclick="toggleSidebar()">☰</button>
   <h1 class="topbar-title"><%= title || 'Dashboard' %></h1>
   <div class="topbar-right">
+
+    <!-- Selector de organización activa -->
+    <div id="org-selector"
+      style="position:relative;display:flex;align-items:center;gap:6px;background:var(--ap-card);
+             border:1px solid var(--ap-border);border-radius:8px;padding:5px 10px 5px 12px;
+             font-size:12px;cursor:pointer;user-select:none"
+      onclick="toggleOrgDropdown(event)">
+      <span style="color:var(--ap-muted);font-size:10px;text-transform:uppercase;letter-spacing:1px">Org</span>
+      <span id="org-actual" style="color:var(--ap-text);font-weight:500">–</span>
+      <span id="org-arrow" style="color:var(--ap-muted);font-size:10px">▼</span>
+
+      <div id="org-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 4px);right:0;min-width:240px;
+               background:var(--ap-card);border:1px solid var(--ap-border);border-radius:8px;
+               box-shadow:0 12px 32px rgba(0,0,0,0.5);z-index:100;overflow:hidden">
+      </div>
+    </div>
+
     <span class="topbar-time" id="topbar-time"></span>
     <% if (typeof topbarActions !== 'undefined') { %>
       <%- topbarActions %>
     <% } %>
   </div>
 </header>
+
+<script>
+(function () {
+  let _membs = [];
+  let _orgActiva = "";
+
+  async function cargarOrgs() {
+    try {
+      const r = await fetch("/api/auth/me", {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` }
+      });
+      if (!r.ok) return;
+      const u = await r.json();
+      _membs = u.memberships || [];
+      _orgActiva = u.prefs?.org_activa || _membs[0]?.orgSlug || "";
+      pintar();
+    } catch {}
+  }
+
+  function pintar() {
+    const lbl = document.getElementById("org-actual");
+    const memb = _membs.find(m => m.orgSlug === _orgActiva);
+    if (lbl) lbl.textContent = memb?.orgSlug || _orgActiva || "—";
+
+    const dd = document.getElementById("org-dropdown");
+    if (!dd) return;
+    if (!_membs.length) {
+      dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Sin orgs disponibles</div>`;
+      return;
+    }
+    dd.innerHTML = _membs.map(m => {
+      const activa = m.orgSlug === _orgActiva;
+      return `
+        <div onclick="cambiarOrg('${m.orgSlug.replace(/'/g, "\\'")}')"
+          style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--ap-border-soft);transition:background .1s;${activa ? 'background:var(--ap-green-dim)' : ''}"
+          onmouseover="this.style.background='${activa ? 'var(--ap-green-dim)' : 'var(--ap-bg)'}'"
+          onmouseout="this.style.background='${activa ? 'var(--ap-green-dim)' : 'transparent'}'">
+          <div style="display:flex;align-items:center;gap:8px">
+            ${activa ? '<span style="color:var(--ap-green);font-size:14px">●</span>' : '<span style="width:14px"></span>'}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${m.orgSlug}</div>
+              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${m.rol}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  window.toggleOrgDropdown = function (e) {
+    e?.stopPropagation();
+    const dd = document.getElementById("org-dropdown");
+    const ar = document.getElementById("org-arrow");
+    const abierto = dd.style.display === "block";
+    dd.style.display = abierto ? "none" : "block";
+    if (ar) ar.textContent = abierto ? "▼" : "▲";
+  };
+
+  window.cambiarOrg = async function (slug) {
+    if (slug === _orgActiva) { document.getElementById("org-dropdown").style.display = "none"; return; }
+    try {
+      const r = await fetch("/api/auth/cambiar-org", {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}`
+        },
+        body: JSON.stringify({ orgSlug: slug }),
+      });
+      const j = await r.json();
+      if (!r.ok) { console.error(j); return; }
+      localStorage.setItem("orbitx_token", j.token);
+      document.cookie = `orbitx_token=${j.token};path=/;max-age=${30 * 24 * 3600};SameSite=Strict`;
+      window.location.reload();
+    } catch (e) { console.error(e); }
+  };
+
+  // Cerrar dropdown al click afuera.
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#org-selector")) {
+      const dd = document.getElementById("org-dropdown");
+      const ar = document.getElementById("org-arrow");
+      if (dd) dd.style.display = "none";
+      if (ar) ar.textContent = "▼";
+    }
+  });
+
+  document.addEventListener("DOMContentLoaded", cargarOrgs);
+})();
+</script>

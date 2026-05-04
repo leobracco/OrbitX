@@ -8,16 +8,14 @@
 <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;position:relative;z-index:1">
   <div style="width:100%;max-width:420px;background:rgba(13,18,32,0.9);border:1px solid var(--border2);border-radius:20px;padding:34px 30px;backdrop-filter:blur(20px)">
 
-    <!-- Logo -->
-    <div style="display:flex;align-items:center;gap:9px;margin-bottom:28px">
-      <svg width="32" height="32" viewBox="0 0 30 30" fill="none">
-        <circle cx="15" cy="15" r="3.5" fill="#B8FF3C"/>
-        <circle cx="15" cy="15" r="7" stroke="#B8FF3C" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5"/>
-        <ellipse cx="15" cy="15" rx="13" ry="5.5" stroke="#B8FF3C" stroke-width="1" opacity="0.65" transform="rotate(-25 15 15)"/>
-        <circle cx="22" cy="9" r="1.8" fill="#3C9EFF"/>
-      </svg>
-      <span style="font-family:var(--font-h);font-size:20px;font-weight:800;color:#fff">Orbit<em style="color:#B8FF3C;font-style:normal">X</em></span>
-      <span style="margin-left:auto;font-size:8px;padding:2px 6px;background:var(--lime-dim);color:var(--lime);border:1px solid rgba(184,255,60,0.2);border-radius:20px;font-family:var(--font-m);text-transform:uppercase;letter-spacing:1px">Cloud</span>
+    <!-- Logo Agro Parallel -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px">
+      <img src="/img/brand/favicon.png" alt="Agro Parallel" width="38" height="38" style="border-radius:8px"/>
+      <div style="line-height:1.1">
+        <div style="font-family:var(--ap-font);font-size:20px;font-weight:700;color:#fff">Orbit<em style="color:var(--ap-green);font-style:normal">X</em></div>
+        <div style="font-size:11px;color:var(--ap-muted);margin-top:2px;letter-spacing:0.3px">por Agro Parallel</div>
+      </div>
+      <span style="margin-left:auto;font-size:9px;padding:3px 8px;background:var(--ap-green-dim);color:var(--ap-green);border:1px solid rgba(164,186,62,0.25);border-radius:20px;text-transform:uppercase;letter-spacing:1px;font-weight:600">Cloud</span>
     </div>
 
     <!-- Tabs -->
@@ -99,10 +97,10 @@
     <!-- ── PENDIENTE ── -->
     <div id="view-pending" style="display:none;text-align:center;padding:8px 0">
       <div style="font-size:44px;margin-bottom:14px">📬</div>
-      <h2 style="font-family:var(--font-h);font-size:19px;color:#fff;margin-bottom:10px">¡Registro enviado!</h2>
-      <p style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px">
+      <h2 style="font-family:var(--ap-font);font-size:19px;color:#fff;margin-bottom:10px;font-weight:700">¡Listo, ya está!</h2>
+      <p style="font-size:13px;color:var(--ap-muted);line-height:1.6;margin-bottom:20px">
         Tu solicitud está siendo revisada por Agro Parallel.<br>
-        Te habilitaremos el acceso en menos de 24 horas.
+        Te habilitamos el acceso en menos de 24 horas.
       </p>
       <button class="submit-btn" onclick="switchTab('login')">Volver al login</button>
     </div>

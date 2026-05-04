@@ -10,13 +10,54 @@ function signToken(payload, expiresIn = "30d") {
 
 async function required(req, res, next) {
   const header = req.headers["authorization"] || "";
-  const token  = header.startsWith("Bearer ") ? header.slice(7) : null;
+  // Aceptamos token en header (Bearer), cookie (SSR) o query ?token=... (descargas en nueva tab).
+  const token  = header.startsWith("Bearer ")
+    ? header.slice(7)
+    : (req.cookies?.orbitx_token || req.query?.token || null);
 
   if (!token && req.headers["x-device-id"]) {
-    if (req.headers["x-auth-token"] !== DEVICE_TOKEN)
-      return res.status(401).json({ error: "Token de dispositivo inválido" });
-    req.user = { uid: req.headers["x-device-id"], rol: "device", rol_global: "device",
-                 estabSlug: req.headers["x-estab-slug"] || "unknown", memberships: [], isDevice: true };
+    const deviceId = req.headers["x-device-id"];
+    const sentTok  = req.headers["x-auth-token"];
+    if (!sentTok)
+      return res.status(401).json({ error: "Token de dispositivo requerido" });
+
+    // Validar contra el doc del device en CouchDB (si existe).
+    // Si no existe, solo aceptamos el master token legacy.
+    let estabSlug = "unknown";
+    try {
+      const globalDB = req.app.locals.globalDB;
+      if (globalDB) {
+        const doc = await globalDB.get(`device_${deviceId}`).catch(() => null);
+        if (doc) {
+          if (doc.bloqueado)
+            return res.status(403).json({ error: "Dispositivo bloqueado" });
+          // Token propio o, si todavía está con master, master token.
+          const tokenOk = doc.token === sentTok || (sentTok === DEVICE_TOKEN && (!doc.token || doc.token === DEVICE_TOKEN));
+          if (!tokenOk)
+            return res.status(401).json({ error: "Token de dispositivo inválido" });
+          // estab_slug autoritativo del doc, no del header.
+          estabSlug = doc.estab_slug || "unknown";
+        } else {
+          // Device no registrado: solo master token, queda con estab "unknown".
+          if (sentTok !== DEVICE_TOKEN)
+            return res.status(401).json({ error: "Dispositivo no registrado" });
+        }
+      } else if (sentTok !== DEVICE_TOKEN) {
+        return res.status(401).json({ error: "Token de dispositivo inválido" });
+      }
+    } catch (e) {
+      console.error("[auth.required/device]", e.message);
+      return res.status(500).json({ error: "Error validando dispositivo" });
+    }
+
+    req.user = {
+      uid:        deviceId,
+      rol:        "device",
+      rol_global: "device",
+      estabSlug,
+      memberships: [],
+      isDevice:    true,
+    };
     return next();
   }
 

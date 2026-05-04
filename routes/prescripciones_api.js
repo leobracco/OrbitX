@@ -11,9 +11,20 @@ router.post("/enviar", async (req, res) => {
   try {
     const { device_id, nombre, contenido, producto } = req.body;
     const estab = req.user?.estabSlug;
-    if (!estab) return res.status(400).json({ error: "Sin estab" });
+    if (!estab) return res.status(400).json({ error: "Necesitás una org activa" });
     if (!device_id || !contenido)
-      return res.status(400).json({ error: "device_id y contenido requeridos" });
+      return res.status(400).json({ error: "Hace falta device_id y contenido" });
+
+    // Verificar que el dispositivo destino pertenezca a la org del usuario.
+    // Sin esto, un usuario podría mandar prescripciones a tractores de otra org.
+    const globalDB = db.getDB("global");
+    const dev = await globalDB.get(`device_${device_id}`).catch(() => null);
+    if (!dev) return res.status(404).json({ error: "Dispositivo no encontrado" });
+    const esSA = req.user?.rol_global === "superadmin";
+    if (!esSA && dev.estab_slug !== estab)
+      return res.status(403).json({ error: "Ese tractor no es de tu organización" });
+    if (dev.bloqueado)
+      return res.status(409).json({ error: "El tractor está bloqueado" });
 
     const estabDB = db.getDB(estab);
     const now = Date.now();
@@ -48,7 +59,6 @@ router.get("/pendientes", async (req, res) => {
   try {
     const deviceId = req.headers["x-device-id"];
     const token    = req.headers["x-auth-token"];
-    const estab    = req.headers["x-estab-slug"];
 
     if (!deviceId || !token)
       return res.status(401).json({ error: "Auth requerida" });
@@ -56,11 +66,14 @@ router.get("/pendientes", async (req, res) => {
     const globalDB = db.getDB("global");
     let dev;
     try { dev = await globalDB.get(`device_${deviceId}`); }
-    catch { return res.status(401).json({ error: "Device no registrado" }); }
+    catch { return res.status(401).json({ error: "Dispositivo no registrado" }); }
     if (dev.token !== token)
       return res.status(401).json({ error: "Token inválido" });
+    if (dev.bloqueado)
+      return res.status(403).json({ error: "Dispositivo bloqueado" });
 
-    const slug = estab || dev.estab_slug;
+    // Slug autoritativo del doc — no confiar en el header del cliente.
+    const slug = dev.estab_slug;
     if (!slug) return res.json([]);
 
     const estabDB = db.getDB(slug);
@@ -92,7 +105,6 @@ router.get("/pendientes/:id/contenido", async (req, res) => {
   try {
     const deviceId = req.headers["x-device-id"];
     const token    = req.headers["x-auth-token"];
-    const estab    = req.headers["x-estab-slug"];
 
     if (!deviceId || !token)
       return res.status(401).json({ error: "Auth requerida" });
@@ -100,9 +112,14 @@ router.get("/pendientes/:id/contenido", async (req, res) => {
     const globalDB = db.getDB("global");
     let dev;
     try { dev = await globalDB.get(`device_${deviceId}`); }
-    catch { return res.status(401).json({ error: "Device no registrado" }); }
+    catch { return res.status(401).json({ error: "Dispositivo no registrado" }); }
+    if (dev.token !== token)
+      return res.status(401).json({ error: "Token inválido" });
+    if (dev.bloqueado)
+      return res.status(403).json({ error: "Dispositivo bloqueado" });
 
-    const slug = estab || dev.estab_slug;
+    const slug = dev.estab_slug;
+    if (!slug) return res.status(404).json({ error: "Dispositivo sin establecimiento" });
     const estabDB = db.getDB(slug);
     const doc = await estabDB.get(req.params.id);
 
