@@ -229,6 +229,41 @@ async function autenticarDevice(req) {
   return dev;
 }
 
+// GET /api/ota/catalogo — el agente del PC (OrbitX-Sync) pide el catálogo
+// completo de firmwares disponibles para mirror local LAN. Device-auth.
+// Query: producto (opcional). Devuelve la última versión + lista por producto.
+router.get("/catalogo", async (req, res) => {
+  try {
+    await autenticarDevice(req);
+    const db = couch.getDB("global");
+    const sel = { tipo: "firmware" };
+    if (req.query.producto) sel.producto = req.query.producto;
+
+    let docs = [];
+    try {
+      const r = await db.find({ selector: sel, limit: 500 });
+      docs = r.docs;
+    } catch {
+      const all = await db.list({ include_docs: true });
+      docs = all.rows.map(r => r.doc).filter(d =>
+        d && d.tipo === "firmware" && (!sel.producto || d.producto === sel.producto));
+    }
+
+    docs.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    // Solo metadata necesaria para el mirror.
+    res.json(docs.map(d => ({
+      producto:     d.producto,
+      version:      d.version,
+      hash_sha256:  d.hash_sha256,
+      tamano_bytes: d.tamano_bytes,
+      changelog:    d.changelog || "",
+      ts:           d.ts || d.created_at || 0,
+    })));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // GET /api/ota/pendiente — el device pregunta si tiene una OTA pendiente.
 router.get("/pendiente", async (req, res) => {
   try {

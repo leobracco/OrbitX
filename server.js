@@ -29,6 +29,7 @@ const routePrescripcionesAPI = require("./routes/prescripciones_api");
 const routeConfigSistema     = require("./routes/config_sistema");
 const routeOTA               = require("./routes/ota");
 const routeNotifOrg          = require("./routes/notif_org");
+const routeAgraria           = require("./routes/agraria_chat");
 let routeNDVI;
 try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] ndvi.js:", e.message); }
 
@@ -121,6 +122,7 @@ app.use("/api/prescripciones", (req, res, next) => {
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
+app.use("/api/agraria",        auth.required, routeAgraria);
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.
 // Resto (manifest, upload, disparar, logs) requiere JWT del panel.
 app.use("/api/ota", (req, res, next) => {
@@ -128,6 +130,7 @@ app.use("/api/ota", (req, res, next) => {
   const esDevicePath =
     req.path === "/pendiente" ||
     req.path === "/resultado" ||
+    req.path === "/catalogo" ||
     req.path.startsWith("/firmware/");
   if (esDevicePath && tieneDevHeader && !req.headers["authorization"]) return next();
   return auth.required(req, res, next);

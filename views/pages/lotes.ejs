@@ -337,25 +337,29 @@ let _total     = 0;
 let _filtroQ   = "";
 let _filtroTO  = null;
 
+let _hayMas = false;
 async function cargarLotes(reset = true) {
-  if (reset) { _skip = 0; _lotes = []; }
+  if (reset) { _skip = 0; _lotes = []; _hayMas = false; }
   try {
     const params = new URLSearchParams({ limit: _limit, skip: _skip, lite: "1" });
     if (_filtroQ) params.set("q", _filtroQ);
+    const t0 = Date.now();
     const r = await Auth.get(`/api/lotes-maestro?${params}`);
+    const ms = Date.now() - t0;
 
-    // Compat: si el endpoint viejo todavía devuelve array, lo aceptamos.
     const items = Array.isArray(r) ? r : (r.items || []);
-    _total = Array.isArray(r) ? items.length : (r.total || items.length);
+    _total      = Array.isArray(r) ? items.length : (r.total != null ? r.total : null);
+    _hayMas     = Array.isArray(r) ? false : !!r.hayMas;
 
     _lotes = reset ? items : _lotes.concat(items);
 
     // KPIs
-    document.getElementById('kpi-total').textContent = _total;
-    document.getElementById('kpi-aog').textContent   = _lotes.filter(l => l.aog?.tiene_boundary).length + (reset ? '' : '+');
-    document.getElementById('kpi-vx').textContent    = _lotes.filter(l => l.vistax).length + (reset ? '' : '+');
+    document.getElementById('kpi-total').textContent = _total != null ? _total : `${_lotes.length}+`;
+    document.getElementById('kpi-aog').textContent   = _lotes.filter(l => l.aog?.tiene_boundary).length;
+    document.getElementById('kpi-vx').textContent    = _lotes.filter(l => l.vistax).length;
     document.getElementById('kpi-capas').textContent = '–';
 
+    if (r.timings) console.log('[lotes] timings (ms):', r.timings, '· total:', ms);
     renderTabla(_lotes);
   } catch (e) {
     document.getElementById('card-lotes').innerHTML =
@@ -372,7 +376,7 @@ function renderTabla(lista) {
     </div>`;
     return;
   }
-  const hayMas = lista.length < _total;
+  const hayMas = (_total != null) ? (lista.length < _total) : _hayMas;
 
   card.innerHTML = `
     <div class="table-wrap">
@@ -427,7 +431,7 @@ function renderTabla(lista) {
       </table>
       <div style="padding:14px;text-align:center;border-top:1px solid var(--ap-border)">
         <span style="font-size:11px;color:var(--ap-muted);margin-right:12px">
-          Mostrando ${lista.length} de ${_total}
+          Mostrando ${lista.length}${_total != null ? ` de ${_total}` : ""}
         </span>
         ${hayMas ? `<button class="btn btn-sm" onclick="cargarMasLotes()">Cargar 10 más →</button>` : ""}
       </div>

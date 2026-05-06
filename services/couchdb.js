@@ -70,22 +70,89 @@ const DESIGN_DOC = {
     stats_densidad: {
       map: `function(doc){ if(doc.tipo==='densidad'){ doc.bajadas.forEach(function(b){ if(b.semillas_m>0) emit(doc.lote_id, b.semillas_m); }); } }`,
       reduce: `_stats`
+    },
+    // ─── Lotes maestros ordenados por fecha (paginación nativa, súper rápido) ──
+    // Para listar: query con descending:true, limit, skip.
+    lotes_maestros_por_fecha: {
+      map: `function(doc){
+        if (doc.tipo === "lote_maestro") {
+          emit(doc.updated_at || doc.created_at || 0, {
+            nombre:        doc.nombre,
+            cultivo:       doc.cultivo || null,
+            temporada:     doc.temporada || null,
+            ha_estimadas:  doc.ha_estimadas || null,
+            ha_calculadas: doc.ha_calculadas || null,
+            tags:          doc.tags || [],
+            origen:        doc.origen || null,
+            updated_at:    doc.updated_at || doc.created_at || 0
+          });
+        }
+      }`
+    },
+    // ─── Lotes AOG agrupados por nombre con reduce _count para nombres únicos.
+    // Para listar nombres únicos: group_level:1.
+    // Para flags de un lote: key:nombre, group:false, include_docs:false.
+    lotes_aog_por_nombre: {
+      map: `function(doc){
+        if (doc.tipo === "aog_archivo" && doc.es_lote && doc.lote_nombre) {
+          emit(doc.lote_nombre, { subtipo: doc.subtipo, ts: doc.ts || 0 });
+        }
+      }`,
+      reduce: `_count`
     }
   }
 };
 
+// Hash simple del contenido del design doc para detectar cambios y forzar update.
+const DESIGN_HASH = crypto.createHash("md5").update(JSON.stringify(DESIGN_DOC.views)).digest("hex").slice(0, 12);
+
 async function upsertDesignDoc(db) {
   try {
     const ex = await db.get(DESIGN_DOC._id);
-    await db.insert({ ...DESIGN_DOC, _rev: ex._rev });
-  } catch(e) {
-    if (e.error === "not_found") await db.insert(DESIGN_DOC);
+    // Solo reescribimos si las views cambiaron (evita reindex innecesario).
+    if (ex.design_hash !== DESIGN_HASH) {
+      await db.insert({ ...DESIGN_DOC, _rev: ex._rev, design_hash: DESIGN_HASH });
+    }
+  } catch (e) {
+    if (e.error === "not_found") await db.insert({ ...DESIGN_DOC, design_hash: DESIGN_HASH });
+  }
+}
+
+// Asegura que cualquier DB de org tenga el design doc cargado.
+// Se cachea por slug para no pegarle a Couch en cada request.
+const _designOk = new Set();
+async function ensureDesignOnOrg(slug) {
+  if (slug === "global" || _designOk.has(slug)) return;
+  try {
+    await upsertDesignDoc(getDB(slug));
+    _designOk.add(slug);
+  } catch (e) {
+    console.warn(`[CouchDB] design doc en ${slug}:`, e.message);
   }
 }
 
 async function bootstrap() {
   await ensureDB("global");
   await upsertDesignDoc(getDB("global"));
+
+  // Iterar todas las DBs orbitx_* existentes y subir el design doc actualizado.
+  // Idempotente: solo reescribe si el hash cambió.
+  try {
+    const dbs = await couch.db.list();
+    for (const name of dbs) {
+      if (!name.startsWith(PREFIX) || name === GLOBAL) continue;
+      const slug = name.replace(PREFIX, "");
+      try {
+        await upsertDesignDoc(getDB(slug));
+        _designOk.add(slug);
+      } catch (e) {
+        console.warn(`[CouchDB] design doc en ${slug}:`, e.message);
+      }
+    }
+    console.log(`[CouchDB] design doc actualizado en ${dbs.filter(n => n.startsWith(PREFIX) && n !== GLOBAL).length} DBs (hash ${DESIGN_HASH})`);
+  } catch (e) {
+    console.warn("[CouchDB] bootstrap design en orgs:", e.message);
+  }
 }
 
 async function bootstrapEstablecimiento(slug) {
@@ -256,6 +323,7 @@ async function countPendingSync(slug) {
 
 module.exports = {
   ping, bootstrap, bootstrapEstablecimiento,
+  ensureDesignOnOrg,
   getDB, getEstablecimientos, upsertEstablecimiento,
   getUsuario, getUsuarioPorEmail, upsertUsuario, updatePushToken,
   getLotes, getLote, upsertLote, cerrarLote, getResumenLote, getResumenDiario,

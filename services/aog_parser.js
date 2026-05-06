@@ -41,34 +41,63 @@ function relToLatLon(origen, x, y) {
 }
 
 // ── Boundary.txt → polígono ───────────────────────────────
-// $Boundary False False 354
-// x,y,heading  (metros relativos al origen)
+// Soporta dos formatos:
+//
+// Formato AOG legacy (header inline): "$Boundary False False 354"
+//   x,y,heading  (metros relativos al origen)
+//
+// Formato AOG v6 (multi-línea), también el que genera OrbitX:
+//   $Boundary
+//   True               ← outer/inner
+//   354                ← count
+//   lat,lon,0,0        ← coords ABSOLUTAS en grados decimales
 function parseBoundaryTxt(contenido, origen) {
   try {
-    const lines  = (contenido || "").trim().split(/\r?\n/);
-    const header = lines[0].trim().split(/\s+/);
-    if (!header[0]?.startsWith("$Boundary")) return null;
+    const lines  = (contenido || "").trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length || !lines[0].startsWith("$Boundary")) return null;
 
-    const nPoints = parseInt(header[3]) || 0;
+    // Detectar formato por el header.
+    const headerTokens = lines[0].split(/\s+/);
+    const esLegacy = headerTokens.length >= 4;
+
     const latLons = [];
 
-    for (let i = 1; i < lines.length && latLons.length < nPoints; i++) {
-      const p = lines[i].trim().split(",");
-      if (p.length >= 2) {
-        const x = parseFloat(p[0]);
-        const y = parseFloat(p[1]);
-        if (!isNaN(x) && !isNaN(y)) {
-          if (origen) {
-            latLons.push(relToLatLon(origen, x, y));
-          } else {
-            latLons.push([y, x]);
+    if (esLegacy) {
+      const nPoints = parseInt(headerTokens[3]) || 0;
+      for (let i = 1; i < lines.length && latLons.length < nPoints; i++) {
+        const p = lines[i].split(",");
+        if (p.length >= 2) {
+          const x = parseFloat(p[0]);
+          const y = parseFloat(p[1]);
+          if (!isNaN(x) && !isNaN(y)) {
+            latLons.push(origen ? relToLatLon(origen, x, y) : [y, x]);
+          }
+        }
+      }
+    } else {
+      // Formato v6: skip "True"/"False" lines, leer el primer entero solo, después coords lat/lon.
+      let i = 1;
+      // Saltar línea True/False (puede haber más de un ring; usamos el primero).
+      if (lines[i] === "True" || lines[i] === "False") i++;
+      const nPoints = parseInt(lines[i]);
+      if (isNaN(nPoints)) return null;
+      i++;
+      for (let leídos = 0; leídos < nPoints && i < lines.length; i++, leídos++) {
+        const p = lines[i].split(",");
+        if (p.length >= 2) {
+          const lat = parseFloat(p[0]);
+          const lon = parseFloat(p[1]);
+          if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+            latLons.push([lat, lon]);
           }
         }
       }
     }
 
-    if (!latLons.length) return null;
-    latLons.push(latLons[0]); // cerrar polígono
+    if (latLons.length < 3) return null;
+    // Cerrar polígono si hace falta.
+    const first = latLons[0], last = latLons[latLons.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) latLons.push(first);
     return latLons;
   } catch {
     return null;

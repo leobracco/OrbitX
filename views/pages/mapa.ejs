@@ -222,13 +222,21 @@ function initMapa() {
 
 // ── Lista liviana ──────────────────────────────────────────
 async function recargarLista() {
+  const t0 = performance.now();
   try {
     const estab = document.getElementById("filtro-estab")?.value || "";
     const url   = "/api/aog/lotes-mapa" + (estab ? "?estab=" + estab : "");
-    _lista      = await Auth.get(url);
+    console.groupCollapsed(`%c[MAPA] recargarLista()`, "color:#A4BA3E;font-weight:bold");
+    console.log("URL:", url);
+    _lista = await Auth.get(url);
+    const ms = (performance.now() - t0).toFixed(0);
+    console.log(`✓ ${_lista.length} lotes en ${ms}ms`);
+    if (_lista.length) console.log("Primeros 3:", _lista.slice(0, 3));
+    console.groupEnd();
     document.getElementById("mapa-estado").textContent =
       _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
-  } catch {
+  } catch (e) {
+    console.error("[MAPA] recargarLista FAIL:", e);
     document.getElementById("mapa-estado").textContent = "Error al cargar";
   }
 }
@@ -295,8 +303,11 @@ function cerrarDropdown() {
 
 // ── Seleccionar lote ───────────────────────────────────────
 async function seleccionarLote(nombreEnc, estabSlug) {
+  const t0 = performance.now();
   cerrarDropdown();
   _loteActual = decodeURIComponent(nombreEnc);
+  console.group(`%c[MAPA] seleccionarLote("${_loteActual}")`, "color:#A4BA3E;font-weight:bold");
+  console.log("estab:", estabSlug || "(none)");
   document.getElementById("lote-search").value = _loteActual;
 
   initMapa();
@@ -316,8 +327,12 @@ async function seleccionarLote(nombreEnc, estabSlug) {
   try {
     // 1. Cargar AOG base
     const qs   = `?lote=${nombreEnc}` + (estabSlug ? `&estab=${estabSlug}` : "");
+    const tFetch0 = performance.now();
     const data = await Auth.get("/api/aog/mapa" + qs);
+    console.log(`/api/aog/mapa → ${(performance.now() - tFetch0).toFixed(0)}ms · ${Array.isArray(data) ? data.length : "?"} lotes`);
     const lote = Array.isArray(data) ? data[0] : data;
+    if (lote) console.log("Lote parseado:", { nombre: lote.nombre, boundary: lote.boundary?.length, sections: lote.sections?.length, origen: !!lote.origen, estab: lote.estab_slug });
+    else      console.warn("Lote NO encontrado en /api/aog/mapa");
 
     const bounds = [];
 
@@ -375,8 +390,12 @@ async function seleccionarLote(nombreEnc, estabSlug) {
     // 2. Cargar capas externas del lote
     ocultarLoading();
     cargarCapasLote(nombreEnc, estabSlug);
+    console.log(`✓ total: ${(performance.now() - t0).toFixed(0)}ms`);
+    console.groupEnd();
 
-  } catch(e) {
+  } catch (e) {
+    console.error("[MAPA] seleccionarLote FAIL:", e);
+    console.groupEnd();
     toast("Error cargando lote", e.message, "red");
     document.getElementById("mapa-empty").style.display = "flex";
     ocultarLoading();
@@ -385,18 +404,21 @@ async function seleccionarLote(nombreEnc, estabSlug) {
 
 // ── Cargar capas externas (async, no bloquea) ─────────────
 async function cargarCapasLote(nombreEnc, estabSlug) {
+  const t0 = performance.now();
+  console.groupCollapsed(`%c[MAPA] cargarCapasLote("${decodeURIComponent(nombreEnc)}")`, "color:#3C9EFF;font-weight:bold");
   try {
     const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+    console.log(`/contexto → ${(performance.now() - t0).toFixed(0)}ms`);
+    console.log("contexto:", { aog: ctx.capas?.aog, vistax: ctx.capas?.vistax, externas_keys: Object.keys(ctx.capas?.externas || {}) });
     const externas = ctx.capas?.externas || {};
     const todasCapas = Object.entries(externas).flatMap(([subtipo, capas]) =>
       capas.map(c => ({ ...c, subtipo }))
     );
 
-    if (!todasCapas.length) return;
+    if (!todasCapas.length) { console.log("Sin capas externas"); console.groupEnd(); return; }
 
-    // Debug: confirmar que los datos llegaron
-    console.log("[VistaX/capas] Total capas:", todasCapas.length);
-    todasCapas.forEach((c,i) => console.log(`  [${i}] ${c.nombre} | texto:${!!c.contenido_texto} | b64:${!!c.base64}`));
+    console.log(`Total capas: ${todasCapas.length}`);
+    todasCapas.forEach((c, i) => console.log(`  [${i}] ${c.nombre} | subtipo:${c.subtipo} | texto:${!!c.contenido_texto} | b64:${!!c.base64}`));
 
     // Mostrar panel
     document.getElementById("panel-capas").style.display = "block";
@@ -475,8 +497,11 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
       }
     }
 
+    console.log(`✓ capas listas en ${(performance.now() - t0).toFixed(0)}ms`);
+    console.groupEnd();
   } catch(e) {
-    console.error("[cargarCapasLote] ERROR:", e.message, e);
+    console.error("[MAPA] cargarCapasLote FAIL:", e.message, e);
+    console.groupEnd();
     toast("Error cargando capas", e.message, "red");
   }
 }

@@ -26,6 +26,23 @@ async function upsert(estabDB, id, data) {
   await estabDB.insert({ _id: id, ...(rev ? { _rev: rev } : {}), ...data });
 }
 
+// ── Cache en memoria con TTL ─────────────────────────────
+// CouchDB es remoto (~400ms latencia base). Sin cache, una request a /lotes
+// hace 3 calls = 1.5-3s. Con cache de 60s, navegación es instantánea.
+const CACHE_TTL_MS = 60 * 1000;
+const _cache = new Map(); // key → { data, ts }
+
+function cacheGet(key) {
+  const e = _cache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > CACHE_TTL_MS) { _cache.delete(key); return null; }
+  return e.data;
+}
+function cacheSet(key, data) { _cache.set(key, { data, ts: Date.now() }); }
+function cacheInvalidate(slug) {
+  for (const key of _cache.keys()) if (key.startsWith(`${slug}::`)) _cache.delete(key);
+}
+
 // ── ID canónico del lote maestro ─────────────────────────
 function loteId(nombre) {
   return `lote_maestro_${nombre.replace(/[^a-zA-Z0-9\u00C0-\u024F]/g, "_").slice(0, 80)}`;
@@ -38,6 +55,8 @@ function loteId(nombre) {
 //  - Sin lite → comportamiento completo (más pesado).
 // ══════════════════════════════════════════════════════════
 router.get("/", async (req, res) => {
+  const tStart = Date.now();
+  const timings = {};
   try {
     const jwtUser = req.jwtUser || req.user;
     const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
@@ -48,65 +67,180 @@ router.get("/", async (req, res) => {
     const q     = (req.query.q || "").trim().toLowerCase();
     const lite  = req.query.lite === "1" || req.query.lite === "true";
 
+    // Cache hit: respuesta instantánea sin tocar CouchDB.
+    const cacheKey = `${slug}::lotes::${limit}::${skip}::${q}::${lite}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      res.set("X-Cache-Age", String(Math.floor((Date.now() - cached._ts) / 1000) + "s"));
+      return res.json({ ...cached, _cached: true });
+    }
+
+    // Asegurar que el design doc esté cargado en esta org (idempotente, cacheado).
+    await db.ensureDesignOnOrg(slug);
+
     const estabDB = getDB(slug);
 
-    // Asegurar índices Mango (idempotente, fast no-op si ya existen).
-    estabDB.createIndex({ index: { fields: ["tipo", "ts"] } }).catch(() => {});
-    estabDB.createIndex({ index: { fields: ["tipo", "es_lote"] } }).catch(() => {});
+    // Índices Mango como fallback si las vistas todavía no están indexadas.
+    estabDB.createIndex({ index: { fields: ["tipo", "updated_at"] } }).catch(() => {});
+    estabDB.createIndex({ index: { fields: ["tipo", "es_lote", "lote_nombre"] } }).catch(() => {});
 
-    // Lotes maestros (livianos, pocos por org).
-    const maestros = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
-
-    // Lotes AOG: solo los campos mínimos. Cap a 2000 docs (los más recientes ya alcanzan).
-    let aogDocsLight = [];
-    try {
-      const r = await estabDB.find({
-        selector: { tipo: "aog_archivo", es_lote: true },
-        fields:   ["lote_nombre", "subtipo", "ts"],
-        limit:    2000,
-      });
-      aogDocsLight = r.docs;
-    } catch {
-      const all = await findAll(estabDB, { tipo: "aog_archivo", es_lote: true }, 2000);
-      aogDocsLight = all.map(d => ({ lote_nombre: d.lote_nombre, subtipo: d.subtipo, ts: d.ts }));
-    }
-
-    const aogLotes = {};
-    aogDocsLight.forEach(d => {
-      const n = d.lote_nombre || "?";
-      if (!aogLotes[n]) aogLotes[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
-      if (d.subtipo === "boundary" || d.subtipo === "boundary_kml") aogLotes[n].tiene_boundary = true;
-      if (d.subtipo === "sections_coverage")                         aogLotes[n].tiene_sections = true;
-      if (d.subtipo === "field_origin")                              aogLotes[n].tiene_origen   = true;
-      if ((d.ts || 0) > aogLotes[n].ts)                              aogLotes[n].ts = d.ts;
-      aogLotes[n].archivos++;
-    });
-
-    // Construir set unificado de nombres de lote.
-    const nombresMaestros = new Set(maestros.map(m => m.nombre));
-    const todosNombres = new Set([...nombresMaestros, ...Object.keys(aogLotes)]);
-
-    // Aplicar búsqueda + sort por ts_ultimo descendente.
     let lista = [];
-    for (const nombre of todosNombres) {
-      const m   = maestros.find(x => x.nombre === nombre);
-      const aog = aogLotes[nombre] || null;
-      const tsUltimo = Math.max(m?.updated_at || 0, aog?.ts || 0);
-      lista.push({ nombre, m, aog, tsUltimo });
-    }
+    let total = 0;
 
     if (q) {
-      lista = lista.filter(it =>
+      // Modo búsqueda: necesitamos todos los nombres para filtrar. Más caro.
+      const t0 = Date.now();
+      const maestros = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
+      timings.maestros_full = Date.now() - t0;
+
+      const t1 = Date.now();
+      let aogDocsLight = [];
+      try {
+        const r = await estabDB.find({
+          selector: { tipo: "aog_archivo", es_lote: true },
+          fields:   ["lote_nombre", "subtipo", "ts"],
+          limit:    2000,
+        });
+        aogDocsLight = r.docs;
+      } catch {}
+      timings.aog_full = Date.now() - t1;
+
+      const aogLotes = {};
+      aogDocsLight.forEach(d => {
+        const n = d.lote_nombre || "?";
+        if (!aogLotes[n]) aogLotes[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
+        if (d.subtipo === "boundary" || d.subtipo === "boundary_kml") aogLotes[n].tiene_boundary = true;
+        if (d.subtipo === "sections_coverage")                         aogLotes[n].tiene_sections = true;
+        if (d.subtipo === "field_origin")                              aogLotes[n].tiene_origen   = true;
+        if ((d.ts || 0) > aogLotes[n].ts)                              aogLotes[n].ts = d.ts;
+        aogLotes[n].archivos++;
+      });
+
+      const nombresMaestros = new Set(maestros.map(m => m.nombre));
+      const todos = new Set([...nombresMaestros, ...Object.keys(aogLotes)]);
+      lista = [...todos].map(nombre => {
+        const m = maestros.find(x => x.nombre === nombre);
+        const aog = aogLotes[nombre] || null;
+        return { nombre, m, aog, tsUltimo: Math.max(m?.updated_at || 0, aog?.ts || 0) };
+      }).filter(it =>
         it.nombre.toLowerCase().includes(q) ||
         (it.m?.cultivo || "").toLowerCase().includes(q) ||
         (it.m?.tags || []).some(t => String(t).toLowerCase().includes(q))
       );
+      lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+      total = lista.length;
+
+    } else {
+      // Modo sin búsqueda: usar VISTAS NATIVAS de CouchDB.
+      // 1) Lotes maestros ordenados por fecha desc, paginación nativa.
+      const t0 = Date.now();
+      let docsMaestros = [];
+      try {
+        const r = await estabDB.view("orbitx", "lotes_maestros_por_fecha", {
+          descending: true,
+          limit, skip,
+          include_docs: false,
+          reduce: false,
+        });
+        docsMaestros = (r.rows || []).map(row => ({
+          _id:          row.id,
+          nombre:       row.value.nombre,
+          cultivo:      row.value.cultivo,
+          temporada:    row.value.temporada,
+          ha_estimadas: row.value.ha_estimadas,
+          ha_calculadas:row.value.ha_calculadas,
+          tags:         row.value.tags,
+          origen:       row.value.origen,
+          updated_at:   row.value.updated_at,
+        }));
+      } catch (e) {
+        // Fallback Mango si la vista no está construida todavía.
+        console.warn("[lotes-maestro] view fallback:", e.message);
+        try {
+          const r = await estabDB.find({
+            selector: { tipo: "lote_maestro", updated_at: { $gte: 0 } },
+            sort:     [{ updated_at: "desc" }],
+            limit, skip,
+          });
+          docsMaestros = r.docs;
+        } catch {
+          const fb = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
+          fb.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+          docsMaestros = fb.slice(skip, skip + limit);
+        }
+      }
+      timings.maestros = Date.now() - t0;
+
+      lista = docsMaestros.map(m => ({
+        nombre: m.nombre,
+        m,
+        aog:   null,
+        tsUltimo: m.updated_at || 0,
+      }));
+
+      // 2) Sumar lotes AOG sin maestro SOLO en la primera página, con vista group:1.
+      if (skip === 0) {
+        const t1 = Date.now();
+        let nombresAOG = [];
+        try {
+          const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
+            group_level: 1,
+          });
+          nombresAOG = (r.rows || []).map(row => row.key).filter(Boolean);
+        } catch (e) {
+          console.warn("[lotes-maestro] view AOG fallback:", e.message);
+        }
+        timings.aog_unicos = Date.now() - t1;
+
+        // 3) Para los lotes de la página + los AOG-sin-maestro, traer flags por vista.
+        const yaMaestros = new Set(lista.map(x => x.nombre));
+        const aogSinMaestro = nombresAOG.filter(n => !yaMaestros.has(n)).slice(0, 100);
+        const todosNombres = [...lista.map(x => x.nombre), ...aogSinMaestro];
+
+        if (todosNombres.length) {
+          const t2 = Date.now();
+          try {
+            const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
+              keys: todosNombres,
+              reduce: false,
+            });
+            const flags = {};
+            (r.rows || []).forEach(row => {
+              const n = row.key;
+              const subtipo = row.value?.subtipo;
+              const ts      = row.value?.ts || 0;
+              if (!flags[n]) flags[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
+              if (subtipo === "boundary" || subtipo === "boundary_kml") flags[n].tiene_boundary = true;
+              if (subtipo === "sections_coverage")                       flags[n].tiene_sections = true;
+              if (subtipo === "field_origin")                            flags[n].tiene_origen   = true;
+              if (ts > flags[n].ts) flags[n].ts = ts;
+              flags[n].archivos++;
+            });
+
+            // Asignar flags a la lista.
+            lista.forEach(it => { if (flags[it.nombre]) it.aog = flags[it.nombre]; });
+
+            // Sumar lotes AOG sin maestro.
+            for (const nombre of aogSinMaestro) {
+              const aog = flags[nombre];
+              if (aog) lista.push({ nombre, m: null, aog, tsUltimo: aog.ts || 0 });
+            }
+            lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+          } catch (e) { console.warn("[lotes-maestro] view flags:", e.message); }
+          timings.aog_flags = Date.now() - t2;
+        }
+      }
+
+      total = null;  // se usa hayMas
     }
 
-    lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+    const hayMas = q
+      ? (skip + limit < lista.length)
+      : (lista.length >= limit); // si vino lleno, asumimos que hay más
+    const pagina = q ? lista.slice(skip, skip + limit) : lista.slice(0, limit);
 
-    const total = lista.length;
-    const pagina = lista.slice(skip, skip + limit);
+    timings.total = Date.now() - tStart;
 
     // Modo lite: armar el resultado solo con maestro + aog (sin parsear capas/vistax).
     if (lite) {
@@ -121,7 +255,10 @@ router.get("/", async (req, res) => {
         aog,
         ts_ultimo:     tsUltimo,
       }));
-      return res.json({ items: resultado, total, limit, skip });
+      const payload = { items: resultado, total, limit, skip, hayMas, timings, _ts: Date.now() };
+      cacheSet(cacheKey, payload);
+      res.set("X-Cache", "MISS");
+      return res.json(payload);
     }
 
     // Modo completo: solo para los lotes de la página, traemos vistax + capas.
@@ -187,7 +324,10 @@ router.get("/", async (req, res) => {
       };
     });
 
-    res.json({ items: resultado, total, limit, skip });
+    const payload = { items: resultado, total, limit, skip, hayMas, timings, _ts: Date.now() };
+    cacheSet(cacheKey, payload);
+    res.set("X-Cache", "MISS");
+    res.json(payload);
 
   } catch (e) {
     console.error("[lotes-maestro/list]", e.message);
@@ -543,6 +683,7 @@ router.post("/crear", async (req, res) => {
       if (req.io) req.io.to(`maquina:${device_id}`).emit("lote:nuevo", { nombre, ts: now });
     }
 
+    cacheInvalidate(slug);
     res.json({
       ok:           true,
       lote:         nombre,

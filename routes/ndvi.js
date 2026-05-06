@@ -333,8 +333,132 @@ router.post("/lote/bbox", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ══════════════════════════════════════════════════════════
+//  Sentinel Hub Statistical API — devuelve min/max/mean/stDev + histograma
+//  de un índice sobre un polígono, sin descargar imagen.
+// ══════════════════════════════════════════════════════════
+// Asegura orientación counter-clockwise del outer ring (GeoJSON spec).
+// Sentinel Hub algunas veces rechaza polígonos clockwise.
+function asegurarCCW(geom) {
+  if (geom?.type !== "Polygon" || !Array.isArray(geom.coordinates?.[0])) return geom;
+  const ring = geom.coordinates[0];
+  // Shoelace: si > 0 es clockwise (en proyección lon/lat), invertir.
+  let acc = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    acc += (ring[i + 1][0] - ring[i][0]) * (ring[i + 1][1] + ring[i][1]);
+  }
+  if (acc > 0) {
+    return { ...geom, coordinates: [ring.slice().reverse(), ...geom.coordinates.slice(1)] };
+  }
+  return geom;
+}
+
+async function statsAPI({ geometry, desde, hasta, indice = "ndvi", evalscript, maxCloudCoverage }) {
+  const token = await getCopernicusToken();
+
+  geometry = asegurarCCW(geometry);
+
+  let evalUsado = evalscript;
+  if (!evalUsado) {
+    try { evalUsado = indices.getEvalscriptStats(indice); }
+    catch { evalUsado = indices.getEvalscriptStats("ndvi"); }
+  }
+
+  // Bucket POR DÍA: con mosaicking SIMPLE (default), SH busca una imagen por
+  // bucket. Si pongo P30D y solo hay imagen el día 12, el bucket completo queda
+  // vacío. Con P1D tenemos un bucket cada día: los días con imagen vienen con
+  // datos. Después tomamos el más reciente con datos.
+  const body = {
+    input: {
+      bounds: { geometry, properties: { crs: "http://www.opengis.net/def/crs/OGC/1.3/CRS84" } },
+      data: [{
+        type: "sentinel-2-l2a",
+        dataFilter: {
+          maxCloudCoverage: maxCloudCoverage ?? 30,
+        },
+      }],
+    },
+    aggregation: {
+      timeRange:           { from: `${desde}T00:00:00Z`, to: `${hasta}T23:59:59Z` },
+      aggregationInterval: { of: "P1D" },
+      // CRS84 usa grados. ~11m a 38°lat ≈ 0.0001° (resolución nativa S2).
+      resx:                0.0001,
+      resy:                0.0001,
+      evalscript:          evalUsado,
+    },
+    calculations: {
+      default: {
+        statistics: { default: { percentiles: { k: [10, 50, 90] } } },
+        // Histograms omitidos: requieren matchear sampleType (FLOAT32 vs int)
+        // y para el análisis nos alcanza con mean/min/max/percentiles.
+      },
+    },
+  };
+
+  const r = await fetch("https://sh.dataspace.copernicus.eu/api/v1/statistics", {
+    method:  "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type":  "application/json",
+      "Accept":        "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => "");
+    throw Object.assign(new Error(`Statistical API ${r.status}: ${txt.slice(0, 300)}`), { status: r.status });
+  }
+  const json = await r.json();
+
+  // Log detallado SIEMPRE para diagnosticar (sacar después).
+  const ok = !!(json.data && json.data.length);
+  console.log(`[NDVI-DEBUG ${indice}] HTTP ${r.status} · ok=${ok} · timeRange ${desde}→${hasta} · maxCC=${maxCloudCoverage}`);
+  if (!ok) {
+    console.log(`[NDVI-DEBUG ${indice}] body req:`, JSON.stringify({
+      geometry: { type: geometry.type, n: geometry.coordinates?.[0]?.length },
+      aggregationInterval: body.aggregation.aggregationInterval,
+      data: body.input.data,
+      output: evalUsado.match(/output:\s*\[([\s\S]*?)\]/)?.[1]?.replace(/\s+/g, " ").slice(0, 200),
+    }));
+    console.log(`[NDVI-DEBUG ${indice}] resp:`, JSON.stringify(json).slice(0, 800));
+  }
+  return json;
+}
+
+// POST /api/ndvi/lote/stats — atajo para el frontend (y para agrarIA).
+router.post("/lote/stats", async (req, res) => {
+  try {
+    const { geometry, indice = "ndvi", desdeDias = 30 } = req.body || {};
+    if (!geometry?.coordinates) return res.status(400).json({ error: "geometry inválida" });
+
+    const hasta = new Date().toISOString().slice(0, 10);
+    const desde = new Date(Date.now() - desdeDias * 86400000).toISOString().slice(0, 10);
+
+    const data = await statsAPI({ geometry, desde, hasta, indice });
+    // Estructura SH Statistical API: data.data[i].outputs.data.bands.<clave>.stats
+    const dias = (data.data || [])
+      .map(d => {
+        const band = d.outputs?.data?.bands?.[indice];
+        if (!band?.stats) return null;
+        return {
+          fecha:      d.interval?.from?.slice(0, 10),
+          stats:      band.stats,
+          histograma: band.histogram?.bins || null,
+        };
+      })
+      .filter(Boolean);
+
+    res.json({ ok: true, indice, dias, ultimo: dias[dias.length - 1] || null });
+  } catch (e) {
+    console.error("[ndvi/lote/stats]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // Exponer helpers para reuso.
 module.exports = router;
 module.exports.invalidarToken = invalidarToken;
 module.exports.processAPI     = processAPI;
+module.exports.statsAPI       = statsAPI;
 module.exports.EVALSCRIPT_NDVI = EVALSCRIPT_NDVI;

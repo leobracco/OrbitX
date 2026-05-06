@@ -7,7 +7,7 @@
     "Authorization": `Bearer ${TOKEN || ""}`,
   }, extra || {});
 
-  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","CacaoIO","HBValvulas"];
+  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX"];
   let productoActivo = "VistaX";
   let firmwares = [];
 

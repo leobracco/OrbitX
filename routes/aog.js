@@ -192,19 +192,65 @@ router.post("/sync", deviceAuth, async (req, res) => {
 // ══════════════════════════════════════════════════
 router.get("/lotes", async (req, res) => {
   try {
-    const docs  = await _findAll(getEstabDB(req.user.estabSlug), { tipo:"aog_archivo", es_lote:true });
-    const lotes = {};
-    docs.forEach(d => {
-      const n = d.lote_nombre||"?";
-      if (!lotes[n]) lotes[n] = { nombre:n, archivos:[], tiene_boundary:false, tiene_field:false, ts_ultimo:0 };
-      lotes[n].archivos.push({ subtipo:d.subtipo, nombre:d.nombre, ts:d.ts, tamaño:d.tamaño, ruta_rel:d.ruta_rel });
-      if (d.subtipo==="boundary"||d.subtipo==="boundary_kml") lotes[n].tiene_boundary = true;
-      if (d.subtipo==="field_origin") lotes[n].tiene_field = true;
-      if (d.ts > lotes[n].ts_ultimo) lotes[n].ts_ultimo = d.ts;
-    });
-    res.json(Object.values(lotes).sort((a,b)=>b.ts_ultimo-a.ts_ultimo));
-  } catch(e) { res.status(500).json({ error:e.message }); }
+    const slug = req.user.estabSlug;
+    await db.ensureDesignOnOrg(slug);
+    const estabDB = getEstabDB(slug);
+
+    // Vista nativa: agrupa por lote_nombre. Súper rápida.
+    let lotes = {};
+    try {
+      const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", { reduce: false });
+      (r.rows || []).forEach(row => {
+        const n = row.key || "?";
+        if (!lotes[n]) lotes[n] = { nombre: n, archivos: [], tiene_boundary: false, tiene_field: false, ts_ultimo: 0 };
+        const subtipo = row.value?.subtipo;
+        const ts = row.value?.ts || 0;
+        lotes[n].archivos.push({ subtipo, ts });
+        if (subtipo === "boundary" || subtipo === "boundary_kml") lotes[n].tiene_boundary = true;
+        if (subtipo === "field_origin")                            lotes[n].tiene_field = true;
+        if (ts > lotes[n].ts_ultimo) lotes[n].ts_ultimo = ts;
+      });
+    } catch (e) {
+      // Fallback Mango si la vista todavía no está construida.
+      console.warn("[aog/lotes] view fallback:", e.message);
+      const docs = await _findAll(estabDB, { tipo: "aog_archivo", es_lote: true });
+      docs.forEach(d => {
+        const n = d.lote_nombre || "?";
+        if (!lotes[n]) lotes[n] = { nombre: n, archivos: [], tiene_boundary: false, tiene_field: false, ts_ultimo: 0 };
+        lotes[n].archivos.push({ subtipo: d.subtipo, nombre: d.nombre, ts: d.ts, tamaño: d.tamaño, ruta_rel: d.ruta_rel });
+        if (d.subtipo === "boundary" || d.subtipo === "boundary_kml") lotes[n].tiene_boundary = true;
+        if (d.subtipo === "field_origin")                              lotes[n].tiene_field = true;
+        if (d.ts > lotes[n].ts_ultimo) lotes[n].ts_ultimo = d.ts;
+      });
+    }
+    res.json(Object.values(lotes).sort((a, b) => b.ts_ultimo - a.ts_ultimo));
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Subtipos de archivo AOG que pertenecen a un lote (independientemente
+// de si el flag es_lote está seteado en el doc).
+const SUBTIPOS_LOTE = new Set([
+  "boundary", "boundary_kml", "field_origin",
+  "sections_coverage", "headland", "ab_lines", "contour",
+]);
+
+// Extrae el nombre del lote de una ruta tipo "Fields/MiLote/Boundary.txt"
+// (también acepta "Field/" en singular y separadores Windows).
+function extraerLoteDeRuta(rutaRel) {
+  if (!rutaRel) return null;
+  const m = String(rutaRel).match(/(?:^|[\\/])(?:Fields?)[\\/]+([^\\/]+)[\\/]/i);
+  return m ? m[1] : null;
+}
+
+// Decide si un doc aog_archivo es de un lote y, si lo es, qué nombre.
+function clasificarLote(d) {
+  const sub = d.subtipo || "";
+  const esLote = !!d.es_lote || SUBTIPOS_LOTE.has(sub);
+  if (!esLote) return null;
+  const nombre = d.lote_nombre || extraerLoteDeRuta(d.ruta_rel) || null;
+  if (!nombre) return null;
+  return { nombre, subtipo: sub, ts: d.ts || 0 };
+}
+
 router.get("/lotes-mapa", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
@@ -212,37 +258,67 @@ router.get("/lotes-mapa", async (req, res) => {
     const miSlug  = jwtUser?.estabSlug  || jwtUser?.estab_slug || null;
     const filtro  = req.query.estab;
     const nano    = require("nano")(process.env.COUCHDB_URL || "http://admin:password@localhost:5984");
+
     let slugs = [];
     if (isSA) {
       if (filtro) { slugs = [filtro]; }
       else {
         const globalDB = req.app.locals.globalDB;
         let orgs = [];
-        try { const r = await globalDB.find({ selector:{tipo:"org"}, limit:200 }); orgs=r.docs; }
-        catch { const all = await globalDB.list({include_docs:true}); orgs=all.rows.map(r=>r.doc).filter(d=>d&&d.tipo==="org"); }
-        slugs = orgs.map(o=>o.slug);
+        try { const r = await globalDB.find({ selector: { tipo: "org" }, limit: 200 }); orgs = r.docs; }
+        catch { const all = await globalDB.list({ include_docs: true }); orgs = all.rows.map(r => r.doc).filter(d => d && d.tipo === "org"); }
+        slugs = orgs.map(o => o.slug);
         if (!slugs.includes("unassigned")) slugs.push("unassigned");
       }
-    } else if (miSlug) { slugs = [miSlug]; }
+    } else if (miSlug) {
+      slugs = [miSlug];
+    }
+
     const lista = [];
     for (const slug of slugs) {
       try {
-        const r = await nano.db.use("orbitx_"+slug).find({ selector:{tipo:"aog_archivo",es_lote:true}, fields:["lote_nombre","subtipo","ts"], limit:2000 });
+        await db.ensureDesignOnOrg(slug);
+        const estabDB = nano.db.use("orbitx_" + slug);
+
+        // Vista nativa: emite (lote_nombre, {subtipo, ts}). Reduce false para todas las filas.
         const g = {};
-        r.docs.forEach(d => {
-          const n = d.lote_nombre||"?";
-          if (!g[n]) g[n]={nombre:n,estab_slug:slug,tiene_boundary:false,tiene_sections:false,tiene_origen:false,ts:0};
-          if (d.subtipo==="boundary"||d.subtipo==="boundary_kml") g[n].tiene_boundary=true;
-          if (d.subtipo==="sections_coverage") g[n].tiene_sections=true;
-          if (d.subtipo==="field_origin") g[n].tiene_origen=true;
-          if ((d.ts||0)>g[n].ts) g[n].ts=d.ts;
-        });
-        Object.values(g).forEach(l=>lista.push(l));
-      } catch(e) { console.error("[lotes-mapa]",slug,e.message); }
+        try {
+          const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", { reduce: false });
+          (r.rows || []).forEach(row => {
+            const n = row.key;
+            if (!n) return;
+            if (!g[n]) g[n] = { nombre: n, estab_slug: slug, tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0 };
+            const subtipo = row.value?.subtipo;
+            const ts = row.value?.ts || 0;
+            if (subtipo === "boundary" || subtipo === "boundary_kml") g[n].tiene_boundary = true;
+            if (subtipo === "sections_coverage")                       g[n].tiene_sections = true;
+            if (subtipo === "field_origin")                            g[n].tiene_origen   = true;
+            if (ts > g[n].ts) g[n].ts = ts;
+          });
+        } catch (e) {
+          // Fallback: full scan con clasificación robusta.
+          console.warn("[lotes-mapa] view fallback:", slug, e.message);
+          const fb = await estabDB.find({
+            selector: { tipo: "aog_archivo" },
+            fields:   ["lote_nombre", "subtipo", "ts", "es_lote", "ruta_rel"],
+            limit:    3000,
+          });
+          fb.docs.forEach(d => {
+            const cls = clasificarLote(d);
+            if (!cls) return;
+            if (!g[cls.nombre]) g[cls.nombre] = { nombre: cls.nombre, estab_slug: slug, tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0 };
+            if (cls.subtipo === "boundary" || cls.subtipo === "boundary_kml") g[cls.nombre].tiene_boundary = true;
+            if (cls.subtipo === "sections_coverage")                           g[cls.nombre].tiene_sections = true;
+            if (cls.subtipo === "field_origin")                                g[cls.nombre].tiene_origen   = true;
+            if (cls.ts > g[cls.nombre].ts) g[cls.nombre].ts = cls.ts;
+          });
+        }
+        Object.values(g).forEach(l => lista.push(l));
+      } catch (e) { console.error("[lotes-mapa]", slug, e.message); }
     }
-    lista.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    lista.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     res.json(lista);
-  } catch(e) { res.status(500).json({error:e.message}); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // GET /api/aog/lotes/:nombre
 router.get("/lotes/:nombre", async (req, res) => {
@@ -456,6 +532,17 @@ router.get("/vehiculos", async (req, res) => {
 //  ?estab=SLUG   → filtrar por establecimiento
 //  Sin parámetros → todos los lotes del usuario (o todos para SA)
 // ══════════════════════════════════════════════════════════
+// Cache en memoria para mapas (60s).
+const _mapaCache = new Map();
+const MAPA_TTL_MS = 60 * 1000;
+function mapaCacheGet(k) {
+  const e = _mapaCache.get(k);
+  if (!e) return null;
+  if (Date.now() - e.ts > MAPA_TTL_MS) { _mapaCache.delete(k); return null; }
+  return e.data;
+}
+function mapaCacheSet(k, data) { _mapaCache.set(k, { data, ts: Date.now() }); }
+
 router.get("/mapa", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
@@ -463,6 +550,14 @@ router.get("/mapa", async (req, res) => {
     const miSlug  = jwtUser?.estabSlug  || jwtUser?.estab_slug || null;
     const filtroEstab = req.query.estab;
     const filtroLote  = req.query.lote ? decodeURIComponent(req.query.lote) : null;
+
+    // Cache key — incluye filtros y user para no leakear entre orgs.
+    const cacheKey = `${miSlug || "sa"}::${filtroEstab || ""}::${filtroLote || ""}`;
+    const cached = mapaCacheGet(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return res.json(cached);
+    }
 
     // Armar lista de slugs
     const slugs = [];
@@ -484,16 +579,40 @@ router.get("/mapa", async (req, res) => {
 
     for (const slug of slugs) {
       try {
-        let docs;
+        await db.ensureDesignOnOrg(slug);
+        const estabDB = db.getDB(slug);
+        let docs = [];
+
         if (filtroLote) {
-          // Lazy load: solo traer docs del lote pedido
-          docs = await _findAll(db.getDB(slug), {
-            tipo:        "aog_archivo",
-            es_lote:     true,
-            lote_nombre: filtroLote,
-          });
+          // Lazy load: usar vista nativa con key=lote → solo trae los docs
+          // de ese lote (5-10 archivos), sin scan de toda la DB.
+          try {
+            const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
+              key: filtroLote,
+              reduce: false,
+              include_docs: true,
+            });
+            docs = (r.rows || []).map(row => row.doc).filter(Boolean);
+          } catch (e) {
+            console.warn("[aog/mapa] view fallback (lote):", e.message);
+          }
+
+          // Fallback si la vista no encontró nada (archivos sin lote_nombre).
+          if (!docs.length) {
+            const todos = await _findAll(estabDB, { tipo: "aog_archivo" });
+            docs = todos.filter(d => {
+              const cls = clasificarLote(d);
+              return cls && cls.nombre === filtroLote;
+            });
+          }
+          docs = docs.map(d => ({ ...d, lote_nombre: d.lote_nombre || extraerLoteDeRuta(d.ruta_rel), es_lote: true }));
+
         } else {
-          docs = await _findAll(db.getDB(slug), { tipo: "aog_archivo", es_lote: true });
+          // Sin filtro: usar vista para obtener lista de nombres + flags rápido,
+          // pero igual necesitamos contenido para parsear → fallback Mango.
+          const todos = await _findAll(estabDB, { tipo: "aog_archivo" });
+          docs = todos.filter(d => clasificarLote(d) !== null)
+                       .map(d => ({ ...d, lote_nombre: d.lote_nombre || extraerLoteDeRuta(d.ruta_rel), es_lote: true }));
         }
 
         // Agrupar por lote_nombre
@@ -516,6 +635,8 @@ router.get("/mapa", async (req, res) => {
       }
     }
 
+    mapaCacheSet(cacheKey, lotesParsed);
+    res.set("X-Cache", "MISS");
     res.json(lotesParsed);
   } catch(e) {
     console.error("[AOG/mapa]", e.message);

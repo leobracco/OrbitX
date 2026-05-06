@@ -1,6 +1,67 @@
 // routes/agraria_chat.js — agrarIA + soporte completo de adjuntos geoespaciales
 const router = require("express").Router();
+const crypto = require("crypto");
 const db     = require("../services/couchdb");
+
+// ── Persistencia de sesiones de chat en orbitx_global ─────
+// Doc: chat_<uid>_<sesionId> (tipo: "agraria_chat")
+async function getSesion(uid, sesionId) {
+  const gdb = db.getDB("global");
+  return gdb.get(`chat_${uid}_${sesionId}`).catch(() => null);
+}
+
+async function listSesiones(uid, limit = 50) {
+  const gdb = db.getDB("global");
+  try {
+    const r = await gdb.find({
+      selector: { tipo: "agraria_chat", uid },
+      fields:   ["_id", "sesionId", "titulo", "orgSlug", "mensajes_count", "updated_at", "created_at"],
+      limit,
+    });
+    return r.docs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  } catch {
+    const all = await gdb.list({ include_docs: true });
+    return all.rows.map(r => r.doc)
+      .filter(d => d?.tipo === "agraria_chat" && d?.uid === uid)
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
+      .slice(0, limit);
+  }
+}
+
+async function appendMensaje(uid, sesionId, orgSlug, mensajeUser, respuestaIA) {
+  const gdb = db.getDB("global");
+  const _id = `chat_${uid}_${sesionId}`;
+  let doc = await getSesion(uid, sesionId);
+  const now = Date.now();
+
+  const mensajesNuevos = [
+    { rol: "user",      texto: mensajeUser, ts: now },
+    { rol: "assistant", texto: respuestaIA, ts: now + 1 },
+  ];
+
+  if (!doc) {
+    // Título: primeras 8 palabras del primer mensaje.
+    const titulo = (mensajeUser || "Sin título").split(/\s+/).slice(0, 8).join(" ").slice(0, 80);
+    doc = {
+      _id,
+      tipo:      "agraria_chat",
+      sesionId,
+      uid,
+      orgSlug:   orgSlug || null,
+      titulo,
+      mensajes:  mensajesNuevos,
+      mensajes_count: mensajesNuevos.length,
+      created_at: now,
+      updated_at: now,
+    };
+  } else {
+    doc.mensajes = [...(doc.mensajes || []), ...mensajesNuevos];
+    doc.mensajes_count = doc.mensajes.length;
+    doc.updated_at = now;
+  }
+  await gdb.insert(doc);
+  return doc;
+}
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL   = "claude-sonnet-4-20250514";
@@ -327,8 +388,145 @@ async function getDatosLote(estabSlug, loteNombre) {
     } catch {}
     const { parseLote } = require("../services/aog_parser");
     const parsed = parseLote(docs);
-    return { nombre:loteNombre, tiene_boundary:!!parsed.boundary, tiene_origen:!!parsed.origen, pasadas:parsed.sections?.length||0 };
+
+    // Boundary como GeoJSON Polygon (lon/lat) — útil para Sentinel Hub.
+    let geometry = null;
+    if (parsed.boundary?.length > 2) {
+      const ring = parsed.boundary.map(p => [p[1], p[0]]); // [lat,lon] → [lon,lat]
+      const first = ring[0], last = ring[ring.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+      geometry = { type: "Polygon", coordinates: [ring] };
+    }
+
+    return {
+      nombre:         loteNombre,
+      tiene_boundary: !!parsed.boundary,
+      tiene_origen:   !!parsed.origen,
+      pasadas:        parsed.sections?.length || 0,
+      geometry,
+    };
   } catch { return null; }
+}
+
+// Pide stats de TODOS los índices del catálogo a Sentinel Hub para el polígono del lote.
+// Devuelve un texto resumen para meter en el prompt.
+const INTERPRETACION = {
+  ndvi:  "vigor general de la vegetación",
+  ndre:  "nitrógeno / clorofila profunda — útil para fertilización variable",
+  ndmi:  "humedad foliar — detecta estrés hídrico antes de que se vea a ojo",
+  evi:   "vigor sin saturar (mejor que NDVI en cultivos densos como maíz V12+ o soja R5+)",
+  msavi: "vigor sin efecto del suelo — útil en cultivos chicos (V1-V4)",
+  gndvi: "clorofila / verde — más sensible a estrés temprano que NDVI",
+  bsi:   "índice de suelo desnudo — alto = baja cobertura",
+};
+
+// Valida un GeoJSON Polygon antes de mandarlo a Sentinel Hub.
+// Devuelve null si está OK, o un código de error.
+function validarPoligono(geom) {
+  if (!geom || geom.type !== "Polygon") return "GEOM_001";  // tipo inválido
+  const ring = geom.coordinates?.[0];
+  if (!Array.isArray(ring) || ring.length < 4) return "GEOM_002";  // muy pocos puntos (cerrado)
+  for (const p of ring) {
+    if (!Array.isArray(p) || p.length < 2) return "GEOM_003";  // punto inválido
+    const [lon, lat] = p;
+    if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon))
+      return "GEOM_004";  // NaN
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return "GEOM_005";  // fuera de rango
+  }
+  // Verificar que esté cerrado (primer = último).
+  const a = ring[0], b = ring[ring.length - 1];
+  if (a[0] !== b[0] || a[1] !== b[1]) return "GEOM_006";
+  return null;
+}
+
+// Pide stats de TODOS los índices a Sentinel Hub.
+// Retorno: { texto, error_code, indices_ok }.
+// El texto va al prompt SOLO si tiene contenido. Los errores nunca van al prompt.
+async function ndviResumen(geometry) {
+  if (!geometry) return { texto: null, error_code: "NDVI_NO_GEOM" };
+
+  const errGeom = validarPoligono(geometry);
+  if (errGeom) {
+    console.warn(`[ERR-${errGeom}] polígono inválido`, JSON.stringify(geometry).slice(0, 300));
+    return { texto: null, error_code: errGeom };
+  }
+
+  try {
+    const ndvi = require("./ndvi");
+    const indicesLib = require("../lib/indices_satelitales");
+    if (typeof ndvi.statsAPI !== "function") return { texto: null, error_code: "NDVI_NO_LIB" };
+
+    const claves = Object.keys(indicesLib.INDICES);
+
+    // Estrategia: 1ª vuelta con ventana 30 días y nubes <=30%.
+    // Si no hay datos, 2ª vuelta con 90 días y nubes <=70% (típicamente en
+    // otoño/invierno hay menos imágenes limpias).
+    async function intentar(diasAtras, maxCloudCoverage) {
+      const hasta = new Date().toISOString().slice(0, 10);
+      const desde = new Date(Date.now() - diasAtras * 86400000).toISOString().slice(0, 10);
+      return Promise.all(claves.map(async clave => {
+        try {
+          const data = await ndvi.statsAPI({ geometry, desde, hasta, indice: clave, maxCloudCoverage });
+          // Buscamos el último intervalo con datos. La estructura SH:
+          // data.data[i].outputs.data.bands.<clave>.stats = { min, max, mean, stDev }
+          const intervalos = (data.data || []).filter(d => d.outputs?.data?.bands?.[clave]?.stats);
+          const ult = intervalos[intervalos.length - 1];
+          if (!ult) {
+            // Log para diagnosticar respuestas vacías o inesperadas.
+            if (data.data?.length === 0) {
+              console.log(`[NDVI ${clave}] respuesta sin intervalos`);
+            } else if (data.data?.[0]) {
+              console.log(`[NDVI ${clave}] estructura inesperada:`, JSON.stringify(data.data[0]).slice(0, 400));
+            }
+            return { clave, mean: null };
+          }
+          const stats = ult.outputs.data.bands[clave].stats;
+          return {
+            clave,
+            fecha: ult.interval?.from?.slice(0, 10),
+            mean:  stats.mean,
+            min:   stats.min,
+            max:   stats.max,
+            stDev: stats.stDev,
+            ventana: `${diasAtras}d/${maxCloudCoverage}%nubes`,
+          };
+        } catch (e) {
+          const code = e.status === 400 ? "NDVI_BAD_REQUEST" : e.status === 401 ? "NDVI_AUTH" : "NDVI_API";
+          console.warn(`[ERR-${code}] ${clave} (${diasAtras}d): ${e.message?.slice(0, 200)}`);
+          return { clave, mean: null };
+        }
+      }));
+    }
+
+    let resultados = await intentar(30, 30);
+    let conDatos = resultados.filter(r => r.mean != null);
+
+    if (!conDatos.length) {
+      console.log("[NDVI] sin datos en 30d/30%, reintentando con 90d/70%…");
+      resultados = await intentar(90, 70);
+      conDatos = resultados.filter(r => r.mean != null);
+    }
+
+    if (!conDatos.length) {
+      // Sin datos en toda la ventana extendida — info, no error grave.
+      const meta = JSON.stringify(geometry).slice(0, 300);
+      console.log(`[INFO-NDVI_SIN_IMAGEN] polígono sin imagen útil en 90d. Geometría: ${meta}`);
+      return { texto: null, error_code: "NDVI_SIN_IMAGEN", indices_ok: 0 };
+    }
+
+    const lineas = [];
+    for (const r of resultados) {
+      if (r.mean == null) continue;  // omitimos los que fallaron
+      const meta = indicesLib.INDICES[r.clave];
+      const nom  = (meta?.nombre || r.clave).padEnd(6);
+      lineas.push(`${nom} medio ${r.mean.toFixed(3)} · rango ${r.min?.toFixed(2)}…${r.max?.toFixed(2)} · σ=${r.stDev?.toFixed(3)} · ${INTERPRETACION[r.clave] || ""}${r.fecha ? ` (${r.fecha})` : ""}`);
+    }
+
+    return { texto: lineas.join("\n"), error_code: null, indices_ok: conDatos.length };
+  } catch (e) {
+    console.warn(`[ERR-NDVI_FATAL] ${e.message}`);
+    return { texto: null, error_code: "NDVI_FATAL" };
+  }
 }
 
 async function getDatosVistaX(estabSlug, loteId) {
@@ -352,7 +550,7 @@ async function getDatosVistaX(estabSlug, loteId) {
 //  POST /api/agraria/chat
 // ══════════════════════════════════════════════════════════
 router.post("/chat", async (req, res) => {
-  const { mensaje = "", historial = [], adjuntos = [] } = req.body;
+  const { mensaje = "", historial = [], adjuntos = [], sesionId: sesionIdIn } = req.body;
   if (!mensaje && !adjuntos.length)
     return res.status(400).json({ error: "mensaje o adjunto requerido" });
 
@@ -468,7 +666,22 @@ router.post("/chat", async (req, res) => {
     });
 
     const respuesta = await callClaude(system, messages, 1000);
-    res.json({ respuesta });
+
+    // Persistir la sesión en CouchDB (no bloqueante si falla).
+    let sesionId = sesionIdIn;
+    let titulo   = null;
+    try {
+      const uid = req.user?.uid ? `usr_${req.user.uid}` : null;
+      if (uid) {
+        if (!sesionId) sesionId = `${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+        const doc = await appendMensaje(uid, sesionId, estabSlug, textoFinal || mensaje, respuesta);
+        titulo = doc.titulo;
+      }
+    } catch (e) {
+      console.warn("[agrarIA/chat] no se pudo persistir:", e.message);
+    }
+
+    res.json({ respuesta, sesionId, titulo });
 
   } catch(e) {
     console.error("[agrarIA/chat]", e.message);
@@ -477,19 +690,99 @@ router.post("/chat", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
+//  GET /api/agraria/chat/sesiones — lista del usuario actual.
+// ══════════════════════════════════════════════════════════
+router.get("/chat/sesiones", async (req, res) => {
+  try {
+    const uid = req.user?.uid ? `usr_${req.user.uid}` : null;
+    if (!uid) return res.status(401).json({ error: "Auth requerida" });
+    const sesiones = await listSesiones(uid);
+    res.json({ sesiones });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════
+//  GET /api/agraria/chat/sesion/:id — recuperar conversación completa.
+// ══════════════════════════════════════════════════════════
+router.get("/chat/sesion/:id", async (req, res) => {
+  try {
+    const uid = req.user?.uid ? `usr_${req.user.uid}` : null;
+    if (!uid) return res.status(401).json({ error: "Auth requerida" });
+    const doc = await getSesion(uid, req.params.id);
+    if (!doc) return res.status(404).json({ error: "Sesión no encontrada" });
+    res.json(doc);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════
+//  DELETE /api/agraria/chat/sesion/:id — borrar una conversación.
+// ══════════════════════════════════════════════════════════
+router.delete("/chat/sesion/:id", async (req, res) => {
+  try {
+    const uid = req.user?.uid ? `usr_${req.user.uid}` : null;
+    if (!uid) return res.status(401).json({ error: "Auth requerida" });
+    const doc = await getSesion(uid, req.params.id);
+    if (!doc) return res.status(404).json({ error: "Sesión no encontrada" });
+    const gdb = db.getDB("global");
+    await gdb.destroy(doc._id, doc._rev);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════
 //  Resto de endpoints (sin cambios)
 // ══════════════════════════════════════════════════════════
 router.post("/analizar-lote", async (req, res) => {
   const { lote_nombre } = req.body;
-  if (!lote_nombre) return res.status(400).json({ error:"lote_nombre requerido" });
+  if (!lote_nombre) return res.status(400).json({ error: "lote_nombre requerido" });
   try {
-    const estabSlug = req.user?.estabSlug||req.jwtUser?.estabSlug;
+    const estabSlug = req.user?.estabSlug || req.jwtUser?.estabSlug;
     const datos     = await getDatosLote(estabSlug, lote_nombre);
-    if (!datos) return res.status(404).json({ error:"Lote no encontrado" });
-    const prompt = `Analizá este lote:\nNombre: ${datos.nombre}\nEstablecimiento: ${estabSlug}\nBoundary: ${datos.tiene_boundary?"Sí":"No"}\nGPS: ${datos.tiene_origen?"Sí":"No"}\nPasadas: ${datos.pasadas}`;
-    const analisis = await callClaude(SYSTEM_BASE, [{ role:"user", content:prompt }], 500);
-    res.json({ analisis, datos });
-  } catch(e) { res.status(500).json({ error:e.message }); }
+    if (!datos) return res.status(404).json({ error: "Lote no encontrado" });
+
+    // Pedir stats Sentinel Hub si tenemos polígono — no bloqueante si falla.
+    let sat = { texto: null, error_code: null };
+    if (datos.geometry) sat = await ndviResumen(datos.geometry);
+
+    const partes = [
+      `Analizá este lote del establecimiento "${estabSlug}":`,
+      `Nombre: ${datos.nombre}`,
+      `Boundary: ${datos.tiene_boundary ? "Sí" : "No"}`,
+      `GPS: ${datos.tiene_origen ? "Sí" : "No"}`,
+      `Pasadas registradas: ${datos.pasadas}`,
+    ];
+
+    // Solo agregamos info satelital si la tenemos. Si falló, NO mencionamos nada
+    // al modelo — los códigos de error van al cliente vía response, no al prompt.
+    if (sat.texto) {
+      partes.push("");
+      partes.push("Datos satelitales Sentinel-2 (últimos 30 días, imagen con menor nubosidad):");
+      partes.push(sat.texto);
+      partes.push("");
+      partes.push("Cómo interpretar los índices:");
+      partes.push("- NDVI <0.3 = baja biomasa; 0.3–0.6 cultivo en desarrollo; >0.6 vigoroso.");
+      partes.push("- NDRE bajo con NDVI alto = posible deficiencia de N.");
+      partes.push("- NDMI <0 = estrés hídrico; >0.2 = humedad foliar OK.");
+      partes.push("- EVI complementa NDVI en cultivos densos. MSAVI es mejor en cultivos chicos.");
+      partes.push("- GNDVI más sensible a estrés temprano que NDVI.");
+      partes.push("- BSI alto (>0.2) = suelo desnudo dominante; <0 = buena cobertura.");
+      partes.push("Cruces útiles: NDVI vs NDRE para N · NDVI vs NDMI para diferenciar estrés hídrico de enfermedad.");
+      partes.push("Hacé el análisis con estos números reales del lote y proponé acciones concretas.");
+    }
+    // IMPORTANTE: si no hay sat data, NO le decimos al modelo nada de errores.
+    // Que analice con la info AOG que tenga; si es muy poca, que lo diga sin
+    // inventar problemas técnicos.
+
+    const prompt = partes.join("\n");
+    const analisis = await callClaude(SYSTEM_BASE, [{ role: "user", content: prompt }], 700);
+    res.json({
+      analisis,
+      datos:      { ...datos, geometry: undefined },
+      sat:        !!sat.texto,
+      sat_error:  sat.error_code || null,
+      indices_ok: sat.indices_ok || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.post("/analizar-vistax", async (req, res) => {

@@ -10,6 +10,19 @@
   </button>
 </div>
 
+<div style="display:grid;grid-template-columns:240px 1fr;gap:14px;align-items:start">
+
+  <!-- ── Sesiones guardadas ─────────────────────────────── -->
+  <div class="card" style="display:flex;flex-direction:column;height:600px">
+    <div class="card-head">
+      <span class="card-title">Conversaciones</span>
+      <button class="btn btn-sm" onclick="nuevoChat()" title="Nuevo chat">+</button>
+    </div>
+    <div id="lista-sesiones" style="flex:1;overflow-y:auto">
+      <div class="loading"><span class="spinner"></span></div>
+    </div>
+  </div>
+
 <div class="g2" style="align-items:start">
 
   <!-- ── Chat libre ─────────────────────────────────────── -->
@@ -133,6 +146,7 @@
 
   </div>
 </div>
+</div>
 
 <style>
 .chat-msg-ia   { display:flex; justify-content:flex-start; }
@@ -187,6 +201,7 @@
 
 <script>
 let _historialChat = [];
+let _sesionActual  = null;
 let _lotesAOG      = [];
 let _adjuntos      = []; // [{file, tipo, base64, mediaType, nombre}]
 
@@ -374,14 +389,31 @@ async function enviarChat() {
       nombre:     a.nombre,
     }));
 
+    const tChat = performance.now();
+    console.groupCollapsed(`%c[agrarIA] chat()`, "color:#A4BA3E;font-weight:bold");
+    console.log("mensaje:", mensaje?.slice(0, 80));
+    console.log("adjuntos:", adjuntosPayload.length, "items");
+    console.log("historial:", _historialChat.length, "msgs · sesion:", _sesionActual || "(nueva)");
+
     const r = await Auth.post('/api/agraria/chat', {
       mensaje,
       historial: _historialChat,
       adjuntos:  adjuntosPayload,
+      sesionId:  _sesionActual,
     });
+
+    console.log(`✓ respuesta en ${(performance.now() - tChat).toFixed(0)}ms · ${r.respuesta?.length || 0} chars · sesion:${r.sesionId || '?'}`);
+    console.groupEnd();
 
     document.getElementById('typing-indicator')?.remove();
     agregarMensaje(r.respuesta, false);
+
+    // Recordar sesión persistida en backend.
+    if (r.sesionId) {
+      const eraNueva = !_sesionActual;
+      _sesionActual = r.sesionId;
+      if (eraNueva && typeof cargarSesionesChat === "function") cargarSesionesChat();
+    }
 
     // Guardar en historial (sin base64 para no inflar)
     const resumenAdjuntos = adjuntosEnvio.length
@@ -402,12 +434,69 @@ async function enviarChat() {
 
 function limpiarChat() {
   _historialChat = [];
+  _sesionActual  = null;
   _adjuntos      = [];
   renderAdjuntosPreview();
   const cont = document.getElementById('chat-mensajes');
   cont.innerHTML = `<div class="chat-msg-ia">
     <div class="chat-bubble-ia">Chat reiniciado. ¿En qué te puedo ayudar?</div>
   </div>`;
+}
+
+// ── Sesiones persistidas en CouchDB ──────────────────────
+async function cargarSesionesChat() {
+  const cont = document.getElementById('lista-sesiones');
+  if (!cont) return;
+  const t0 = performance.now();
+  try {
+    const r = await Auth.get('/api/agraria/chat/sesiones');
+    const sesiones = r.sesiones || [];
+    console.log(`%c[agrarIA] sesiones: ${sesiones.length} en ${(performance.now() - t0).toFixed(0)}ms`, "color:#3C9EFF");
+    if (!sesiones.length) {
+      cont.innerHTML = '<div style="padding:14px;font-size:11px;color:var(--ap-muted);text-align:center">Sin chats guardados</div>';
+      return;
+    }
+    cont.innerHTML = sesiones.map(s => {
+      const activa = s.sesionId === _sesionActual;
+      const fecha  = new Date(s.updated_at || s.created_at).toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit' });
+      return `
+        <div onclick="retomarSesion('${s.sesionId}')" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--ap-border-soft);${activa ? 'background:var(--ap-green-dim)' : ''}"
+          onmouseover="this.style.background='${activa ? 'var(--ap-green-dim)' : 'var(--ap-bg)'}'"
+          onmouseout="this.style.background='${activa ? 'var(--ap-green-dim)' : 'transparent'}'">
+          <div style="font-size:12px;color:var(--ap-text);font-weight:${activa ? 600 : 500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.titulo || 'Sin título')}</div>
+          <div style="font-size:10px;color:var(--ap-muted);margin-top:2px;display:flex;justify-content:space-between">
+            <span>${s.mensajes_count || 0} msgs</span><span>${fecha}</span>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    cont.innerHTML = `<div style="padding:14px;font-size:11px;color:var(--ap-red)">${e.message}</div>`;
+  }
+}
+
+async function retomarSesion(sesionId) {
+  try {
+    const doc = await Auth.get(`/api/agraria/chat/sesion/${sesionId}`);
+    _sesionActual = sesionId;
+    _historialChat = (doc.mensajes || []).map(m => ({ rol: m.rol, texto: m.texto }));
+
+    // Repintar conversación.
+    const cont = document.getElementById('chat-mensajes');
+    cont.innerHTML = '';
+    (doc.mensajes || []).forEach(m => agregarMensaje(m.texto, m.rol === 'user'));
+    cargarSesionesChat();
+  } catch (e) {
+    alert('No se pudo retomar la sesión: ' + e.message);
+  }
+}
+
+function nuevoChat() {
+  limpiarChat();
+  cargarSesionesChat();
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
 // ── Drag & drop en el área de chat ───────────────────────
@@ -436,12 +525,29 @@ async function analizarLoteAOG() {
   if (!nombre) { toast('Seleccioná un lote', '', 'amber'); return; }
   const res = document.getElementById('resultado-aog');
   res.style.display = 'block'; res.textContent = 'Analizando...';
+  const t0 = performance.now();
+  console.groupCollapsed(`%c[agrarIA] analizarLote("${nombre}")`, "color:#A4BA3E;font-weight:bold");
   try {
     const r = await Auth.post('/api/agraria/analizar-lote', { lote_nombre: nombre });
-    res.textContent = r.analisis;
-    agregarMensaje(`Análisis del lote "${nombre}": ${r.analisis}`, false);
+    console.log(`✓ ${(performance.now() - t0).toFixed(0)}ms · sat:${r.sat ? '✓' : '✗'} · indices_ok:${r.indices_ok || 0} · sat_error:${r.sat_error || '–'}`);
+    console.log("datos:", r.datos);
+    console.groupEnd();
+    let badge = '';
+    if (r.sat && r.indices_ok) {
+      badge = ` 🛰 ${r.indices_ok} índices satelitales`;
+    } else if (r.sat_error === 'NDVI_SIN_IMAGEN') {
+      badge = ` ℹ Sin imagen Sentinel-2 disponible (90 días, mucha nubosidad o lote chico)`;
+    } else if (r.sat_error) {
+      badge = ` ⚠ Error X: ${r.sat_error}`;
+    }
+    res.textContent = r.analisis + (badge ? '\n\n' + badge.trim() : '');
+    agregarMensaje(`Análisis del lote "${nombre}":${badge}\n\n${r.analisis}`, false);
     _historialChat.push({ rol:'assistant', texto: `Análisis "${nombre}": ${r.analisis}` });
-  } catch(e) { res.textContent = `Error: ${e.message}`; }
+  } catch (e) {
+    console.error("[agrarIA] analizarLote FAIL:", e);
+    console.groupEnd();
+    res.textContent = `Error: ${e.message}`;
+  }
 }
 
 async function compararLotes() {
@@ -487,5 +593,8 @@ async function resumenDia() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', cargarLotesIA);
+document.addEventListener('DOMContentLoaded', () => {
+  cargarLotesIA();
+  cargarSesionesChat();
+});
 </script>
