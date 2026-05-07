@@ -249,7 +249,7 @@ function killTest() {
 
 router.post("/api/camaras/test/start", auth.required, express_json(), async (req, res) => {
   try {
-    const u = req.jwtUser || {};
+    const u = req.user || {};
     if (u.rol_global !== "superadmin") return res.status(403).json({ error: "solo superadmin" });
 
     const globalDB = req.app.locals.globalDB;
@@ -313,7 +313,7 @@ router.post("/api/camaras/test/start", auth.required, express_json(), async (req
 });
 
 router.post("/api/camaras/test/stop", auth.required, async (req, res) => {
-  const u = req.jwtUser || {};
+  const u = req.user || {};
   if (u.rol_global !== "superadmin") return res.status(403).json({ error: "solo superadmin" });
   killTest();
   res.json({ ok: true });
