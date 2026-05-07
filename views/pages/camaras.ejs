@@ -1,0 +1,186 @@
+<%# pages/camaras.ejs — Visualización remota de cámaras por tractor (HLS) %>
+
+<div class="page-header">
+  <div>
+    <h2>Cámaras</h2>
+    <p>Streaming en vivo de cada tractor · HLS Low-Latency · Acceso multi-dispositivo</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <select id="sel-device" class="input" style="min-width:240px">
+      <option value="">— Elegí un tractor —</option>
+      <% (dispositivos || []).forEach(d => { %>
+        <option value="<%= d.device_id %>" <%= d.online ? '' : 'data-offline="1"' %>>
+          <%= d.online ? '🟢' : '⚪' %> <%= d.nombre || d.device_id %>
+        </option>
+      <% }); %>
+    </select>
+    <button class="btn" onclick="recargarCamaras()">↻ Refrescar</button>
+  </div>
+</div>
+
+<div id="info-box" class="card" style="display:none;padding:14px;margin-bottom:14px;background:rgba(60,158,255,0.05);border:1px solid rgba(60,158,255,0.2)">
+  <div id="info-text" style="font-family:var(--font-m);font-size:12px"></div>
+</div>
+
+<div id="grid-camaras" class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px"></div>
+
+<div id="empty-state" style="text-align:center;padding:80px 20px;color:var(--muted);display:none">
+  <div style="font-size:40px;margin-bottom:10px">📹</div>
+  <div style="font-family:var(--font-h)">Este tractor no tiene cámaras registradas todavía</div>
+  <div style="font-size:12px;margin-top:8px">El tractor las publica automáticamente cuando AOG arranca el módulo de Cámaras y tildás "Streaming remoto".</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script>
+const $sel = document.getElementById("sel-device");
+const $grid = document.getElementById("grid-camaras");
+const $empty = document.getElementById("empty-state");
+const $info = document.getElementById("info-box");
+const $infoText = document.getElementById("info-text");
+
+const players = new Map(); // path -> { hls, video }
+
+$sel.addEventListener("change", () => recargarCamaras());
+
+async function recargarCamaras() {
+  destruirPlayers();
+  $grid.innerHTML = "";
+  $empty.style.display = "none";
+  $info.style.display = "none";
+
+  const devId = $sel.value;
+  if (!devId) return;
+
+  try {
+    const r = await fetch(`/api/camaras/list/${encodeURIComponent(devId)}`, { credentials: "include" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "error");
+
+    if (!j.device.online) {
+      mostrarInfo(`⚠ Tractor offline. El stream solo está disponible cuando el tractor está conectado y publicando.`);
+    }
+
+    const cams = (j.camaras || []).filter(c => c.activa);
+    if (cams.length === 0) {
+      $empty.style.display = "block";
+      return;
+    }
+
+    for (const c of cams) {
+      const card = crearCard(devId, j.device.nombre, c);
+      $grid.appendChild(card);
+      // Pedimos la URL firmada y arrancamos
+      cargarStream(devId, c.idx, card);
+    }
+  } catch (e) {
+    mostrarInfo(`✗ ${e.message}`);
+  }
+}
+
+function crearCard(devId, devNombre, cam) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.style.padding = "10px";
+  card.style.background = "rgba(0,0,0,0.4)";
+  card.style.border = "1px solid rgba(255,255,255,0.08)";
+  card.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="font-family:var(--font-h);font-size:13px">📹 ${escape(cam.nombre)}</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="badge-online ${cam.online ? 'on' : 'off'}" style="font-size:10px;padding:2px 8px;border-radius:4px;background:${cam.online ? 'rgba(113,181,40,0.2)' : 'rgba(255,68,68,0.15)'};color:${cam.online ? '#71B528' : '#ff4444'}">${cam.online ? '🔴 LIVE' : '⏸ sin stream'}</span>
+        <button class="btn" style="font-size:10px;padding:3px 8px" onclick="copiarRtsp('${devId}', ${cam.idx}, this)" title="Copiar URL RTSP para VLC/apps">RTSP</button>
+      </div>
+    </div>
+    <div class="video-wrap" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:16/9">
+      <video class="cam-video" controls muted playsinline autoplay style="width:100%;height:100%;object-fit:contain"></video>
+      <div class="cam-status" style="position:absolute;left:8px;bottom:8px;font-size:10px;color:#aaa;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:3px">conectando…</div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;font-family:var(--font-m)">${escape(devNombre)} · cam ${cam.idx}</div>
+  `;
+  return card;
+}
+
+async function cargarStream(devId, camIdx, card) {
+  const video = card.querySelector(".cam-video");
+  const status = card.querySelector(".cam-status");
+  try {
+    const r = await fetch(`/api/camaras/playback/${encodeURIComponent(devId)}/${camIdx}`, { credentials: "include" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "error playback");
+
+    const url = j.hls;
+    card.dataset.rtsp = j.rtsp;
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        lowLatencyMode: true,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 4,
+        manifestLoadingTimeOut: 10000,
+        manifestLoadingMaxRetry: 6,
+      });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        status.textContent = "▶ live";
+        video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          status.textContent = "✗ " + (data.details || "error");
+          status.style.color = "#ff7676";
+        }
+      });
+      players.set(`${devId}_${camIdx}`, { hls, video });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // iOS / Safari nativo
+      video.src = url;
+      video.addEventListener("loadedmetadata", () => video.play().catch(() => {}));
+      status.textContent = "▶ live";
+    } else {
+      status.textContent = "✗ HLS no soportado en este browser";
+    }
+  } catch (e) {
+    status.textContent = "✗ " + e.message;
+    status.style.color = "#ff7676";
+  }
+}
+
+function destruirPlayers() {
+  for (const { hls, video } of players.values()) {
+    try { hls.destroy(); } catch {}
+    try { video.src = ""; } catch {}
+  }
+  players.clear();
+}
+
+async function copiarRtsp(devId, camIdx, btn) {
+  const card = btn.closest(".card");
+  let url = card.dataset.rtsp;
+  if (!url) {
+    // pedir URL fresca por si expiró
+    const r = await fetch(`/api/camaras/playback/${encodeURIComponent(devId)}/${camIdx}`, { credentials: "include" });
+    const j = await r.json();
+    url = j.rtsp;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    btn.textContent = "✓ copiado";
+    setTimeout(() => { btn.textContent = "RTSP"; }, 2000);
+  } catch {
+    prompt("Copialo manualmente:", url);
+  }
+}
+
+function mostrarInfo(msg) {
+  $info.style.display = "block";
+  $infoText.textContent = msg;
+}
+
+function escape(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// Liberar players al salir de la página
+window.addEventListener("beforeunload", destruirPlayers);
+</script>

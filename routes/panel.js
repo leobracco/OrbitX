@@ -394,6 +394,37 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
+// CAMARAS — vivo, por tractor (admin de la org o superadmin)
+// ─────────────────────────────────────────────────────────
+router.get("/camaras", requireAuth, async (req, res) => {
+  const db     = req.app.locals.globalDB;
+  const SA     = isSA(req);
+  const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
+  let dispositivos = [];
+  const ahora = Date.now();
+
+  try {
+    const docs = await getAllDocs(db);
+    if (SA) {
+      dispositivos = docs.filter(d => d.tipo === "device");
+    } else if (miSlug) {
+      dispositivos = docs.filter(d => d.tipo === "device" && d.estab_slug === miSlug);
+    }
+    dispositivos = dispositivos
+      .map(d => ({
+        device_id: d.device_id,
+        nombre:    d.nombre || d.device_id,
+        online:    d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 1000,
+        camaras:   d.camaras || [],
+      }))
+      .sort((a, b) => (b.online - a.online) || a.nombre.localeCompare(b.nombre));
+  } catch (e) { console.error("[Panel/camaras]", e.message); }
+
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Cámaras", page: "camaras", dispositivos });
+});
+
+// ─────────────────────────────────────────────────────────
 // COUCHDB — solo superadmin
 // ─────────────────────────────────────────────────────────
 router.get("/couchdb", requireAuth, requireSuperadmin, async (req, res) => {

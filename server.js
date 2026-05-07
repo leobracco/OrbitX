@@ -28,6 +28,9 @@ const routeTracking = require("./routes/tracking");
 const routePrescripcionesAPI = require("./routes/prescripciones_api");
 const routeConfigSistema     = require("./routes/config_sistema");
 const routeOTA               = require("./routes/ota");
+const routeIce               = require("./routes/ice");
+const routeCamaras           = require("./routes/camaras");
+const { startStun }          = require("./lib/stun-server");
 const routeNotifOrg          = require("./routes/notif_org");
 const routeAgraria           = require("./routes/agraria_chat");
 let routeNDVI;
@@ -123,6 +126,8 @@ app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
 app.use("/api/agraria",        auth.required, routeAgraria);
+app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
+app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.
 // Resto (manifest, upload, disparar, logs) requiere JWT del panel.
 app.use("/api/ota", (req, res, next) => {
@@ -229,6 +234,19 @@ async function start() {
   server.listen(PORT, () =>
     console.log(`[Server] ✓ http://localhost:${PORT}\n`),
   );
+
+  // STUN server (UDP) — descubrimiento de IP/puerto para WebRTC en cámaras OrbitX/OrbitTV.
+  // Se puede deshabilitar con STUN_DISABLED=1.
+  if (process.env.STUN_DISABLED !== "1") {
+    try {
+      startStun({
+        port: parseInt(process.env.STUN_PORT, 10) || 3478,
+        host: process.env.STUN_HOST || "0.0.0.0",
+      });
+    } catch (e) {
+      console.error("[STUN] ✗ no arrancó:", e.message);
+    }
+  }
 }
 
 start();

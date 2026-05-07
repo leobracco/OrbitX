@@ -1,0 +1,74 @@
+# =============================================================================
+#  MediaMTX config para OrbitX - Cámaras remotas de tractores
+#
+#  - Recibe RTSP push desde cada AOG/tractor en   rtsp://<host>:8554/<deviceId>_cam<N>
+#  - Sirve HLS LL en                              http(s)://<host>:8888/<deviceId>_cam<N>/index.m3u8
+#  - Sirve WebRTC WHEP en                         http(s)://<host>:8889/<deviceId>_cam<N>/whep
+#  - Auth delegada a OrbitX por webhook HTTP
+#
+#  Ubicación recomendada: /etc/mediamtx/mediamtx.yml
+# =============================================================================
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logLevel: info
+logDestinations: [stdout]
+
+# ── HTTP API y métricas (locales — no exponer al exterior) ──────────────────
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: yes
+metricsAddress: 127.0.0.1:9998
+
+# ── Auth delegada a OrbitX vía HTTP ─────────────────────────────────────────
+# OrbitX corre en el mismo droplet en :5005 (ver ecosystem.json).
+authMethod: http
+authHTTPAddress: http://127.0.0.1:5005/api/camaras/auth
+# Header opcional con un secreto compartido (verificar en OrbitX si está seteado)
+authHTTPHeaders:
+  X-Webhook-Secret: ${MEDIAMTX_WEBHOOK_SECRET}
+# Acciones que requieren webhook (publish y read)
+authHTTPExclude: []
+
+# ── RTSP server (donde el tractor pushea) ───────────────────────────────────
+rtsp: yes
+rtspAddress: :8554
+# Permitimos UDP y TCP. Para campo con Starlink el TCP es más confiable.
+rtspTransports: [tcp, udp]
+# Auth obligatoria
+rtspAuthMethods: [basic]
+
+# ── HLS (lo que consumen browsers, smart TVs, apps) ─────────────────────────
+hls: yes
+hlsAddress: :8888
+# CORS — permitimos que el panel y apps externas embeban
+hlsAllowOrigin: '*'
+# LL-HLS: latencia ~2-3s con lectores compatibles
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAlwaysRemux: no
+
+# ── WebRTC (browsers que quieran <500ms — opcional) ─────────────────────────
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigin: '*'
+# ICE: anunciar la IP pública del droplet — sin esto, WebRTC no establece desde
+# afuera. Reemplazá <PUBLIC_IP> o usá la variable.
+webrtcAdditionalHosts: ['${PUBLIC_IP}']
+
+# ── RTMP / SRT — apagados (no los usamos por ahora) ─────────────────────────
+rtmp: no
+srt: no
+
+# ── Paths: aceptamos cualquier path (el filtro real lo hace OrbitX) ─────────
+pathDefaults:
+  source: publisher
+  # No se publica si nadie tiene credenciales válidas (lo cubre authMethod=http)
+  sourceOnDemand: no
+  # Si el tractor se desconecta, MediaMTX cierra el path automáticamente
+  maxReaders: 0  # 0 = ilimitado
+
+paths:
+  all:
+    # Vacío: usa pathDefaults
