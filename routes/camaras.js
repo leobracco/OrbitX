@@ -81,8 +81,10 @@ router.post("/api/camaras/auth", express_json(), async (req, res) => {
     // necesario porque MediaMTX v1.13.x no expande `${ENV}` en URLs y por lo
     // tanto no puede enviarnos el secreto vía query param.
     if (HOOK_SECRET) {
-      const remote = (req.ip || req.connection?.remoteAddress || "").replace(/^::ffff:/, "");
-      const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote === "localhost";
+      // Usamos socket.remoteAddress (no req.ip) para no ser engañados por
+      // X-Forwarded-For si OrbitX está detrás de un proxy.
+      const remote = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+      const isLoopback = remote === "127.0.0.1" || remote === "::1";
       if (!isLoopback) {
         const got = req.headers["x-webhook-secret"] || req.query?.webhook_secret || "";
         if (got !== HOOK_SECRET) return deny(401, "webhook secret inválido (remoto " + remote + ")");
