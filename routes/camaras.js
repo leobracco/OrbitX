@@ -75,12 +75,18 @@ router.post("/api/camaras/auth", express_json(), async (req, res) => {
     return res.status(status).json({ error: motivo });
   };
   try {
-    // (Opcional) validar shared-secret entre MediaMTX y OrbitX.
-    // MediaMTX no soporta enviar headers custom, así que aceptamos el
-    // secreto por header (compat) o query param ?webhook_secret=<...>.
+    // Validar shared-secret entre MediaMTX y OrbitX.
+    // Excepción: si el webhook viene de loopback (127.0.0.1 / ::1) confiamos
+    // — solo procesos del mismo droplet pueden alcanzar :5005. Esto es
+    // necesario porque MediaMTX v1.13.x no expande `${ENV}` en URLs y por lo
+    // tanto no puede enviarnos el secreto vía query param.
     if (HOOK_SECRET) {
-      const got = req.headers["x-webhook-secret"] || req.query?.webhook_secret || "";
-      if (got !== HOOK_SECRET) return deny(401, "webhook secret inválido");
+      const remote = (req.ip || req.connection?.remoteAddress || "").replace(/^::ffff:/, "");
+      const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote === "localhost";
+      if (!isLoopback) {
+        const got = req.headers["x-webhook-secret"] || req.query?.webhook_secret || "";
+        if (got !== HOOK_SECRET) return deny(401, "webhook secret inválido (remoto " + remote + ")");
+      }
     }
 
     const { user, password, action, path, query } = req.body || {};
