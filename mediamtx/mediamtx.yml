@@ -39,7 +39,7 @@ rtspAuthMethods: [basic]
 hls: yes
 hlsAddress: :8888
 # CORS — permitimos que el panel y apps externas embeban
-hlsAllowOrigins: ['*']
+hlsAllowOrigin: '*'
 # LL-HLS: latencia ~2-3s con lectores compatibles
 hlsVariant: lowLatency
 hlsSegmentCount: 7
@@ -50,7 +50,7 @@ hlsAlwaysRemux: no
 # ── WebRTC (browsers que quieran <500ms — opcional) ─────────────────────────
 webrtc: yes
 webrtcAddress: :8889
-webrtcAllowOrigins: ['*']
+webrtcAllowOrigin: '*'
 # ICE: anunciar la IP pública del droplet — sin esto, WebRTC no establece desde
 # afuera. Reemplazá <PUBLIC_IP> o usá la variable.
 webrtcAdditionalHosts: ['${PUBLIC_IP}']
