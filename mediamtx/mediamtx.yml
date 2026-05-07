@@ -21,11 +21,9 @@ metricsAddress: 127.0.0.1:9998
 
 # ── Auth delegada a OrbitX vía HTTP ─────────────────────────────────────────
 # OrbitX corre en el mismo droplet en :5005 (ver ecosystem.json).
+# Secreto compartido como query param (MediaMTX no soporta authHTTPHeaders).
 authMethod: http
-authHTTPAddress: http://127.0.0.1:5005/api/camaras/auth
-# Header opcional con un secreto compartido (verificar en OrbitX si está seteado)
-authHTTPHeaders:
-  X-Webhook-Secret: ${MEDIAMTX_WEBHOOK_SECRET}
+authHTTPAddress: http://127.0.0.1:5005/api/camaras/auth?webhook_secret=${MEDIAMTX_WEBHOOK_SECRET}
 # Acciones que requieren webhook (publish y read)
 authHTTPExclude: []
 
@@ -41,7 +39,7 @@ rtspAuthMethods: [basic]
 hls: yes
 hlsAddress: :8888
 # CORS — permitimos que el panel y apps externas embeban
-hlsAllowOrigin: '*'
+hlsAllowOrigins: ['*']
 # LL-HLS: latencia ~2-3s con lectores compatibles
 hlsVariant: lowLatency
 hlsSegmentCount: 7
@@ -52,7 +50,7 @@ hlsAlwaysRemux: no
 # ── WebRTC (browsers que quieran <500ms — opcional) ─────────────────────────
 webrtc: yes
 webrtcAddress: :8889
-webrtcAllowOrigin: '*'
+webrtcAllowOrigins: ['*']
 # ICE: anunciar la IP pública del droplet — sin esto, WebRTC no establece desde
 # afuera. Reemplazá <PUBLIC_IP> o usá la variable.
 webrtcAdditionalHosts: ['${PUBLIC_IP}']

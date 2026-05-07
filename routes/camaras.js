@@ -70,9 +70,14 @@ function pathFor(deviceId, camIndex) {
 // ─────────────────────────────────────────────────────────
 router.post("/api/camaras/auth", express_json(), async (req, res) => {
   try {
-    // (Opcional) validar shared-secret entre MediaMTX y OrbitX
-    if (HOOK_SECRET && req.headers["x-webhook-secret"] !== HOOK_SECRET) {
-      return res.status(401).json({ error: "webhook secret inválido" });
+    // (Opcional) validar shared-secret entre MediaMTX y OrbitX.
+    // MediaMTX no soporta enviar headers custom, así que aceptamos el
+    // secreto por header (compat) o query param ?webhook_secret=<...>.
+    if (HOOK_SECRET) {
+      const got = req.headers["x-webhook-secret"] || req.query?.webhook_secret || "";
+      if (got !== HOOK_SECRET) {
+        return res.status(401).json({ error: "webhook secret inválido" });
+      }
     }
 
     const { user, password, action, path, query } = req.body || {};
