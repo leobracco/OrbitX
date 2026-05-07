@@ -70,36 +70,39 @@ function pathFor(deviceId, camIndex) {
 // Devolvemos 200 si OK, 401 si no.
 // ─────────────────────────────────────────────────────────
 router.post("/api/camaras/auth", express_json(), async (req, res) => {
+  const deny = (status, motivo) => {
+    console.warn(`[camaras/auth] ${status}: ${motivo}`, JSON.stringify(req.body || {}));
+    return res.status(status).json({ error: motivo });
+  };
   try {
     // (Opcional) validar shared-secret entre MediaMTX y OrbitX.
     // MediaMTX no soporta enviar headers custom, así que aceptamos el
     // secreto por header (compat) o query param ?webhook_secret=<...>.
     if (HOOK_SECRET) {
       const got = req.headers["x-webhook-secret"] || req.query?.webhook_secret || "";
-      if (got !== HOOK_SECRET) {
-        return res.status(401).json({ error: "webhook secret inválido" });
-      }
+      if (got !== HOOK_SECRET) return deny(401, "webhook secret inválido");
     }
 
     const { user, password, action, path, query } = req.body || {};
-    if (!action || !path) return res.status(400).json({ error: "faltan campos" });
+    if (!action || !path) return deny(400, "faltan campos");
 
     // Path esperado: <deviceId>_cam<N>
     const m = String(path).match(/^([^/]+?)_cam(\d+)$/);
-    if (!m) return res.status(401).json({ error: "path inválido" });
+    if (!m) return deny(401, "path inválido: " + path);
     const deviceId = m[1];
 
     if (action === "publish") {
       // Tractor pushea — auth con basic-auth (user=deviceId, pass=token)
-      if (!user || !password) return res.status(401).json({ error: "credenciales requeridas" });
-      if (user !== deviceId)  return res.status(401).json({ error: "user≠deviceId" });
+      if (!user || !password) return deny(401, "credenciales requeridas");
+      if (user !== deviceId)  return deny(401, `user(${user})≠deviceId(${deviceId})`);
 
       const globalDB = req.app.locals.globalDB;
       const doc = await globalDB.get(`device_${deviceId}`).catch(() => null);
-      if (!doc)              return res.status(401).json({ error: "device no registrado" });
-      if (doc.bloqueado)     return res.status(403).json({ error: "device bloqueado" });
-      if (doc.token !== password) return res.status(401).json({ error: "token inválido" });
+      if (!doc)              return deny(401, "device no registrado: " + deviceId);
+      if (doc.bloqueado)     return deny(403, "device bloqueado");
+      if (doc.token !== password) return deny(401, "token inválido");
 
+      console.log(`[camaras/auth] publish OK ${deviceId}`);
       return res.json({ ok: true, role: "publish", deviceId });
     }
 
@@ -109,12 +112,13 @@ router.post("/api/camaras/auth", express_json(), async (req, res) => {
       const expiresAt = q.exp;
       const sig       = q.sig;
       if (!verifySign(path, expiresAt, sig))
-        return res.status(401).json({ error: "firma inválida o expirada" });
+        return deny(401, "firma inválida o expirada");
 
+      console.log(`[camaras/auth] read OK ${path}`);
       return res.json({ ok: true, role: "read" });
     }
 
-    return res.status(400).json({ error: "action desconocida" });
+    return deny(400, "action desconocida: " + action);
   } catch (e) {
     console.error("[camaras/auth]", e.message);
     res.status(500).json({ error: e.message });
@@ -161,8 +165,8 @@ router.get("/api/camaras/list/:deviceId", auth.required, async (req, res) => {
     if (!doc) return res.status(404).json({ error: "device no encontrado" });
 
     // Filtro multi-org: si el user no es SA, debe pertenecer al estab del device
-    const u = req.jwtUser || {};
-    const esSA = u.rol === "superadmin";
+    const u = req.user || {};
+    const esSA = u.rol_global === "superadmin";
     const miSlug = u.estabSlug || u.estab_slug;
     if (!esSA && doc.estab_slug && doc.estab_slug !== miSlug)
       return res.status(403).json({ error: "no autorizado" });
@@ -194,8 +198,8 @@ router.get("/api/camaras/playback/:deviceId/:cam", auth.required, async (req, re
     const doc = await globalDB.get(`device_${deviceId}`).catch(() => null);
     if (!doc) return res.status(404).json({ error: "device no encontrado" });
 
-    const u = req.jwtUser || {};
-    const esSA = u.rol === "superadmin";
+    const u = req.user || {};
+    const esSA = u.rol_global === "superadmin";
     const miSlug = u.estabSlug || u.estab_slug;
     if (!esSA && doc.estab_slug && doc.estab_slug !== miSlug)
       return res.status(403).json({ error: "no autorizado" });
@@ -293,11 +297,19 @@ router.post("/api/camaras/test/start", auth.required, express_json(), async (req
       "-tune", "zerolatency",
       "-pix_fmt", "yuv420p",
       "-g", "30",
+      "-rtsp_transport", "tcp",
       "-f", "rtsp",
       url,
-    ], { stdio: "ignore" });
+    ], { stdio: ["ignore", "ignore", "pipe"] });
     _testStartedAt = Date.now();
-    _testProc.on("exit", () => { _testProc = null; });
+    _testProc.stderr.on("data", chunk => {
+      const txt = chunk.toString().trim();
+      if (txt) console.log("[camaras/test/ffmpeg] " + txt.replace(/\n+/g, " | "));
+    });
+    _testProc.on("exit", code => {
+      console.log(`[camaras/test/ffmpeg] exit code=${code}`);
+      _testProc = null;
+    });
     _testAutoStop = setTimeout(killTest, TEST_AUTOSTOP_MS);
 
     res.json({
