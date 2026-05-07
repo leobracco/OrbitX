@@ -3,7 +3,7 @@
 <div class="page-header">
   <div>
     <h2>Lotes</h2>
-    <p>Cobertura AOG · VistaX · QuantiX · NDVI · Lluvias · Documentos</p>
+    <p>Cobertura PilotX · VistaX · QuantiX · NDVI · Lluvias · Documentos</p>
   </div>
   <div style="display:flex;gap:8px">
     <input type="text" id="filtro-lote" placeholder="Filtrar lotes…"
@@ -17,7 +17,7 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════ -->
-<!-- MODAL: crear lote (dibujar boundary y enviar a AOG)    -->
+<!-- MODAL: crear lote (dibujar boundary y enviar a PilotX) -->
 <!-- ═══════════════════════════════════════════════════════ -->
 <div class="modal-backdrop" id="modal-crear">
   <div class="modal" style="width:860px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;padding:0">
@@ -70,7 +70,7 @@
         </div>
 
         <div style="border-top:1px solid var(--ap-border);padding-top:12px;margin-top:6px">
-          <div style="font-size:11px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Enviar a AOG</div>
+          <div style="font-size:11px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Enviar a PilotX</div>
           <div class="field">
             <label>Tractor destino (opcional)</label>
             <select id="cl-device">
@@ -94,7 +94,7 @@
 <!-- KPIs -->
 <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px" id="kpi-lotes">
   <div class="kpi lime"><div class="kpi-shine"></div><div class="kpi-label">Lotes totales</div><div class="kpi-val" id="kpi-total">–</div><div class="kpi-delta">sincronizados</div></div>
-  <div class="kpi blue"><div class="kpi-shine"></div><div class="kpi-label">Con cobertura AOG</div><div class="kpi-val" id="kpi-aog">–</div><div class="kpi-delta">boundaries + sections</div></div>
+  <div class="kpi blue"><div class="kpi-shine"></div><div class="kpi-label">Con cobertura PilotX</div><div class="kpi-val" id="kpi-aog">–</div><div class="kpi-delta">boundaries + sections</div></div>
   <div class="kpi teal"><div class="kpi-shine"></div><div class="kpi-label">Con datos VistaX</div><div class="kpi-val" id="kpi-vx">–</div><div class="kpi-delta">densidad siembra</div></div>
   <div class="kpi" style="background:var(--surface)"><div class="kpi-shine"></div><div class="kpi-label">Capas externas</div><div class="kpi-val" id="kpi-capas" style="color:var(--muted2)">–</div><div class="kpi-delta">NDVI, lluvias, docs</div></div>
 </div>
@@ -132,7 +132,7 @@
                font-family:var(--font-b);transition:all .15s"
         onmouseover="if(!this.classList.contains('tab-active'))this.style.color='var(--text)'"
         onmouseout="if(!this.classList.contains('tab-active'))this.style.color='var(--muted2)'">
-        <%= {aog:'🗺 AOG',vistax:'🌱 VistaX',capas:'📁 Capas',info:'ℹ Info'}[t] %>
+        <%= {aog:'🗺 PilotX',vistax:'🌱 VistaX',capas:'📁 Capas',info:'ℹ Info'}[t] %>
       </button>
       <% }) %>
     </div>
@@ -382,7 +382,7 @@ function renderTabla(lista) {
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr>
-          <th>Lote</th><th>Cultivo</th><th>AOG</th>
+          <th>Lote</th><th>Cultivo</th><th>PilotX</th>
           <th>VistaX</th><th>Capas</th><th>Último sync</th><th></th>
         </tr></thead>
         <tbody>
@@ -401,7 +401,7 @@ function renderTabla(lista) {
               <div style="display:flex;gap:4px;flex-wrap:wrap">
                 ${l.aog?.tiene_boundary  ? '<span class="badge badge-lime" style="font-size:9px">⬡ boundary</span>' : ''}
                 ${l.aog?.tiene_sections  ? `<span class="badge badge-blue" style="font-size:9px">▦ ${l.aog.pasadas} pasadas</span>` : ''}
-                ${!l.aog ? '<span class="badge badge-gray" style="font-size:9px">sin AOG</span>' : ''}
+                ${!l.aog ? '<span class="badge badge-gray" style="font-size:9px">sin PilotX</span>' : ''}
               </div>
             </td>
             <td>
@@ -492,7 +492,7 @@ function renderTabAOG(ctx) {
   if (!aog) {
     document.getElementById('tab-content-aog').innerHTML =
       `<div class="empty-state" style="padding:30px">
-        <p>No hay archivos AOG sincronizados para este lote.</p>
+        <p>No hay archivos PilotX sincronizados para este lote.</p>
       </div>`;
     return;
   }
@@ -614,7 +614,7 @@ function renderTabInfo(ctx) {
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">
         <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Capas disponibles</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${ctx.capas?.aog     ? '<span class="badge badge-lime">🗺 AOG</span>' : ''}
+          ${ctx.capas?.aog     ? '<span class="badge badge-lime">🗺 PilotX</span>' : ''}
           ${ctx.capas?.vistax  ? '<span class="badge badge-teal">🌱 VistaX</span>' : ''}
           ${Object.entries(ctx.capas?.externas||{}).map(([t,c]) =>
             `<span class="badge badge-gray">${SUBTIPO_ICONO[t]||'📁'} ${SUBTIPO_LABEL[t]||t} (${c.length})</span>`
