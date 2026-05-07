@@ -5,7 +5,7 @@
     <h2>Cámaras</h2>
     <p>Streaming en vivo de cada tractor · HLS Low-Latency · Acceso multi-dispositivo</p>
   </div>
-  <div style="display:flex;gap:8px">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <select id="sel-device" class="input" style="min-width:240px">
       <option value="">— Elegí un tractor —</option>
       <% (dispositivos || []).forEach(d => { %>
@@ -14,6 +14,13 @@
         </option>
       <% }); %>
     </select>
+    <select id="sel-vista" class="input" title="Cuántas cámaras reproducir simultáneamente — para no saturar la subida del tractor">
+      <option value="manual">👁 Vista: manual (ninguna)</option>
+      <option value="1">👁 Vista: 1 cámara</option>
+      <option value="2">👁 Vista: 2 cámaras</option>
+      <option value="all">👁 Vista: todas</option>
+    </select>
+    <button class="btn" onclick="detenerTodos()" title="Cortar todos los streams activos">⏹ Detener todo</button>
     <button class="btn" onclick="recargarCamaras()">↻ Refrescar</button>
   </div>
 </div>
@@ -44,12 +51,20 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script>
 const $sel = document.getElementById("sel-device");
+const $selVista = document.getElementById("sel-vista");
 const $grid = document.getElementById("grid-camaras");
 const $empty = document.getElementById("empty-state");
 const $info = document.getElementById("info-box");
 const $infoText = document.getElementById("info-text");
 
-const players = new Map(); // path -> { hls, video }
+const players = new Map(); // key=`${devId}_${camIdx}` -> { hls, video }
+
+// Recordamos la última vista elegida (global, por simplicidad).
+$selVista.value = localStorage.getItem("camaras_vista") || "manual";
+$selVista.addEventListener("change", () => {
+  localStorage.setItem("camaras_vista", $selVista.value);
+  aplicarVista();
+});
 
 $sel.addEventListener("change", () => recargarCamaras());
 
@@ -77,20 +92,46 @@ async function recargarCamaras() {
       return;
     }
 
+    // Renderizamos las cards SIN arrancar streams — el usuario decide cuáles
+    // reproducir (con el selector de vista) para no saturar la subida del tractor.
     for (const c of cams) {
       const card = crearCard(devId, j.device.nombre, c);
       $grid.appendChild(card);
-      // Pedimos la URL firmada y arrancamos
-      cargarStream(devId, c.idx, card);
     }
+    aplicarVista();
   } catch (e) {
     mostrarInfo(`✗ ${e.message}`);
   }
 }
 
+// Aplica el modo de vista actual: arranca/para streams según la elección
+// (manual / 1 / 2 / todas) sin recargar el listado.
+function aplicarVista() {
+  const modo = $selVista.value;
+  const cards = Array.from($grid.querySelectorAll(".cam-card"));
+  let limit;
+  if (modo === "manual") limit = 0;
+  else if (modo === "all") limit = cards.length;
+  else limit = parseInt(modo, 10) || 0;
+
+  cards.forEach((card, i) => {
+    const devId = card.dataset.devId;
+    const camIdx = parseInt(card.dataset.camIdx, 10);
+    const key = `${devId}_${camIdx}`;
+    const yaCorriendo = players.has(key);
+    if (i < limit && !yaCorriendo) {
+      cargarStream(devId, camIdx, card);
+    } else if (i >= limit && yaCorriendo) {
+      detenerStream(devId, camIdx);
+    }
+  });
+}
+
 function crearCard(devId, devNombre, cam) {
   const card = document.createElement("div");
-  card.className = "card";
+  card.className = "card cam-card";
+  card.dataset.devId = devId;
+  card.dataset.camIdx = cam.idx;
   card.style.padding = "10px";
   card.style.background = "rgba(0,0,0,0.4)";
   card.style.border = "1px solid rgba(255,255,255,0.08)";
@@ -99,21 +140,63 @@ function crearCard(devId, devNombre, cam) {
       <div style="font-family:var(--font-h);font-size:13px">📹 ${escape(cam.nombre)}</div>
       <div style="display:flex;gap:6px;align-items:center">
         <span class="badge-online ${cam.online ? 'on' : 'off'}" style="font-size:10px;padding:2px 8px;border-radius:4px;background:${cam.online ? 'rgba(113,181,40,0.2)' : 'rgba(255,68,68,0.15)'};color:${cam.online ? '#71B528' : '#ff4444'}">${cam.online ? '🔴 LIVE' : '⏸ sin stream'}</span>
+        <button class="btn cam-toggle" style="font-size:10px;padding:3px 8px" onclick="toggleStream('${devId}', ${cam.idx}, this)">▶ Ver</button>
         <button class="btn" style="font-size:10px;padding:3px 8px" onclick="copiarRtsp('${devId}', ${cam.idx}, this)" title="Copiar URL RTSP para VLC/apps">RTSP</button>
       </div>
     </div>
     <div class="video-wrap" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:16/9">
-      <video class="cam-video" controls muted playsinline autoplay style="width:100%;height:100%;object-fit:contain"></video>
-      <div class="cam-status" style="position:absolute;left:8px;bottom:8px;font-size:10px;color:#aaa;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:3px">conectando…</div>
+      <video class="cam-video" controls muted playsinline style="width:100%;height:100%;object-fit:contain"></video>
+      <div class="cam-status" style="position:absolute;left:8px;bottom:8px;font-size:10px;color:#aaa;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:3px">en pausa — apretá ▶ Ver</div>
     </div>
     <div style="font-size:10px;color:var(--muted);margin-top:6px;font-family:var(--font-m)">${escape(devNombre)} · cam ${cam.idx}</div>
   `;
   return card;
 }
 
+function toggleStream(devId, camIdx, btn) {
+  const key = `${devId}_${camIdx}`;
+  if (players.has(key)) {
+    detenerStream(devId, camIdx);
+  } else {
+    const card = btn.closest(".cam-card");
+    cargarStream(devId, camIdx, card);
+  }
+}
+
+function detenerStream(devId, camIdx) {
+  const key = `${devId}_${camIdx}`;
+  const p = players.get(key);
+  if (!p) return;
+  try { p.hls && p.hls.destroy(); } catch {}
+  try { p.video.src = ""; } catch {}
+  players.delete(key);
+  const card = $grid.querySelector(`.cam-card[data-dev-id="${devId}"][data-cam-idx="${camIdx}"]`);
+  if (card) {
+    const status = card.querySelector(".cam-status");
+    const btn = card.querySelector(".cam-toggle");
+    if (status) { status.textContent = "en pausa"; status.style.color = "#aaa"; }
+    if (btn) btn.textContent = "▶ Ver";
+  }
+}
+
+function detenerTodos() {
+  for (const key of Array.from(players.keys())) {
+    const [devId, camIdx] = key.split("_cam");
+    // key format: <devId>_<camIdx> (cam idx = solo número). Mejor: re-derivar.
+  }
+  // Camino seguro: iterar las cards.
+  $grid.querySelectorAll(".cam-card").forEach(card => {
+    detenerStream(card.dataset.devId, parseInt(card.dataset.camIdx, 10));
+  });
+}
+
 async function cargarStream(devId, camIdx, card) {
   const video = card.querySelector(".cam-video");
   const status = card.querySelector(".cam-status");
+  const btn = card.querySelector(".cam-toggle");
+  status.textContent = "conectando…";
+  status.style.color = "#aaa";
+  if (btn) btn.textContent = "⏹ Detener";
   try {
     const r = await fetch(`/api/camaras/playback/${encodeURIComponent(devId)}/${camIdx}`, { credentials: "include" });
     const j = await r.json();
@@ -128,19 +211,33 @@ async function cargarStream(devId, camIdx, card) {
         liveSyncDurationCount: 2,
         liveMaxLatencyDurationCount: 4,
         manifestLoadingTimeOut: 10000,
-        manifestLoadingMaxRetry: 6,
+        manifestLoadingMaxRetry: 4,
       });
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         status.textContent = "▶ live";
+        status.style.color = "#71B528";
         video.play().catch(() => {});
       });
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          status.textContent = "✗ " + (data.details || "error");
-          status.style.color = "#ff7676";
+        if (!data.fatal) return;
+        // manifestLoadError / manifestLoadTimeOut suelen significar que el
+        // tractor no está publicando ese path — mostramos algo accionable.
+        let msg = data.details || "error";
+        if (msg === "manifestLoadError" || msg === "manifestLoadTimeOut") {
+          msg = "El tractor no está publicando este stream (¿Streaming remoto tildado? ¿cámara online?)";
+        } else if (msg === "manifestParsingError") {
+          msg = "MediaMTX devolvió un manifest inválido";
+        } else if (msg === "manifestIncompatibleCodecsError") {
+          msg = "Codec no soportado por el browser";
         }
+        status.textContent = "✗ " + msg;
+        status.style.color = "#ff7676";
+        // Liberamos el player para que el toggle vuelva a "▶ Ver".
+        try { hls.destroy(); } catch {}
+        players.delete(`${devId}_${camIdx}`);
+        if (btn) btn.textContent = "▶ Ver";
       });
       players.set(`${devId}_${camIdx}`, { hls, video });
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -148,12 +245,17 @@ async function cargarStream(devId, camIdx, card) {
       video.src = url;
       video.addEventListener("loadedmetadata", () => video.play().catch(() => {}));
       status.textContent = "▶ live";
+      status.style.color = "#71B528";
+      players.set(`${devId}_${camIdx}`, { hls: null, video });
     } else {
       status.textContent = "✗ HLS no soportado en este browser";
+      status.style.color = "#ff7676";
+      if (btn) btn.textContent = "▶ Ver";
     }
   } catch (e) {
     status.textContent = "✗ " + e.message;
     status.style.color = "#ff7676";
+    if (btn) btn.textContent = "▶ Ver";
   }
 }
 
