@@ -30,6 +30,7 @@
 
 const router = require("express").Router();
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 const auth = require("../middleware/auth");
 const { deviceAuth } = require("./devices");
 
@@ -220,6 +221,115 @@ router.get("/api/camaras/playback/:deviceId/:cam", auth.required, async (req, re
     res.status(500).json({ error: e.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────
+// TEST STREAM — para probar el pipeline desde el panel sin tractor.
+// Crea un device de prueba (si no existe), lanza ffmpeg en el server con
+// testsrc, y queda visible como cualquier otra cámara. Solo superadmin.
+//
+// Endpoints:
+//   POST /api/camaras/test/start   → arranca ffmpeg + asegura device doc
+//   POST /api/camaras/test/stop    → mata ffmpeg
+//   GET  /api/camaras/test/status  → estado del proceso
+// ─────────────────────────────────────────────────────────
+const TEST_DEVICE_ID = "OX-TEST-STREAM";
+const TEST_CAM_IDX   = 1;
+const TEST_AUTOSTOP_MS = 30 * 60 * 1000; // 30 min de runtime máximo
+let _testProc = null;
+let _testStartedAt = 0;
+let _testAutoStop = null;
+
+function killTest() {
+  if (_testProc) {
+    try { _testProc.kill("SIGTERM"); } catch {}
+    _testProc = null;
+  }
+  if (_testAutoStop) { clearTimeout(_testAutoStop); _testAutoStop = null; }
+}
+
+router.post("/api/camaras/test/start", auth.required, express_json(), async (req, res) => {
+  try {
+    const u = req.jwtUser || {};
+    if (u.rol_global !== "superadmin") return res.status(403).json({ error: "solo superadmin" });
+
+    const globalDB = req.app.locals.globalDB;
+
+    // Asegurar device doc de prueba
+    let doc = await globalDB.get(`device_${TEST_DEVICE_ID}`).catch(() => null);
+    let token;
+    if (!doc) {
+      token = crypto.randomBytes(24).toString("hex");
+      doc = {
+        _id: `device_${TEST_DEVICE_ID}`,
+        tipo: "device",
+        device_id: TEST_DEVICE_ID,
+        nombre: "🧪 Test Stream (servidor)",
+        token,
+        is_test: true,
+        ultimo_visto: Date.now(),
+        camaras: [{ idx: 1, nombre: "Test cam", activa: true, online: true }],
+        camaras_updated_at: Date.now(),
+      };
+      await globalDB.insert(doc);
+    } else {
+      token = doc.token;
+      doc.ultimo_visto = Date.now();
+      doc.camaras = [{ idx: 1, nombre: "Test cam", activa: true, online: true }];
+      doc.camaras_updated_at = Date.now();
+      await globalDB.insert(doc);
+    }
+
+    killTest();
+
+    const path = pathFor(TEST_DEVICE_ID, TEST_CAM_IDX);
+    const url  = `rtsp://${TEST_DEVICE_ID}:${token}@127.0.0.1:8554/${path}`;
+
+    _testProc = spawn("ffmpeg", [
+      "-re",
+      "-f", "lavfi",
+      "-i", "testsrc=size=640x480:rate=15",
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-tune", "zerolatency",
+      "-pix_fmt", "yuv420p",
+      "-g", "30",
+      "-f", "rtsp",
+      url,
+    ], { stdio: "ignore" });
+    _testStartedAt = Date.now();
+    _testProc.on("exit", () => { _testProc = null; });
+    _testAutoStop = setTimeout(killTest, TEST_AUTOSTOP_MS);
+
+    res.json({
+      ok: true,
+      deviceId: TEST_DEVICE_ID,
+      cam: TEST_CAM_IDX,
+      msg: "Test stream lanzado. Aparece en ~5s.",
+    });
+  } catch (e) {
+    console.error("[camaras/test/start]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/api/camaras/test/stop", auth.required, async (req, res) => {
+  const u = req.jwtUser || {};
+  if (u.rol_global !== "superadmin") return res.status(403).json({ error: "solo superadmin" });
+  killTest();
+  res.json({ ok: true });
+});
+
+router.get("/api/camaras/test/status", auth.required, (req, res) => {
+  res.json({
+    running: !!_testProc,
+    startedAt: _testStartedAt,
+    deviceId: TEST_DEVICE_ID,
+  });
+});
+
+// Limpiar al apagar el server
+process.on("SIGTERM", killTest);
+process.on("SIGINT", killTest);
 
 // ─────────────────────────────────────────────────────────
 // helpers

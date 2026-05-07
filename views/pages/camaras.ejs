@@ -18,6 +18,17 @@
   </div>
 </div>
 
+<% if ((typeof user !== 'undefined') && user && user.rol_global === 'superadmin') { %>
+<div class="card" style="padding:10px 14px;margin-bottom:14px;background:rgba(255,200,40,0.05);border:1px solid rgba(255,200,40,0.2)">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-family:var(--font-h);font-size:12px">🧪 Modo test (solo SA):</span>
+    <button class="btn" onclick="iniciarTest()">▶ Iniciar test stream</button>
+    <button class="btn" onclick="detenerTest()">⏹ Detener</button>
+    <span id="test-status" style="font-size:11px;color:var(--muted);font-family:var(--font-m)"></span>
+  </div>
+</div>
+<% } %>
+
 <div id="info-box" class="card" style="display:none;padding:14px;margin-bottom:14px;background:rgba(60,158,255,0.05);border:1px solid rgba(60,158,255,0.2)">
   <div id="info-text" style="font-family:var(--font-m);font-size:12px"></div>
 </div>
@@ -179,6 +190,33 @@ function mostrarInfo(msg) {
 
 function escape(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// ─── Test stream (solo superadmin) ─────────────────────────
+async function iniciarTest() {
+  const $st = document.getElementById("test-status");
+  $st.textContent = "lanzando…";
+  try {
+    const r = await fetch("/api/camaras/test/start", { method: "POST", credentials: "include" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "error");
+    $st.textContent = j.msg + " (recargando en 5s…)";
+    setTimeout(() => location.reload(), 5000);
+  } catch (e) {
+    $st.textContent = "✗ " + e.message;
+    $st.style.color = "#ff7676";
+  }
+}
+
+async function detenerTest() {
+  const $st = document.getElementById("test-status");
+  try {
+    await fetch("/api/camaras/test/stop", { method: "POST", credentials: "include" });
+    $st.textContent = "test detenido";
+    $st.style.color = "";
+  } catch (e) {
+    $st.textContent = "✗ " + e.message;
+  }
 }
 
 // Liberar players al salir de la página
