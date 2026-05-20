@@ -143,10 +143,14 @@ router.post("/sync", deviceAuth, async (req, res) => {
     ? req.headers["x-estab-slug"]
     : "unassigned";
 
-  const { ruta_rel, nombre, subtipo, es_lote, lote_nombre, hash_md5, contenido, ts } = req.body;
+  const { ruta_rel, nombre, subtipo, es_lote, lote_nombre, hash_md5, contenido, contenido_base64, ts } = req.body;
   const tamano = req.body.tamaño ?? req.body.tamano ?? 0;
   if (!ruta_rel) return res.status(400).json({ error:"ruta_rel requerido" });
-  // contenido puede ser string vacío (archivo vacío es válido)
+  // contenido puede ser string vacío (archivo vacío es válido).
+  // Si vino contenido_base64 (.shp/.shx/.dbf, etc.) lo guardamos en un campo
+  // dedicado y NO tocamos `contenido` para que parsers existentes (vehicle/lote)
+  // sigan funcionando con strings UTF-8.
+  const esBinario = typeof contenido_base64 === "string" && contenido_base64.length > 0;
 
   try {
     const estabDB = getEstabDB(estabSlug);
@@ -158,7 +162,7 @@ router.post("/sync", deviceAuth, async (req, res) => {
       const existing = await estabDB.get(docId);
       if (existing.hash_md5 && existing.hash_md5 !== hash_md5) {
         const histId = `aog_hist_${estabSlug}_${safeRel}_${existing.ts||Date.now()}`.slice(0, 220);
-        await estabDB.insert({
+        const histDoc = {
           _id:         histId,
           tipo:        "aog_historial",
           doc_ref:     docId,
@@ -166,23 +170,30 @@ router.post("/sync", deviceAuth, async (req, res) => {
           ruta_rel, nombre, subtipo, es_lote, lote_nombre,
           hash_md5:    existing.hash_md5,
           tamaño:      existing.tamaño,
-          contenido:   existing.contenido,
           device_id:   existing.device_id,
           ts:          existing.ts || Date.now(),
           ts_guardado: Date.now(),
-        }).catch(() => {});
+        };
+        // Preservar la modalidad de la versión anterior (texto vs binario).
+        if (typeof existing.contenido_base64 === "string") histDoc.contenido_base64 = existing.contenido_base64;
+        else histDoc.contenido = existing.contenido;
+        await estabDB.insert(histDoc).catch(() => {});
       }
     } catch {}
 
-    await _upsert(estabDB, docId, {
+    const docNuevo = {
       tipo:"aog_archivo", subtipo:subtipo||"field_file",
       orgSlug:estabSlug, ruta_rel, nombre,
       es_lote:!!es_lote, lote_nombre:lote_nombre||null,
-      hash_md5, tamaño:tamano, contenido:contenido||"", device_id:deviceId,
+      hash_md5, tamaño:tamano, device_id:deviceId,
       ts:ts||Date.now(),
-    });
+    };
+    if (esBinario) docNuevo.contenido_base64 = contenido_base64;
+    else docNuevo.contenido = contenido || "";
 
-    console.log(`[AOG] ✓ ${deviceId} → ${ruta_rel}`);
+    await _upsert(estabDB, docId, docNuevo);
+
+    console.log(`[AOG] ✓ ${deviceId} → ${ruta_rel}${esBinario ? " [bin "+contenido_base64.length+"b64]" : ""}`);
     res.json({ ok:true });
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
@@ -345,6 +356,47 @@ router.get("/lotes/:nombre", async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
+// GET /api/aog/vistax-sesiones
+// Lista las sesiones VistaX sincronizadas (NDJSON + shapefile puntos + heatmap),
+// agrupadas por timestamp del nombre del archivo (vistax_<ts>...).
+// Cada sesión devuelve los ruta_rel de sus componentes para que el viewer
+// los baje uno por uno via /api/aog/archivo.
+router.get("/vistax-sesiones", async (req, res) => {
+  try {
+    const estabDB = getEstabDB(req.user.estabSlug);
+    // Subtipos generados por OrbitXSync.EnqueueAOGFiles:
+    //   "vistax_log" → NDJSON con telemetría
+    //   "vistax_shp" → .shp/.shx/.dbf/.prj (binarios + .prj texto)
+    const ndjson = await _findAll(estabDB, { tipo: "aog_archivo", subtipo: "vistax_log" });
+    const shp    = await _findAll(estabDB, { tipo: "aog_archivo", subtipo: "vistax_shp" });
+    const all = ndjson.concat(shp);
+
+    // Extrae timestamp del nombre: vistax_<ts>(...).<ext>
+    // ts es un número largo en ms (Date.now al cerrar el VistaXFieldLogger).
+    const sesiones = {};
+    for (const d of all) {
+      const n = d.nombre || "";
+      const m = n.match(/^vistax_(\d+)/i);
+      if (!m) continue;
+      const ts = m[1];
+      const isHeatmap = /heatmap/i.test(n);
+      const ext = (n.match(/\.([a-z0-9]+)$/i) || [,""])[1].toLowerCase();
+      if (!sesiones[ts]) sesiones[ts] = { ts, fecha: parseInt(ts, 10), lote: d.lote_nombre || null,
+                                          ndjson: null, puntos: {}, heatmap: {}, device_id: d.device_id };
+      const slot = isHeatmap ? sesiones[ts].heatmap : sesiones[ts].puntos;
+      if (ext === "ndjson") sesiones[ts].ndjson = d.ruta_rel;
+      else slot[ext] = d.ruta_rel;
+    }
+    // Sólo sesiones con .shp de puntos (lo mínimo viable para render).
+    const out = Object.values(sesiones)
+      .filter(s => s.puntos && s.puntos.shp)
+      .sort((a, b) => b.fecha - a.fecha);
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/aog/archivo?ruta=...
 router.get("/archivo", async (req, res) => {
   try {
@@ -353,9 +405,14 @@ router.get("/archivo", async (req, res) => {
     const id      = `aog_${req.user.estabSlug}_${safeRel}`.slice(0, 200);
     const doc     = await getEstabDB(req.user.estabSlug).get(id).catch(()=>null);
     if (!doc) return res.status(404).json({ error:"No encontrado" });
-    res.json({ nombre:doc.nombre, subtipo:doc.subtipo, ruta_rel:doc.ruta_rel,
-               lote_nombre:doc.lote_nombre, ts:doc.ts, tamaño:doc.tamaño,
-               hash_md5:doc.hash_md5, contenido:doc.contenido, device_id:doc.device_id });
+    const out = { nombre:doc.nombre, subtipo:doc.subtipo, ruta_rel:doc.ruta_rel,
+                  lote_nombre:doc.lote_nombre, ts:doc.ts, tamaño:doc.tamaño,
+                  hash_md5:doc.hash_md5, device_id:doc.device_id };
+    // Texto o binario: enviamos uno u otro (nunca ambos). El cliente decodea
+    // Base64 si recibe contenido_base64.
+    if (typeof doc.contenido_base64 === "string") out.contenido_base64 = doc.contenido_base64;
+    else out.contenido = doc.contenido;
+    res.json(out);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
