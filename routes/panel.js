@@ -628,6 +628,14 @@ router.get("/vistax", requireAuth, async (req, res) => {
   res.render("layout", { ...base(req, { regBadge }), title:"VistaX — Siembra", page:"vistax", stats:{} });
 });
 
+// Viewer dedicado de mapas SHP por sesión (sincronizados desde AOG).
+// Distinto de /vistax (que muestra densidad GeoJSON del lote completo).
+router.get("/vistax-mapas", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", { ...base(req, { regBadge }), title:"VistaX — Mapas de sesión", page:"vistax-mapas" });
+});
+
 // ─────────────────────────────────────────────────────────
 // agrarIA
 // ─────────────────────────────────────────────────────────
