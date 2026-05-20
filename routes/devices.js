@@ -4,6 +4,52 @@ const crypto = require("crypto");
 const db     = require("../services/couchdb");
 const { registrarAudit } = require("../services/auth_service");
 
+// ══════════════════════════════════════════════════════════
+//  PAIRING FLOW (RFC 8628 inspirado) — vinculación táctil-friendly
+// ══════════════════════════════════════════════════════════
+// El operario no puede tipear un token de 64 hex en una pantalla táctil de
+// tractor. Reemplazamos el flow "token-en-.env-copiado-a-mano" por:
+//
+//   1) Tractor genera localmente:
+//        - pair_code:    6 chars [A-Z2-9 sin I/O/0/1/L]  → visible al operario
+//        - device_secret: 32 bytes hex                   → solo en memoria del tractor
+//      Llama a POST /api/devices/pair/init para anunciar la intent.
+//   2) Operario logueado en OrbitX panel ve el código en la pantalla del
+//      tractor, abre "Vincular por código", lo tipea, elige org, confirma.
+//      Cloud genera el device_token permanente, crea el doc en CouchDB,
+//      lo asocia a la org del operario.
+//   3) Tractor está polleando GET /pair/status/:code?secret=<device_secret>.
+//      Cuando ve claimed=true recibe el token y lo persiste en orbitX.json.
+//      El device_secret evita que un atacante con el código robe el token.
+//
+// Pending state en memoria (no en CouchDB): ephemeral, TTL 10 min, no vale la
+// pena ensuciar el bucket por intents.
+const PAIRING_TTL_MS = 10 * 60 * 1000;
+const pendingPairings = new Map(); // code → { device_id, device_secret_hash, hostname, version, ts, claimed, token, estab_slug, nombre }
+
+// Limpieza periódica de intents vencidos.
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, p] of pendingPairings) {
+    if (now - p.ts > PAIRING_TTL_MS) pendingPairings.delete(code);
+  }
+}, 60 * 1000).unref?.();
+
+function _hashSecret(s) {
+  return crypto.createHash("sha256").update(String(s || "")).digest("hex");
+}
+
+// Code validator: 6 chars del alfabeto seguro (sin I/O/0/1/L para evitar confusión
+// con la fuente de la pantalla del tractor).
+const PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+function _validPairCode(c) {
+  if (typeof c !== "string") return false;
+  c = c.toUpperCase();
+  if (c.length !== 6) return false;
+  for (const ch of c) if (!PAIR_ALPHABET.includes(ch)) return false;
+  return true;
+}
+
 // ── Validar token individual de un dispositivo ────────────
 // Cada dispositivo tiene su propio token guardado en CouchDB
 // Token maestro de fallback (para compatibilidad con agentes viejos)
@@ -340,6 +386,182 @@ async function _migrarUnassigned(deviceId, estabSlug) {
     console.log(`[Devices] Migración ok: ${docs.length} docs → ${estabSlug}`);
   } catch(e) { console.error("[Devices/_migrar]", e.message); }
 }
+
+// ══════════════════════════════════════════════════════════
+//  POST /api/devices/pair/init  — el tractor anuncia un intent de pairing
+//  Sin JWT, sin deviceAuth: el código es ephemeral y solo cosechable con el
+//  device_secret que vuelve a guardar el server hasheado.
+// ══════════════════════════════════════════════════════════
+router.post("/pair/init", async (req, res) => {
+  const { code, device_secret, device_id, hostname, version } = req.body || {};
+  if (!_validPairCode(code))
+    return res.status(400).json({ error: "Código inválido (6 chars, alfabeto restringido)." });
+  if (!device_secret || String(device_secret).length < 32)
+    return res.status(400).json({ error: "device_secret requerido (>= 32 chars)." });
+  if (!device_id)
+    return res.status(400).json({ error: "device_id requerido." });
+
+  const codeU = code.toUpperCase();
+  const existing = pendingPairings.get(codeU);
+  // Si el código existe pero pertenece a otro device, lo rechazamos sin pisar
+  // el intent original — el otro tractor sigue esperando su claim.
+  if (existing && existing.device_id !== device_id) {
+    return res.status(409).json({ error: "Código en uso por otro dispositivo, generá otro." });
+  }
+  // Si ya está claimed y todavía cargable (el tractor aún no recogió el token),
+  // re-init es idempotente: devolvemos OK pero NO regeneramos para preservar
+  // el token pendiente.
+  pendingPairings.set(codeU, {
+    device_id,
+    device_secret_hash: _hashSecret(device_secret),
+    hostname: hostname || null,
+    version:  version  || null,
+    ts:       existing?.ts || Date.now(),
+    claimed:  existing?.claimed  || false,
+    token:    existing?.token    || null,
+    estab_slug: existing?.estab_slug || null,
+    nombre:   existing?.nombre   || null,
+  });
+  res.json({ ok: true, expires_in: PAIRING_TTL_MS });
+});
+
+// ══════════════════════════════════════════════════════════
+//  POST /api/devices/pair/claim  — operario en panel reclama el código
+//  Requiere JWT (operario logueado en su org).
+//  body: { code, nombre?, estab_slug? (solo SA puede pasar otra) }
+// ══════════════════════════════════════════════════════════
+router.post("/pair/claim", async (req, res) => {
+  const { code, nombre, estab_slug: estabBody } = req.body || {};
+  if (!_validPairCode(code))
+    return res.status(400).json({ error: "Código inválido." });
+  const codeU = code.toUpperCase();
+  const p = pendingPairings.get(codeU);
+  if (!p) return res.status(404).json({ error: "Código no encontrado o vencido. Pedile al tractor que muestre uno nuevo." });
+  if (Date.now() - p.ts > PAIRING_TTL_MS) {
+    pendingPairings.delete(codeU);
+    return res.status(410).json({ error: "Código vencido. Pedile al tractor que muestre uno nuevo." });
+  }
+  if (p.claimed) return res.status(409).json({ error: "Ese código ya fue usado." });
+
+  const esSA   = req.user?.rol_global === "superadmin";
+  const miSlug = req.user?.estabSlug;
+  // Owners/admins claim siempre a su propia org. Solo SA puede pasar otra.
+  const estab_slug = esSA ? (estabBody || miSlug || null) : miSlug;
+  if (!estab_slug)
+    return res.status(403).json({ error: "Necesitás una org activa para vincular un tractor." });
+
+  try {
+    const globalDB = req.app.locals.globalDB;
+    // Si el doc del device ya existe (auto-registrado previo con master token,
+    // o vinculación previa), regeneramos token y sobreescribimos estab_slug.
+    // Si no existe, lo creamos.
+    const docId = `device_${p.device_id}`;
+    let doc = await globalDB.get(docId).catch(() => null);
+    const token = crypto.randomBytes(32).toString("hex");
+    const now   = Date.now();
+    if (doc) {
+      // Validar que el operario puede tocar este device (si ya estaba en otra org).
+      if (!esSA && doc.estab_slug && doc.estab_slug !== miSlug)
+        return res.status(403).json({ error: "Ese tractor ya pertenece a otra organización." });
+      await globalDB.insert({
+        ...doc,
+        token,
+        estab_slug,
+        nombre:       nombre || doc.nombre || p.device_id,
+        hostname:     p.hostname || doc.hostname,
+        version:      p.version  || doc.version,
+        bloqueado:    false,
+        asignado_por: uid(req),
+        asignado_at:  now,
+        updated_at:   now,
+        paired_via:   "code",
+      });
+    } else {
+      await globalDB.insert({
+        _id:         docId,
+        tipo:        "device",
+        device_id:   p.device_id,
+        nombre:      nombre || p.device_id,
+        token,
+        estab_slug,
+        bloqueado:   false,
+        hostname:    p.hostname,
+        platform:    null,
+        mac:         null,
+        aog_path:    null,
+        version:     p.version,
+        ultimo_visto: null,
+        online:      false,
+        creado_por:  uid(req),
+        created_at:  now,
+        updated_at:  now,
+        paired_via:  "code",
+      });
+    }
+
+    // Marcar el intent como claimed. El tractor lo retira al hacer el próximo poll.
+    p.claimed    = true;
+    p.token      = token;
+    p.estab_slug = estab_slug;
+    p.nombre     = nombre || p.device_id;
+    pendingPairings.set(codeU, p);
+
+    await registrarAudit(estab_slug, uid(req), "device.pair", {
+      device_id: p.device_id, code: codeU,
+    });
+    console.log(`[Devices/pair] ${codeU} → ${p.device_id} (${estab_slug})`);
+    res.json({ ok: true, device_id: p.device_id, estab_slug, nombre: p.nombre });
+  } catch (e) {
+    console.error("[Devices/pair/claim]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  GET /api/devices/pair/status/:code?secret=<device_secret>
+//  Tractor pollea acá esperando que el operario reclame el código.
+//  Sin JWT. Validamos device_secret hash para que solo el tractor original
+//  pueda cosechar el token.
+//  Cuando devuelve token, el intent se elimina (one-time-read).
+// ══════════════════════════════════════════════════════════
+router.get("/pair/status/:code", async (req, res) => {
+  const code = (req.params.code || "").toUpperCase();
+  if (!_validPairCode(code))
+    return res.status(400).json({ error: "Código inválido." });
+  const secret = req.query.secret || "";
+  if (!secret) return res.status(400).json({ error: "Query param 'secret' requerido." });
+
+  const p = pendingPairings.get(code);
+  if (!p) return res.status(404).json({ status: "expired" });
+  if (Date.now() - p.ts > PAIRING_TTL_MS) {
+    pendingPairings.delete(code);
+    return res.status(410).json({ status: "expired" });
+  }
+  // Comparación constant-time del hash.
+  const givenHash    = _hashSecret(secret);
+  const expectedHash = p.device_secret_hash;
+  let match = givenHash.length === expectedHash.length;
+  if (match) {
+    try {
+      match = crypto.timingSafeEqual(Buffer.from(givenHash, "hex"), Buffer.from(expectedHash, "hex"));
+    } catch { match = false; }
+  }
+  if (!match) return res.status(403).json({ status: "secret-mismatch" });
+
+  if (!p.claimed) return res.json({ status: "pending" });
+
+  // One-shot: devolvemos el token y borramos el intent. Si el tractor pierde
+  // esta respuesta queda sin token — pero al estar el device doc creado en
+  // CouchDB, el operario puede regenerar desde el panel.
+  pendingPairings.delete(code);
+  res.json({
+    status:     "claimed",
+    device_id:  p.device_id,
+    token:      p.token,
+    estab_slug: p.estab_slug,
+    nombre:     p.nombre,
+  });
+});
 
 module.exports = { router, deviceAuth };
 
