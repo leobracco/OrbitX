@@ -73,13 +73,16 @@
           <option value="LineX">LineX</option>
           <option value="SectionX">SectionX</option>
           <option value="StormX">StormX</option>
+          <option value="CoreX-ECU">CoreX-ECU (Teensy)</option>
         </select>
       </div>
       <div class="field"><label>Versión (semver)</label><input id="up-version" placeholder="1.2.3"/></div>
       <div class="field field-full"><label>Changelog</label>
         <textarea id="up-changelog" rows="4" placeholder="Qué cambia en esta versión"></textarea>
       </div>
-      <div class="field field-full"><label>Archivo .bin</label><input type="file" id="up-archivo" accept=".bin"/></div>
+      <div class="field field-full"><label>Archivo firmware</label><input type="file" id="up-archivo" accept=".bin,.hex,.zip"/>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">.bin (ESP32) · .hex (CoreX-ECU/Teensy) · .zip (PilotX)</div>
+      </div>
     </div>
 
     <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
