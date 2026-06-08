@@ -7,7 +7,17 @@
     "Authorization": `Bearer ${TOKEN || ""}`,
   }, extra || {});
 
-  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","CoreX-ECU"];
+  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","FlowX","PilotX","CoreX-ECU"];
+
+  // Convención: <Producto>_v<X.Y.Z>.<ext>  (ej: FlowX_v1.9.1.bin)
+  // Devuelve { producto, productoRaw, version } o null si no matchea.
+  function detectarDesdeNombre(nombre) {
+    const m = /^(.+)_v(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\.(bin|hex|zip)$/i.exec(nombre || "");
+    if (!m) return null;
+    const productoRaw = m[1];
+    const producto = PRODUCTOS.find(p => p.toLowerCase() === productoRaw.toLowerCase()) || null;
+    return { producto, productoRaw, version: m[2] };
+  }
   let productoActivo = "VistaX";
   let firmwares = [];
 
@@ -64,10 +74,37 @@
 
   // ── Subir (solo SA) ─────────────────────────────────────
   window.abrirSubir = () => {
+    // Reset del form para no arrastrar datos de una subida anterior.
+    document.getElementById("up-version").value = "";
+    document.getElementById("up-changelog").value = "";
+    document.getElementById("up-archivo").value = "";
+    document.getElementById("up-detectado").textContent = "";
     document.getElementById("modal-subir").classList.add("open");
   };
   window.cerrarSubir = () => {
     document.getElementById("modal-subir").classList.remove("open");
+  };
+
+  // Auto-detección al elegir el archivo: pre-llena producto + versión.
+  window.fwArchivoElegido = function (input) {
+    const hint = document.getElementById("up-detectado");
+    const f = input.files && input.files[0];
+    if (!f) { hint.textContent = ""; return; }
+
+    const det = detectarDesdeNombre(f.name);
+    if (det && det.producto) {
+      document.getElementById("up-producto").value = det.producto;
+      document.getElementById("up-version").value  = det.version;
+      hint.style.color = "var(--lime, #7bd88f)";
+      hint.textContent = `✓ Detectado: ${det.producto} · ${det.version}`;
+    } else if (det) {
+      document.getElementById("up-version").value = det.version;
+      hint.style.color = "var(--amber, #e0b341)";
+      hint.textContent = `Versión ${det.version} detectada, pero "${det.productoRaw}" no está en el catálogo. Elegí el producto a mano.`;
+    } else {
+      hint.style.color = "var(--amber, #e0b341)";
+      hint.textContent = `No pude leer el nombre. Usá <Producto>_v<X.Y.Z>.<ext> (ej: FlowX_v1.9.1.bin). Completá producto y versión a mano.`;
+    }
   };
 
   window.subirFirmware = async function () {
