@@ -79,8 +79,19 @@
     document.getElementById("up-changelog").value = "";
     document.getElementById("up-archivo").value = "";
     document.getElementById("up-detectado").textContent = "";
+    alertaModal("");
     document.getElementById("modal-subir").classList.add("open");
   };
+
+  // Alerta dentro del modal (el #fw-alert de la página queda tapado por el modal).
+  function alertaModal(msg, tipo) {
+    const el = document.getElementById("up-alert");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = msg
+      ? `alert show ${tipo === "error" ? "error" : tipo === "success" ? "success" : "info"}`
+      : "alert";
+  }
   window.cerrarSubir = () => {
     document.getElementById("modal-subir").classList.remove("open");
   };
@@ -112,8 +123,8 @@
     const version   = document.getElementById("up-version").value.trim();
     const changelog = document.getElementById("up-changelog").value.trim();
     const archivo   = document.getElementById("up-archivo").files[0];
-    if (!version) return alerta("Pasá una versión semver", "error");
-    if (!archivo) return alerta("Elegí el archivo .bin", "error");
+    if (!version) return alertaModal("Pasá una versión semver (ej 1.16.0)", "error");
+    if (!archivo) return alertaModal("Elegí el archivo de firmware", "error");
 
     const fd = new FormData();
     fd.append("producto",  producto);
@@ -121,19 +132,19 @@
     fd.append("changelog", changelog);
     fd.append("archivo",   archivo);
 
-    alerta("Subiendo…", "info");
+    alertaModal("Subiendo…", "info");
     try {
       const r = await fetch("/api/ota/upload", { method: "POST", headers: headers(), body: fd });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Falló el upload");
-      alerta(`✓ ${producto} ${version} subido`, "success");
       cerrarSubir();
+      alerta(`✓ ${producto} ${version} subido`, "success");
       productoActivo = producto;
       pintarChips();
       cargar();
       cargarLogs();
     } catch (e) {
-      alerta(e.message, "error");
+      alertaModal(e.message, "error");
     }
   };
 
