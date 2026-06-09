@@ -34,7 +34,7 @@ const upload = multer
         },
         filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
       }),
-      limits: { fileSize: 32 * 1024 * 1024 }, // 32 MB
+      limits: { fileSize: 300 * 1024 * 1024 }, // 300 MB — PilotX ZIP (build PC) pesa decenas de MB; ESP32/Teensy .bin/.hex son chicos
     })
   : null;
 
@@ -319,6 +319,25 @@ router.post("/resultado", async (req, res) => {
 
     const db  = couch.getDB("global");
     const now = Date.now();
+
+    // O5 — Antes el reporte se aceptaba a ciegas: un device que tropezó
+    // con un producto/version aleatorio podía marcar "ok" y ensuciar
+    // el log + actualizar dev.version a cualquier cosa. Verificamos
+    // contra el ota_pendiente que dejó el panel al disparar la actualización.
+    // Si no hay pendiente, igual aceptamos el log pero marcamos huérfano.
+    const pend = await db.get(`ota_pendiente_${dev.device_id}`).catch(() => null);
+    let huerfano = false;
+    if (pend) {
+      if (pend.producto !== producto || pend.version !== version) {
+        return res.status(409).json({
+          error: "resultado no coincide con OTA pendiente",
+          detalle: `pendiente=${pend.producto}@${pend.version}, recibido=${producto}@${version}`,
+        });
+      }
+    } else {
+      huerfano = true;
+    }
+
     const log = {
       _id:               `ota_log_${now}_${dev.device_id}`,
       tipo:              "ota_log",
@@ -329,21 +348,30 @@ router.post("/resultado", async (req, res) => {
       version_nueva:     version,
       resultado,
       error:             error || null,
+      huerfano,
       ts:                now,
     };
     await db.insert(log);
 
-    // Si fue ok, actualizamos el doc del device con la nueva version y borramos el pendiente.
+    // Si fue ok, actualizamos el doc del device con la nueva version.
     if (resultado === "ok") {
       await db.insert({ ...dev, version, ultimo_visto: now, updated_at: now });
-      const pend = await db.get(`ota_pendiente_${dev.device_id}`).catch(() => null);
-      if (pend) await db.destroy(pend._id, pend._rev).catch(() => {});
+    }
+
+    // O7 — Antes solo se borraba el pendiente en "ok" → si fallaba, el
+    // device veía el mismo pendiente al próximo poll y reintentaba en
+    // loop (download → falla SHA → reportar falla → ver pendiente otra
+    // vez). Cualquier resultado FINAL ("ok", "falla", "timeout") cierra
+    // el pendiente. Estados parciales/progreso van por otros endpoints.
+    const finales = new Set(["ok", "falla", "fail", "error", "timeout"]);
+    if (pend && finales.has(String(resultado).toLowerCase())) {
+      await db.destroy(pend._id, pend._rev).catch(() => {});
     }
 
     notify.notifyOTAResult(log).catch(() => {});
 
     if (req.io) req.io.to(`maquina:${dev.device_id}`).emit("ota:resultado", { producto, version, resultado, ts: now });
-    res.json({ ok: true });
+    res.json({ ok: true, huerfano });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
