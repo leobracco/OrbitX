@@ -10,7 +10,7 @@ const { ROLES, puedeInvitar } = require("../roles");
 const notifyAdmin = require("../lib/notify-admin");
 const emailLib    = require("../lib/email");
 
-const SECRET = process.env.JWT_SECRET || "orbitx-dev-secret";
+const SECRET = process.env.JWT_SECRET || "orbitx-dev-secret-cambiar";
 
 let couchDB = null;
 function setDB(db) {
@@ -43,6 +43,9 @@ const slugify  = (s = "") => s.toLowerCase()
   .replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").slice(0, 40);
 
 async function findUser(db, email) {
+  // O3b — chokepoint: rechazar email no-string evita inyección de operadores
+  // Mango (ej. {"$gt":""}) desde cualquier caller (login, reset).
+  if (typeof email !== "string" || !email) return null;
   // Intentar primero con find()
   try {
     const r = await db.find({ selector: { tipo: "usuario", email }, limit: 1 });
@@ -59,13 +62,42 @@ async function findUser(db, email) {
 }
 
 async function signJWT(uid, orgSlug, memberships = []) {
+  // O15 — leemos el doc una vez para rol_global + token_version (tv). `tv` va
+  // en el payload y el middleware lo compara contra el doc para revocar.
+  let rol_global = "user", tv = 0;
+  try {
+    const doc = await globalDB().get(`usr_${uid}`);
+    rol_global = doc.rol_global || "user";
+    tv = doc.token_version || 0;
+  } catch {}
   return jwt.sign({
     uid,
     estabSlug:   orgSlug,
     memberships,
-    rol_global:  await getRolGlobal(uid),
+    rol_global,
+    tv,
     iat: Math.floor(Date.now() / 1000)
   }, SECRET, { expiresIn: "30d" });
+}
+
+// O15 — incrementa token_version → invalida TODOS los JWT vigentes del usuario
+// (revocación de acceso, reset de contraseña). Retry 409 + tolera not_found.
+async function bumpTokenVersion(uid) {
+  const db = globalDB();
+  const id = `usr_${String(uid).replace(/^usr_/, "")}`;
+  let lastErr;
+  for (let intento = 0; intento < 3; intento++) {
+    try {
+      const u = await db.get(id);
+      await db.insert({ ...u, token_version: (u.token_version || 0) + 1, updated_at: Date.now() });
+      return;
+    } catch (e) {
+      if (e.statusCode === 404 || e.error === "not_found") return;
+      if ((e.statusCode === 409 || e.error === "conflict") && intento < 2) { lastErr = e; continue; }
+      throw e;
+    }
+  }
+  throw lastErr || new Error("bumpTokenVersion: conflict tras 3 reintentos");
 }
 
 async function getRolGlobal(uid) {
@@ -307,6 +339,24 @@ async function login(email, password, orgSlugSolicitada) {
 }
 
 // ════════════════════════════════════════════════════════════
+//  CAMBIAR ORG ACTIVA — reemite JWT
+//  O4 — Antes el route hacía jwt.verify+sign copiando `memberships` del
+//  token viejo (válidas hasta 30d aunque se revocara el acceso) y con un
+//  default de SECRET distinto al del middleware. Acá re-derivamos
+//  memberships desde DB (getMemberships solo trae activas) y firmamos con
+//  el mismo signJWT que login → fuente única de verdad.
+// ════════════════════════════════════════════════════════════
+async function cambiarOrg(uid, orgSlug) {
+  const memberships = await getMemberships(uid);
+  const rolGlobal   = await getRolGlobal(uid);
+  const tieneAcceso = memberships.some(m => m.orgSlug === orgSlug);
+  if (!tieneAcceso && rolGlobal !== "superadmin")
+    throw { status: 403, message: "Sin acceso a esa organización" };
+  const token = await signJWT(uid, orgSlug, memberships);
+  return { token, orgSlug };
+}
+
+// ════════════════════════════════════════════════════════════
 //  INVITACIONES
 // ════════════════════════════════════════════════════════════
 async function crearInvitacion({ emailDestino, nombreDestino, orgSlug, rolAsignado, restricciones, invitadoPorUID }) {
@@ -474,6 +524,9 @@ async function revocarAcceso(uid, orgSlug, ejecutadoPorUID) {
   const memb = await db.get(id).catch(() => null);
   if (!memb) throw { status: 404, message: "Membresía no encontrada" };
   await db.insert({ ...memb, activa: false, revocado_por: ejecutadoPorUID, revocado_at: Date.now(), updated_at: Date.now() });
+  // O15 — matar los JWT vigentes del usuario: sin esto seguía operando en la
+  // org revocada (con memberships embebidas) hasta que el token expirara (30d).
+  await bumpTokenVersion(uid).catch(e => console.warn("[Auth] bumpTokenVersion revoke:", e.message));
   await registrarAudit(orgSlug, ejecutadoPorUID, "membresia.revocar", { uid });
 }
 
@@ -518,7 +571,9 @@ async function solicitarReset(email) {
   if (!user) return; // Silencioso por seguridad (no revelar si el mail existe).
   const token = genToken(32);
   await db.insert({ ...user, reset_token: token, reset_token_exp: Date.now() + 3600000, updated_at: Date.now() });
-  console.log(`[Auth] Reset token para ${email}: ${token}`);
+  // O13 — NO loguear el token (permite tomar la cuenta a cualquiera con
+  // acceso a logs). El token viaja solo por el mail al usuario.
+  console.log(`[Auth] Reset solicitado para ${email}`);
 
   emailLib.enviarResetPassword({ nombre: user.nombre, email: user.email }, token)
     .catch(e => console.error("[Auth] enviarResetPassword:", e.message));
@@ -538,8 +593,12 @@ async function confirmarReset(token, nuevaPassword) {
   }
   if (!user)                            throw { status: 404, message: "Token inválido" };
   if (Date.now() > user.reset_token_exp) throw { status: 410, message: "Token expirado" };
+  if (typeof nuevaPassword !== "string" || nuevaPassword.length < 8)
+    throw { status: 400, message: "La contraseña debe tener al menos 8 caracteres" };
   const hash = await bcrypt.hash(nuevaPassword, 12);
-  await db.insert({ ...user, password_hash: hash, reset_token: null, reset_token_exp: null, updated_at: Date.now() });
+  // O15 — al cambiar la contraseña, invalidar sesiones existentes (por si el
+  // reset lo gatilló un compromiso de cuenta).
+  await db.insert({ ...user, password_hash: hash, reset_token: null, reset_token_exp: null, token_version: (user.token_version || 0) + 1, updated_at: Date.now() });
 }
 
 // ── Listar registros pendientes ───────────────────────────
@@ -562,7 +621,7 @@ async function getRegistrosPendientes() {
 module.exports = {
   setDB, ensureIndexes,
   iniciarRegistro, verificarEmail, aprobarRegistro, rechazarRegistro, getRegistrosPendientes,
-  login,
+  login, cambiarOrg,
   crearInvitacion, getInvitacion, aceptarInvitacion,
   getMiembros, actualizarMembresia, revocarAcceso,
   registrarAudit, getAuditLog,

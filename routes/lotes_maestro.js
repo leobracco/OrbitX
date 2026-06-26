@@ -520,7 +520,13 @@ router.delete("/:nombre/capa/:capaId", async (req, res) => {
     const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
     const estabDB = getDB(slug);
     const doc     = await estabDB.get(req.params.capaId).catch(() => null);
-    if (!doc) return res.status(404).json({ error: "Capa no encontrada" });
+    // O7b — validar tipo y pertenencia al lote del path: sin esto, pasar
+    // como :capaId el _id de cualquier otro doc de la org (lote_maestro,
+    // aog_archivo…) lo borraba sin chequeo.
+    if (!doc || doc.tipo !== "lote_capa")
+      return res.status(404).json({ error: "Capa no encontrada" });
+    if (doc.lote_ref !== decodeURIComponent(req.params.nombre))
+      return res.status(403).json({ error: "La capa no pertenece a ese lote" });
     await estabDB.destroy(doc._id, doc._rev);
     res.json({ ok: true });
   } catch(e) {

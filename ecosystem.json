@@ -1,4 +1,5 @@
 {
+  "_comment_instances": "O10 — instances:1 a propósito. Cluster mode rompe (a) Socket.IO sin redis-adapter, (b) cron node-cron del server.js que dispararía N veces (1 vez por worker). Para escalar: agregar @socket.io/redis-adapter + extraer cron a un worker dedicado, después subir a 'max'.",
   "apps": [
     {
       "name": "OrbitX",
@@ -7,17 +8,20 @@
       "autorestart": true,
       "watch": false,
       "max_memory_restart": "1G",
+      "listen_timeout": 8000,
+      "kill_timeout": 5000,
+      "wait_ready": false,
       "log_date_format": "YYYY-MM-DD HH:mm Z",
       "error_file": "./logs/error.log",
       "out_file": "./logs/salida.log",
       "env": {
         "NODE_ENV": "development",
-	"TZ": "America/Argentina/Buenos_Aires"
+        "TZ": "America/Argentina/Buenos_Aires"
       },
       "env_production": {
         "NODE_ENV": "production",
         "PORT": 5005,
-	"TZ": "America/Argentina/Buenos_Aires"
+        "TZ": "America/Argentina/Buenos_Aires"
       }
     }
   ]

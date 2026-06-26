@@ -24,16 +24,34 @@ async function ensureDB(slug) {
   return cache[name];
 }
 
+// O11 — upsert con retry en 409 (conflict). Sin esto, dos requests
+// concurrentes sobre el mismo doc (típico: heartbeat de device + cambio
+// de slug desde panel) producen un 500 al usuario aunque la operación
+// es perfectamente reintentable. 3 intentos cubren el peor caso real,
+// más fail-fast loud.
 async function upsert(db, id, data) {
   const now = Date.now();
-  try {
-    const existing = await db.get(id);
-    return db.insert({ ...existing, ...data, _rev: existing._rev, updated_at: now });
-  } catch(e) {
-    if (e.error === "not_found")
-      return db.insert({ ...data, _id: id, created_at: now, updated_at: now });
-    throw e;
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      let existing = null;
+      try { existing = await db.get(id); } catch (e) {
+        if (e.error !== "not_found" && e.statusCode !== 404) throw e;
+      }
+      if (existing) {
+        return await db.insert({ ...existing, ...data, _rev: existing._rev, updated_at: now });
+      }
+      return await db.insert({ ...data, _id: id, created_at: now, updated_at: now });
+    } catch (e) {
+      // 409 = conflict: otro writer ganó la carrera, leer el rev fresco y reintentar.
+      if (e.statusCode === 409 || e.error === "conflict") {
+        lastErr = e;
+        continue;
+      }
+      throw e;
+    }
   }
+  throw lastErr || new Error("upsert: conflict tras 3 reintentos");
 }
 
 const dateSlug = () => new Date().toISOString().slice(0,10).replace(/-/g,"");
@@ -125,6 +143,7 @@ async function ensureDesignOnOrg(slug) {
   if (slug === "global" || _designOk.has(slug)) return;
   try {
     await upsertDesignDoc(getDB(slug));
+    await ensureEstabIndexes(slug); // O26
     _designOk.add(slug);
   } catch (e) {
     console.warn(`[CouchDB] design doc en ${slug}:`, e.message);
@@ -134,6 +153,7 @@ async function ensureDesignOnOrg(slug) {
 async function bootstrap() {
   await ensureDB("global");
   await upsertDesignDoc(getDB("global"));
+  await ensureGlobalIndexes(); // O26
 
   // Iterar todas las DBs orbitx_* existentes y subir el design doc actualizado.
   // Idempotente: solo reescribe si el hash cambió.
@@ -144,24 +164,78 @@ async function bootstrap() {
       const slug = name.replace(PREFIX, "");
       try {
         await upsertDesignDoc(getDB(slug));
+        await ensureEstabIndexes(slug); // O26
         _designOk.add(slug);
       } catch (e) {
         console.warn(`[CouchDB] design doc en ${slug}:`, e.message);
       }
     }
-    console.log(`[CouchDB] design doc actualizado en ${dbs.filter(n => n.startsWith(PREFIX) && n !== GLOBAL).length} DBs (hash ${DESIGN_HASH})`);
+    console.log(`[CouchDB] design doc + indexes actualizados en ${dbs.filter(n => n.startsWith(PREFIX) && n !== GLOBAL).length} DBs (hash ${DESIGN_HASH})`);
   } catch (e) {
     console.warn("[CouchDB] bootstrap design en orgs:", e.message);
+  }
+}
+
+// O26 — Indexes Mango por-org. Sin estos, `db.find(...)` cae a full
+// table scan + warning silencioso. Los selectors listados acá son los
+// que efectivamente usan las routes (aog, vistax, tracking, alertas,
+// lotes). Añadir uno NUEVO acá cuando se introduzca una query nueva,
+// no fiarse del fallback de _findAll.
+const ESTAB_INDEX_FIELDS = [
+  ["tipo"],
+  ["tipo","lote_id"],
+  ["tipo","synced_at"],
+  ["tipo","estado"],
+  ["tipo","fecha_inicio"],
+  ["tipo","ts"],
+  ["tipo","device_id","ts"],
+  ["tipo","device_id","bucket_ts"], // O8 — tracking_bucket por device+ventana
+  ["tipo","es_lote","lote_nombre"],
+  ["tipo","subtipo"],
+  ["tipo","subtipo","es_lote"],
+  ["tipo","entregado"],
+  ["tipo","doc_ref"],
+  ["tipo","resuelta","ts_inicio"],
+];
+
+async function ensureEstabIndexes(slug) {
+  const db = getDB(slug);
+  for (const fields of ESTAB_INDEX_FIELDS) {
+    try {
+      await db.createIndex({ index: { fields } });
+    } catch (e) {
+      // CouchDB devuelve 200 con "result":"exists" si ya existe — solo
+      // logueamos errores genuinos (Couch caído, permisos).
+      if (e.statusCode && e.statusCode >= 500) {
+        console.warn(`[CouchDB] index ${slug} ${JSON.stringify(fields)}:`, e.message);
+      }
+    }
   }
 }
 
 async function bootstrapEstablecimiento(slug) {
   await ensureDB(slug);
   await upsertDesignDoc(getDB(slug));
-  // Habilitar índice Mango
-  const db = getDB(slug);
-  for (const fields of [["tipo"],["tipo","lote_id"],["tipo","synced_at"],["tipo","estado"]]) {
-    await db.createIndex({ index: { fields } }).catch(()=>{});
+  await ensureEstabIndexes(slug);
+}
+
+// Indexes en orbitx_global (devices, usuarios, estabs, tracking_live).
+const GLOBAL_INDEX_FIELDS = [
+  ["tipo"],
+  ["tipo","email"],
+  ["tipo","estab_slug","ts"],
+  ["tipo","device_id"],
+  ["tipo","producto","version"],
+];
+async function ensureGlobalIndexes() {
+  const db = getDB("global");
+  for (const fields of GLOBAL_INDEX_FIELDS) {
+    try { await db.createIndex({ index: { fields } }); }
+    catch (e) {
+      if (e.statusCode && e.statusCode >= 500) {
+        console.warn(`[CouchDB] index global ${JSON.stringify(fields)}:`, e.message);
+      }
+    }
   }
 }
 

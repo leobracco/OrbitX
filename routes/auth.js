@@ -2,10 +2,18 @@
 const router  = require("express").Router();
 const svc     = require("../services/auth_service");
 const { required, adminOnly, soloSuperadmin, requirePermiso } = require("../middleware/auth");
+const { rateLimit } = require("../middleware/rate-limit");
 const { ROLES, rolesQuePuedeAsignar } = require("../roles");
 
+// O14 — anti fuerza-bruta. Login/reset por IP+email; registro por IP.
+const limLogin    = rateLimit({ windowMs: 15 * 60_000, max: 10,
+  keyGenerator: (req) => `${req.socket?.remoteAddress}|${String(req.body?.email || "").toLowerCase()}` });
+const limReset    = rateLimit({ windowMs: 15 * 60_000, max: 5,
+  keyGenerator: (req) => `${req.socket?.remoteAddress}|${String(req.body?.email || "").toLowerCase()}` });
+const limRegistro = rateLimit({ windowMs: 60 * 60_000, max: 10 });
+
 // ── Registro self-service ────────────────────────────────────
-router.post("/registro", async (req, res) => {
+router.post("/registro", limRegistro, async (req, res) => {
   try {
     const meta = {
       ip:         req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
@@ -46,10 +54,13 @@ router.post("/rechazar/:token", required, soloSuperadmin, async (req, res) => {
 });
 
 // ── Login ────────────────────────────────────────────────────
-router.post("/login", async (req, res) => {
+router.post("/login", limLogin, async (req, res) => {
   try {
     const { email, password, org } = req.body;
-    if (!email||!password) return res.status(400).json({ error:"Email y contraseña requeridos" });
+    // O3b — validar tipo: sin esto, `email:{"$gt":""}` se cuela como operador
+    // Mango en findUser y matchea el primer usuario (enumeración / targeting).
+    if (typeof email !== "string" || typeof password !== "string" || !email || !password)
+      return res.status(400).json({ error:"Email y contraseña requeridos" });
     const r = await svc.login(email, password, org||null);
     res.json(r);
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
@@ -69,15 +80,11 @@ router.get("/me", required, async (req, res) => {
 router.post("/cambiar-org", required, async (req, res) => {
   try {
     const { orgSlug } = req.body;
-    const tieneAcceso = req.user.memberships.some(m => m.orgSlug === orgSlug);
-    if (!tieneAcceso && req.user.rol !== "superadmin")
-      return res.status(403).json({ error:"Sin acceso a esa organización" });
-    const jwt     = require("jsonwebtoken");
-    const SECRET  = process.env.JWT_SECRET || "orbitx-dev-secret";
-    const payload = jwt.verify(req.headers.authorization.slice(7), SECRET);
-    const token   = jwt.sign({ ...payload, estabSlug:orgSlug }, SECRET, { expiresIn:"30d" });
-    res.json({ token, orgSlug });
-  } catch(e) { res.status(500).json({ error:e.message }); }
+    if (typeof orgSlug !== "string" || !orgSlug)
+      return res.status(400).json({ error:"orgSlug requerido" });
+    const r = await svc.cambiarOrg(req.user.uid, orgSlug);
+    res.json(r);
+  } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });
 
 router.post("/push-token", required, async (req, res) => {
@@ -91,7 +98,7 @@ router.post("/push-token", required, async (req, res) => {
 });
 
 // ── Password reset ────────────────────────────────────────────
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", limReset, async (req, res) => {
   try { await svc.solicitarReset(req.body.email); } catch {}
   res.json({ ok:true, mensaje:"Si el email existe, recibirás un link" });
 });

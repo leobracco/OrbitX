@@ -76,7 +76,8 @@ router.get("/status", async (req, res) => {
 // POST /api/sync/config  (el tractor pide su config actualizada)
 router.post("/config", async (req, res) => {
   const { device_id } = req.body;
-  const estabSlug = req.headers["x-estab-slug"] || req.user.estabSlug;
+  // O28 — slug autoritativo de auth.required (doc del device o JWT), no del header.
+  const estabSlug = req.user.estabSlug;
   try {
     const nodo = await db.getNodo(estabSlug, device_id);
     res.json({ nodo: nodo || null });

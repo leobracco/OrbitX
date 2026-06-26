@@ -3,6 +3,12 @@ const router = require("express").Router();
 const crypto = require("crypto");
 const db     = require("../services/couchdb");
 const { registrarAudit } = require("../services/auth_service");
+const { rateLimit } = require("../middleware/rate-limit");
+
+// O14 — pair/init es público (el tractor todavía no tiene token). Sin freno,
+// un atacante puede inundar el Map `pendingPairings` en memoria (DoS) y/o
+// barrer códigos. Limitamos por IP.
+const limPairInit = rateLimit({ windowMs: 60_000, max: 20 });
 
 // ══════════════════════════════════════════════════════════
 //  PAIRING FLOW (RFC 8628 inspirado) — vinculación táctil-friendly
@@ -113,6 +119,18 @@ async function deviceAuth(req, res, next) {
 
 const uid = (req) => req.user?.uid ? `usr_${req.user.uid}` : "system";
 
+// O3c — Defensa en profundidad: estos endpoints de gestión pasan por
+// auth.required, que TAMBIÉN autentica devices (rol_global "device",
+// estabSlug del doc). Sin este guard, un device token podía LISTAR/CREAR/
+// ASIGNAR/BLOQUEAR/RECLAMAR/BORRAR dispositivos de su propia org (la authz
+// por rol/puedeTocarDevice no distingue device de humano). Son acciones de
+// panel: solo humanos logueados.
+function noDevices(req, res, next) {
+  if (req.user?.isDevice)
+    return res.status(403).json({ error: "Endpoint no disponible para dispositivos" });
+  next();
+}
+
 // Pertenencia: superadmin pasa siempre, otros solo si el device está en su org.
 function puedeTocarDevice(req, doc) {
   if (!doc) return false;
@@ -158,7 +176,7 @@ router.post("/heartbeat", deviceAuth, async (req, res) => {
 // ══════════════════════════════════════════════════════════
 //  GET /api/devices  — superadmin ve todo, otros ven solo los de su org
 // ══════════════════════════════════════════════════════════
-router.get("/", async (req, res) => {
+router.get("/", noDevices, async (req, res) => {
   try {
     const globalDB = req.app.locals.globalDB;
     const esSA     = req.user?.rol_global === "superadmin";
@@ -196,7 +214,7 @@ router.get("/", async (req, res) => {
 //  Lo hace el operador desde el panel antes de instalar el agente.
 //  Si NO es superadmin, el device queda automáticamente asignado a su org.
 // ══════════════════════════════════════════════════════════
-router.post("/nuevo", async (req, res) => {
+router.post("/nuevo", noDevices, async (req, res) => {
   const { nombre, device_id_personalizado } = req.body;
   if (!nombre) return res.status(400).json({ error: "Hace falta el nombre" });
 
@@ -262,7 +280,7 @@ router.post("/nuevo", async (req, res) => {
 //  POST /api/devices/:deviceId/regenerar-token
 //  Si el token se comprometió o hay que reinstalar el agente
 // ══════════════════════════════════════════════════════════
-router.post("/:deviceId/regenerar-token", async (req, res) => {
+router.post("/:deviceId/regenerar-token", noDevices, async (req, res) => {
   try {
     const globalDB = req.app.locals.globalDB;
     const doc      = await globalDB.get(`device_${req.params.deviceId}`).catch(() => null);
@@ -287,7 +305,7 @@ router.post("/:deviceId/regenerar-token", async (req, res) => {
 // ══════════════════════════════════════════════════════════
 //  POST /api/devices/:deviceId/asignar
 // ══════════════════════════════════════════════════════════
-router.post("/:deviceId/asignar", async (req, res) => {
+router.post("/:deviceId/asignar", noDevices, async (req, res) => {
   const { estab_slug, nombre } = req.body;
   if (!estab_slug) return res.status(400).json({ error: "Hace falta el slug del establecimiento" });
 
@@ -332,7 +350,7 @@ router.post("/:deviceId/asignar", async (req, res) => {
 // ══════════════════════════════════════════════════════════
 //  POST /api/devices/:deviceId/renombrar
 // ══════════════════════════════════════════════════════════
-router.post("/:deviceId/renombrar", async (req, res) => {
+router.post("/:deviceId/renombrar", noDevices, async (req, res) => {
   if (!req.body.nombre) return res.status(400).json({ error: "Hace falta el nombre nuevo" });
   try {
     const globalDB = req.app.locals.globalDB;
@@ -348,7 +366,7 @@ router.post("/:deviceId/renombrar", async (req, res) => {
 // ══════════════════════════════════════════════════════════
 //  POST /api/devices/:deviceId/bloquear
 // ══════════════════════════════════════════════════════════
-router.post("/:deviceId/bloquear", async (req, res) => {
+router.post("/:deviceId/bloquear", noDevices, async (req, res) => {
   try {
     const globalDB = req.app.locals.globalDB;
     const doc      = await globalDB.get(`device_${req.params.deviceId}`).catch(() => null);
@@ -392,7 +410,7 @@ async function _migrarUnassigned(deviceId, estabSlug) {
 //  Sin JWT, sin deviceAuth: el código es ephemeral y solo cosechable con el
 //  device_secret que vuelve a guardar el server hasheado.
 // ══════════════════════════════════════════════════════════
-router.post("/pair/init", async (req, res) => {
+router.post("/pair/init", limPairInit, async (req, res) => {
   const { code, device_secret, device_id, hostname, version } = req.body || {};
   if (!_validPairCode(code))
     return res.status(400).json({ error: "Código inválido (6 chars, alfabeto restringido)." });
@@ -430,7 +448,7 @@ router.post("/pair/init", async (req, res) => {
 //  Requiere JWT (operario logueado en su org).
 //  body: { code, nombre?, estab_slug? (solo SA puede pasar otra) }
 // ══════════════════════════════════════════════════════════
-router.post("/pair/claim", async (req, res) => {
+router.post("/pair/claim", noDevices, async (req, res) => {
   const { code, nombre, estab_slug: estabBody } = req.body || {};
   if (!_validPairCode(code))
     return res.status(400).json({ error: "Código inválido." });
@@ -568,7 +586,7 @@ module.exports = { router, deviceAuth };
 // ══════════════════════════════════════════════════════════
 //  DELETE /api/devices/:deviceId  — borrar dispositivo
 // ══════════════════════════════════════════════════════════
-router.delete("/:deviceId", async (req, res) => {
+router.delete("/:deviceId", noDevices, async (req, res) => {
   try {
     const globalDB = req.app.locals.globalDB;
     const doc      = await globalDB.get(`device_${req.params.deviceId}`).catch(() => null);

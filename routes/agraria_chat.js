@@ -31,7 +31,6 @@ async function listSesiones(uid, limit = 50) {
 async function appendMensaje(uid, sesionId, orgSlug, mensajeUser, respuestaIA) {
   const gdb = db.getDB("global");
   const _id = `chat_${uid}_${sesionId}`;
-  let doc = await getSesion(uid, sesionId);
   const now = Date.now();
 
   const mensajesNuevos = [
@@ -39,28 +38,41 @@ async function appendMensaje(uid, sesionId, orgSlug, mensajeUser, respuestaIA) {
     { rol: "assistant", texto: respuestaIA, ts: now + 1 },
   ];
 
-  if (!doc) {
-    // Título: primeras 8 palabras del primer mensaje.
-    const titulo = (mensajeUser || "Sin título").split(/\s+/).slice(0, 8).join(" ").slice(0, 80);
-    doc = {
-      _id,
-      tipo:      "agraria_chat",
-      sesionId,
-      uid,
-      orgSlug:   orgSlug || null,
-      titulo,
-      mensajes:  mensajesNuevos,
-      mensajes_count: mensajesNuevos.length,
-      created_at: now,
-      updated_at: now,
-    };
-  } else {
-    doc.mensajes = [...(doc.mensajes || []), ...mensajesNuevos];
-    doc.mensajes_count = doc.mensajes.length;
-    doc.updated_at = now;
+  // O11c — retry 409: dos mensajes rápidos (doble-click/reconexión) hacían
+  // get+insert sobre el mismo doc y el segundo se perdía silencioso. Releemos
+  // el _rev fresco en cada intento y appendeamos sobre lo último.
+  let lastErr;
+  for (let intento = 0; intento < 3; intento++) {
+    let doc = await getSesion(uid, sesionId);
+    if (!doc) {
+      // Título: primeras 8 palabras del primer mensaje.
+      const titulo = (mensajeUser || "Sin título").split(/\s+/).slice(0, 8).join(" ").slice(0, 80);
+      doc = {
+        _id,
+        tipo:      "agraria_chat",
+        sesionId,
+        uid,
+        orgSlug:   orgSlug || null,
+        titulo,
+        mensajes:  mensajesNuevos,
+        mensajes_count: mensajesNuevos.length,
+        created_at: now,
+        updated_at: now,
+      };
+    } else {
+      doc.mensajes = [...(doc.mensajes || []), ...mensajesNuevos];
+      doc.mensajes_count = doc.mensajes.length;
+      doc.updated_at = now;
+    }
+    try {
+      await gdb.insert(doc);
+      return doc;
+    } catch (e) {
+      if ((e.statusCode === 409 || e.error === "conflict") && intento < 2) { lastErr = e; continue; }
+      throw e;
+    }
   }
-  await gdb.insert(doc);
-  return doc;
+  throw lastErr || new Error("appendMensaje: conflict tras 3 reintentos");
 }
 
 const API_URL = "https://api.anthropic.com/v1/messages";
@@ -77,6 +89,10 @@ async function callClaude(system, messages, max_tokens = 1000) {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY no configurada");
   const r = await fetch(API_URL, {
     method: "POST",
+    // O5 — sin timeout, una respuesta colgada de la API deja el handler
+    // pendiente para siempre y agota el pool bajo concurrencia. 60s cubre
+    // análisis de visión / respuestas largas.
+    signal: AbortSignal.timeout(60_000),
     headers: {
       "Content-Type":      "application/json",
       "x-api-key":         apiKey,

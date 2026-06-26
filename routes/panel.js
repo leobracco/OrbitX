@@ -3,7 +3,7 @@
 
 const router  = require("express").Router();
 const jwt     = require("jsonwebtoken");
-const SECRET  = process.env.JWT_SECRET || "orbitx-dev-secret";
+const SECRET  = process.env.JWT_SECRET || "orbitx-dev-secret-cambiar";
 
 // ── helpers CouchDB ───────────────────────────────────────
 async function getAllDocs(db) {

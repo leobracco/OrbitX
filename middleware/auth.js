@@ -1,11 +1,73 @@
 // middleware/auth.js — OrbitX · auto-contenido sin dependencias externas
 const jwt = require("jsonwebtoken");
+const couch = require("../services/couchdb");
 
-const SECRET       = process.env.JWT_SECRET            || "orbitx-dev-secret-cambiar";
-const DEVICE_TOKEN = process.env.DEVICE_MASTER_TOKEN   || "vx-device-token";
+const DEFAULT_SECRET = "orbitx-dev-secret-cambiar";
+const DEFAULT_DEVICE = "vx-device-token";
+const SECRET       = process.env.JWT_SECRET            || DEFAULT_SECRET;
+const DEVICE_TOKEN = process.env.DEVICE_MASTER_TOKEN   || DEFAULT_DEVICE;
+
+// O1 — En producción, NUNCA arrancar con los defaults: cualquiera con el
+// repo puede forjar JWT/device tokens. Fallar el bootstrap es preferible
+// a quedar abierto. En dev se loguea warning y se sigue.
+if (process.env.NODE_ENV === "production") {
+  if (SECRET === DEFAULT_SECRET) {
+    console.error("[FATAL] JWT_SECRET no configurado en producción (usa env var)");
+    process.exit(1);
+  }
+  if (DEVICE_TOKEN === DEFAULT_DEVICE) {
+    console.error("[FATAL] DEVICE_MASTER_TOKEN no configurado en producción");
+    process.exit(1);
+  }
+  if (SECRET.length < 32) {
+    console.error("[FATAL] JWT_SECRET demasiado corto (<32 chars) — riesgo de brute-force");
+    process.exit(1);
+  }
+} else {
+  if (SECRET === DEFAULT_SECRET) console.warn("[WARN] JWT_SECRET con default de dev");
+  if (DEVICE_TOKEN === DEFAULT_DEVICE) console.warn("[WARN] DEVICE_MASTER_TOKEN con default de dev");
+}
 
 function signToken(payload, expiresIn = "30d") {
   return jwt.sign(payload, SECRET, { expiresIn });
+}
+
+// O15 — Revocación de sesiones. Sin esto, un JWT vale 30 días aunque se
+// revoque el acceso, se cambie la contraseña o se bloquee la cuenta. Contra
+// el doc del usuario validamos `token_version` (se bumpea al revocar/resetear)
+// + `bloqueado`/`activo`. Cache de 30s para no pegarle a CouchDB en cada
+// request: la revocación propaga en ≤30s (vs 30 días antes).
+const _userState = new Map(); // uid -> { tv, bloqueado, activo, missing, exp }
+const USER_STATE_TTL_MS = 30_000;
+
+async function getUserState(uid) {
+  const now = Date.now();
+  const cached = _userState.get(uid);
+  if (cached && cached.exp > now) return cached;
+  let gdb;
+  try { gdb = couch.getDB("global"); } catch { return null; }
+  if (!gdb) return null;
+  try {
+    const u = await gdb.get(`usr_${uid}`);
+    const st = {
+      tv:        u.token_version || 0,
+      bloqueado: !!u.bloqueado,
+      activo:    u.activo !== false,
+      missing:   false,
+      exp:       now + USER_STATE_TTL_MS,
+    };
+    _userState.set(uid, st);
+    return st;
+  } catch (e) {
+    if (e.statusCode === 404 || e.error === "not_found") {
+      const st = { missing: true, exp: now + USER_STATE_TTL_MS };
+      _userState.set(uid, st);
+      return st;
+    }
+    // Error transitorio de CouchDB: NO bloqueamos auth (fail-open). Devolver
+    // null → el caller deja pasar el token válido sin chequear revocación.
+    return null;
+  }
 }
 
 async function required(req, res, next) {
@@ -65,6 +127,16 @@ async function required(req, res, next) {
 
   try {
     const payload = jwt.verify(token, SECRET);
+    // O15 — chequeo de revocación. `st === null` = error transitorio de DB →
+    // fail-open (no tumbar auth por un hipo de Couch).
+    const st = await getUserState(payload.uid);
+    if (st) {
+      if (st.missing)   return res.status(401).json({ error: "Usuario no encontrado" });
+      if (st.bloqueado) return res.status(403).json({ error: "Cuenta bloqueada" });
+      if (!st.activo)   return res.status(403).json({ error: "Cuenta desactivada" });
+      if ((payload.tv || 0) !== st.tv)
+        return res.status(401).json({ error: "Sesión revocada, iniciá sesión de nuevo" });
+    }
     req.user = {
       uid: payload.uid, rol_global: payload.rol_global || payload.rol || "user",
       estabSlug: payload.estabSlug, memberships: payload.memberships || [], isDevice: false,
@@ -107,7 +179,15 @@ const AM = { read:"r", write:"w", delete:"d", invite:"i" };
 
 function requirePermiso(recurso, accion) {
   return (req, res, next) => {
-    if (req.user?.isDevice) return next();
+    // O3 — Devices NUNCA pueden cruzar requirePermiso. Antes había un
+    // bypass `if (isDevice) return next()` que daba a cualquier device
+    // token acceso a /api/auth/invitar, /api/auth/equipo (CRUD usuarios)
+    // y /api/auth/audit (audit log). Privilege escalation total.
+    // Si un endpoint necesita ser device-friendly, NO usar requirePermiso
+    // — usar auth.required y validar dev.estab_slug a mano.
+    if (req.user?.isDevice) {
+      return res.status(403).json({ error:"Sin permiso", detalle:"endpoint no disponible para devices" });
+    }
     const rol = req.user?.rol || "viewer";
     const a   = AM[accion] || accion;
     if (!(PERMS[rol]?.[recurso] || []).includes(a))

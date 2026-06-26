@@ -68,11 +68,15 @@ function extraerLoteId(nombre, lote_id_recibido) {
 //  Llamado por el agente con X-Auth-Token (deviceAuth igual que AOG)
 // ============================================================
 router.post("/sync", deviceAuth, async (req, res) => {
-  const estabSlug = req.headers["x-estab-slug"];
-  const deviceId  = req.headers["x-device-id"];
+  // O28 — IDOR: confiar en `x-estab-slug` del header dejaba que un device
+  // válido escribiera en CUALQUIER orgDB (basta cambiar el header).
+  // Autoridad real: `device.estab_slug` del doc CouchDB que ya cargó
+  // deviceAuth (igual que aog/sync y tracking/position).
+  const estabSlug = req.deviceDoc?.estab_slug;
+  const deviceId  = req.deviceId;
 
   if (!estabSlug || estabSlug === "unassigned")
-    return res.status(400).json({ error: "x-estab-slug requerido" });
+    return res.status(400).json({ error: "Device sin establecimiento asignado" });
 
   const { ruta_rel, nombre, subtipo, lote_id, hash_md5, tamano, contenido, ts } = req.body;
   if (!ruta_rel || contenido === undefined)

@@ -110,7 +110,24 @@ router.post("/api/camaras/auth", express_json(), async (req, res) => {
       if (doc.bloqueado)     return deny(403, "device bloqueado");
       if (doc.token !== password) return deny(401, "token inválido");
 
-      console.log(`[camaras/auth] publish OK ${deviceId}`);
+      // Defensa en profundidad: el path trae el idx de la cam. Si el
+      // device intenta empujar para una cam que no figura registrada
+      // como Hikvision (o está inactiva), no la dejamos siquiera ocupar
+      // el path en MediaMTX. Excepción: device de TEST (OX-TEST-STREAM)
+      // que no usa registro normal de cámaras.
+      if (!doc.is_test && deviceId !== TEST_DEVICE_ID) {
+        const camIdx = parseInt(m[2], 10);
+        const cam = Array.isArray(doc.camaras)
+          ? doc.camaras.find(c => Number(c.idx) === camIdx)
+          : null;
+        if (!cam) return deny(404, `cam idx ${camIdx} no registrada para ${deviceId}`);
+        if (cam.marca && cam.marca !== "hikvision")
+          return deny(403, `cam ${camIdx} marca '${cam.marca}' no soportada`);
+        if (cam.activa === false)
+          return deny(403, `cam ${camIdx} inactiva (${cam.motivo_inactiva || "?"})`);
+      }
+
+      console.log(`[camaras/auth] publish OK ${deviceId} cam${m[2]}`);
       return res.json({ ok: true, role: "publish", deviceId });
     }
 
@@ -134,29 +151,83 @@ router.post("/api/camaras/auth", express_json(), async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
-// AOG/tractor registra sus cámaras: lista de {nombre, ip_lan, canal}
-// Lo guardamos en el device doc para que el panel sepa qué hay disponible.
-// El stream real se publica vía MediaMTX (RTSP push) — esto es solo metadata.
+// Solo aceptamos Hikvision. AOG hace probe ISAPI
+// (GET /ISAPI/System/deviceInfo) y manda la metadata que devolvió la
+// cámara. Acá normalizamos `marca` y rechazamos (marcamos inactiva,
+// NO borramos) todo lo que no sea Hikvision — el panel las muestra en
+// gris con `motivo_inactiva` para que el operario entienda por qué.
+// El stream real se publica vía MediaMTX (RTSP push) — esto es metadata.
+//
+// Body esperado:
+//   { camaras: [{ idx, nombre, marca, modelo, firmware, serial,
+//                 canales: [{ id, nombre, rtsp_path }],
+//                 activa, online }] }
+// OJO: NO guardamos usuario/clave Hikvision en cloud — quedan en AOG.
 // ─────────────────────────────────────────────────────────
+const HIK_BRAND_RE = /^\s*(hik\s*vision|hikvision|hik)\s*$/i;
+
+function normalizarCamara(c, i) {
+  const marcaRaw = String(c.marca || c.brand || "").trim();
+  const esHik = HIK_BRAND_RE.test(marcaRaw);
+  const canalesIn = Array.isArray(c.canales) ? c.canales : [];
+  const canales = canalesIn.slice(0, 8).map((ch, j) => ({
+    id:        Number(ch.id ?? j + 1),
+    nombre:    String(ch.nombre || `Canal ${j + 1}`).slice(0, 40),
+    rtsp_path: String(ch.rtsp_path || "").slice(0, 200), // ej: /ISAPI/Streaming/channels/101
+  }));
+
+  const out = {
+    idx:      Number(c.idx ?? i + 1),
+    nombre:   String(c.nombre || `Cámara ${i + 1}`).slice(0, 60),
+    marca:    esHik ? "hikvision" : (marcaRaw.toLowerCase().slice(0, 32) || "desconocida"),
+    modelo:   String(c.modelo || "").slice(0, 64),
+    firmware: String(c.firmware || "").slice(0, 32),
+    serial:   String(c.serial   || "").slice(0, 64),
+    canales,
+    online:   !!c.online,
+    activa:   esHik ? !!c.activa : false,
+    motivo_inactiva: esHik
+      ? (c.activa ? null : (String(c.motivo_inactiva || "deshabilitada_por_usuario").slice(0, 40)))
+      : "marca_no_soportada",
+  };
+  return out;
+}
+
 router.post("/api/camaras/registrar", deviceAuth, express_json(), async (req, res) => {
   try {
     const camaras = Array.isArray(req.body?.camaras) ? req.body.camaras : null;
     if (!camaras) return res.status(400).json({ error: "se espera { camaras: [...] }" });
+    if (camaras.length > 32) return res.status(400).json({ error: "máximo 32 cámaras por device" });
 
-    const limpio = camaras.map((c, i) => ({
-      idx:    Number(c.idx ?? i + 1),
-      nombre: String(c.nombre || `Cámara ${i + 1}`).slice(0, 60),
-      activa: !!c.activa,
-      online: !!c.online, // estado de stream actual
-      // OJO: NO guardamos usuario/clave Hikvision en cloud — quedan en el tractor
-    }));
+    const limpio = camaras.map(normalizarCamara);
+    const rechazadas = limpio.filter(c => c.motivo_inactiva === "marca_no_soportada");
 
     const globalDB = req.app.locals.globalDB;
-    const doc = await globalDB.get(`device_${req.deviceId}`);
-    doc.camaras = limpio;
-    doc.camaras_updated_at = Date.now();
-    await globalDB.insert(doc);
-    res.json({ ok: true, n: limpio.length });
+    // Retry 409 — el device puede tener heartbeat concurrente actualizando el doc.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const doc = await globalDB.get(`device_${req.deviceId}`);
+        doc.camaras = limpio;
+        doc.camaras_updated_at = Date.now();
+        await globalDB.insert(doc);
+        break;
+      } catch (e) {
+        if ((e.statusCode === 409 || e.error === "conflict") && attempt < 2) continue;
+        throw e;
+      }
+    }
+
+    if (rechazadas.length) {
+      console.warn(`[camaras/registrar] ${req.deviceId}: ${rechazadas.length} cámara(s) rechazada(s) por marca no Hikvision`);
+    }
+
+    res.json({
+      ok: true,
+      n: limpio.length,
+      hik: limpio.length - rechazadas.length,
+      rechazadas: rechazadas.length,
+      rechazadas_detalle: rechazadas.map(c => ({ idx: c.idx, nombre: c.nombre, marca: c.marca })),
+    });
   } catch (e) {
     console.error("[camaras/registrar]", e.message);
     res.status(500).json({ error: e.message });
@@ -199,7 +270,9 @@ router.get("/api/camaras/playback/:deviceId/:cam", auth.required, async (req, re
 
     const deviceId = req.params.deviceId;
     const camIdx   = parseInt(req.params.cam, 10);
-    if (!camIdx) return res.status(400).json({ error: "cam idx inválido" });
+    // `!camIdx` rechazaba también idx 0 (cam válida con idx 0-based). Solo
+    // rechazamos no-numérico o negativo.
+    if (Number.isNaN(camIdx) || camIdx < 0) return res.status(400).json({ error: "cam idx inválido" });
 
     // Verificar permisos sobre el device
     const globalDB = req.app.locals.globalDB;
@@ -211,6 +284,21 @@ router.get("/api/camaras/playback/:deviceId/:cam", auth.required, async (req, re
     const miSlug = u.estabSlug || u.estab_slug;
     if (!esSA && doc.estab_slug && doc.estab_slug !== miSlug)
       return res.status(403).json({ error: "no autorizado" });
+
+    // Solo Hikvision. Si la cam no figura, no es marca soportada, o quedó
+    // inactiva por config del usuario, no entregamos URL firmada — sin
+    // esto, una cam genérica podría seguir tirando stream por MediaMTX
+    // aunque la app la pinte en gris.
+    const cam = Array.isArray(doc.camaras)
+      ? doc.camaras.find(c => Number(c.idx) === camIdx)
+      : null;
+    if (!cam) return res.status(404).json({ error: "cámara no registrada" });
+    if (cam.marca && cam.marca !== "hikvision") {
+      return res.status(403).json({ error: "marca no soportada", marca: cam.marca, motivo: cam.motivo_inactiva || "marca_no_soportada" });
+    }
+    if (cam.activa === false) {
+      return res.status(403).json({ error: "cámara inactiva", motivo: cam.motivo_inactiva || "deshabilitada_por_usuario" });
+    }
 
     const path = pathFor(deviceId, camIdx);
     const expiresAt = Date.now() + PLAYBACK_TTL_MS;

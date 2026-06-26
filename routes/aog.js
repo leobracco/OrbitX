@@ -6,16 +6,17 @@ const { parseVehicleXML, formatearVehiculo } = require("../services/aog_vehicle_
 
 function getEstabDB(slug) { return db.getDB(slug); }
 
+// O12 — El fallback anterior (`list({include_docs:true})` + filter in-JS)
+// es un fail-OPEN catastrófico en DBs grandes: levantaba TODA la org a
+// memoria + emitía la query devuelta sin distinción. Pasaba además
+// inadvertido porque `db.find()` NO tira en `no_matching_index` (es
+// warning, no throw). Si find() tira de verdad (Couch caído, timeout,
+// permisos), preferimos propagar el error que ocultarlo bajo un
+// full-scan. Las indexes mandatorios (O26) cubren los casos legítimos.
 async function _findAll(estabDB, selector, limit = 1000) {
-  try {
-    const r = await estabDB.find({ selector, limit });
-    return r.docs;
-  } catch {
-    const all = await estabDB.list({ include_docs:true });
-    return all.rows.map(r=>r.doc).filter(d =>
-      Object.entries(selector).every(([k,v]) => d[k] === v)
-    );
-  }
+  const r = await estabDB.find({ selector, limit });
+  if (r && r.warning) console.warn("[_findAll] warning:", r.warning, "selector:", selector);
+  return r.docs;
 }
 
 async function _upsert(estabDB, id, data) {
@@ -138,9 +139,13 @@ const { deviceAuth } = require("./devices");
 router.post("/sync", deviceAuth, async (req, res) => {
   const deviceId = req.deviceId;
 
-  // Si no hay estab asignado todavía, guardar en "unassigned"
-  const estabSlug = (req.headers["x-estab-slug"] && req.headers["x-estab-slug"] !== "unassigned")
-    ? req.headers["x-estab-slug"]
+  // O28 — IDOR: confiar en `x-estab-slug` del header dejaba que un device
+  // válido escribiera en CUALQUIER orgDB (basta con cambiar el header).
+  // Autoridad real: `device.estab_slug` del doc CouchDB que ya cargó
+  // deviceAuth. Si el doc no tiene estab asignado, guardar en "unassigned"
+  // (queda pendiente de claim por un owner desde el panel).
+  const estabSlug = (req.deviceDoc?.estab_slug && req.deviceDoc.estab_slug !== "unassigned")
+    ? req.deviceDoc.estab_slug
     : "unassigned";
 
   const { ruta_rel, nombre, subtipo, es_lote, lote_nombre, hash_md5, contenido, contenido_base64, ts } = req.body;
@@ -491,9 +496,15 @@ router.post("/historial/:id/restaurar", async (req, res) => {
 
 // ══════════════════════════════════════════════════
 //  GET /api/aog/pendientes-descarga  — agente consulta
+//  O28 — server.js bypassea JWT para estas dos rutas. Antes NO había
+//  deviceAuth tampoco y se confiaba en `x-estab-slug` header:
+//  cualquiera en internet podía leer y marcar como entregadas las
+//  descargas pendientes de cualquier org. Ahora deviceAuth obligatorio
+//  y slug viene del doc del device (autoritativo).
 // ══════════════════════════════════════════════════
-router.get("/pendientes-descarga", async (req, res) => {
-  const slug = req.headers["x-estab-slug"] || req.user?.estabSlug;
+router.get("/pendientes-descarga", deviceAuth, async (req, res) => {
+  const slug = req.deviceDoc?.estab_slug;
+  if (!slug) return res.status(403).json({ error:"Device sin estab asignado" });
   try {
     const docs = await _findAll(getEstabDB(slug), { tipo:"aog_descarga_pendiente", entregado:false });
     res.json(docs.map(d=>({ id:d._id, ruta_rel:d.ruta_rel, nombre:d.nombre, ts:d.ts })));
@@ -501,8 +512,9 @@ router.get("/pendientes-descarga", async (req, res) => {
 });
 
 // GET /api/aog/pendientes-descarga/:id/contenido
-router.get("/pendientes-descarga/:id/contenido", async (req, res) => {
-  const slug = req.headers["x-estab-slug"] || req.user?.estabSlug;
+router.get("/pendientes-descarga/:id/contenido", deviceAuth, async (req, res) => {
+  const slug = req.deviceDoc?.estab_slug;
+  if (!slug) return res.status(403).json({ error:"Device sin estab asignado" });
   try {
     const estabDB = getEstabDB(slug);
     const doc     = await estabDB.get(req.params.id).catch(()=>null);

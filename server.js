@@ -38,8 +38,59 @@ try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] nd
 
 const app = express();
 const server = http.createServer(app);
+
+// O9 — Sin estos handlers, una excepción no capturada en un handler async
+// (ej. CouchDB timeout en /api/tracking/position bajo carga) tumba el
+// proceso entero. PM2 lo reinicia, pero perdemos conexiones in-flight y
+// dejamos OTAs en estado raro. Loguear+seguir es preferible a morir.
+process.on("uncaughtException", (err) => {
+  console.error("[UNCAUGHT]", err && err.stack ? err.stack : err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[UNHANDLED]", reason && reason.stack ? reason.stack : reason);
+});
+
+// SIGTERM: PM2/Docker manda esto antes de SIGKILL. Cerrar el HTTP server
+// + Socket.IO + STUN para drenar conexiones; si no, los clientes ven
+// resets bruscos y los devices reintentan en bucle.
+let _shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[SHUTDOWN] ${signal} recibido — drenando…`);
+  const forceExit = setTimeout(() => {
+    console.warn("[SHUTDOWN] timeout 10s — exit forzado");
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+  try { io.close(() => {}); } catch (e) { console.warn("[SHUTDOWN/io]", e.message); }
+  server.close(() => {
+    console.log("[SHUTDOWN] HTTP cerrado — bye");
+    process.exit(0);
+  });
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT",  () => gracefulShutdown("SIGINT"));
+
+// O2 — CORS: `origin:"*"` con `credentials:true` es contradictorio Y
+// peligroso (los browsers REJECT, pero el server invita CSRF desde
+// cualquier origen). En prod CORS_ORIGIN es REQUERIDO. En dev,
+// default a localhost.
+function buildCorsOrigin() {
+  const raw = process.env.CORS_ORIGIN;
+  if (raw && raw.trim() && raw.trim() !== "*") {
+    // Coma-separada: "https://panel.x.com,https://app.x.com"
+    return raw.split(",").map(s => s.trim()).filter(Boolean);
+  }
+  if (process.env.NODE_ENV === "production") {
+    console.error("[FATAL] CORS_ORIGIN no configurado en producción (lista coma-separada)");
+    process.exit(1);
+  }
+  return ["http://localhost:5005", "http://localhost:4000", "http://127.0.0.1:5005"];
+}
+const corsOrigin = buildCorsOrigin();
 const io = new Server(server, {
-  cors: { origin: process.env.CORS_ORIGIN || "*", credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
 });
 
 // ── EJS config ────────────────────────────────────────────

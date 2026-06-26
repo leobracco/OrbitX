@@ -302,7 +302,16 @@ router.get("/firmware/:producto/:version", async (req, res) => {
 
     res.setHeader("Content-Type", "application/octet-stream");
     res.setHeader("Content-Disposition", `attachment; filename="${producto}-${version}.bin"`);
-    fw.streamBin(producto, version).pipe(res);
+    // O6 — sin handler de error, un fallo del ReadStream a mitad de descarga
+    // (disco, archivo borrado) emite 'error' sin listener → excepción. Lo
+    // atrapamos: si todavía no mandamos headers, 500; si no, cortamos el socket.
+    const stream = fw.streamBin(producto, version);
+    stream.on("error", (err) => {
+      console.error("[ota/firmware] stream:", err.message);
+      if (!res.headersSent) res.status(500).json({ error: "Error leyendo firmware" });
+      else res.destroy();
+    });
+    stream.pipe(res);
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -354,8 +363,23 @@ router.post("/resultado", async (req, res) => {
     await db.insert(log);
 
     // Si fue ok, actualizamos el doc del device con la nueva version.
+    // O11b — retry 409: `dev` se leyó al autenticar; un heartbeat concurrente
+    // pudo bumpear el _rev. Sin esto, el insert tira 409 → 500 al device
+    // AUNQUE la OTA salió bien, y el pendiente ya se destruyó → no reintenta.
+    // Releemos el _rev fresco; si igual falla, NO fallamos el request (el log
+    // ya quedó, la OTA fue exitosa) — solo logueamos.
     if (resultado === "ok") {
-      await db.insert({ ...dev, version, ultimo_visto: now, updated_at: now });
+      for (let intento = 0; intento < 3; intento++) {
+        try {
+          const fresco = await db.get(dev._id).catch(() => dev);
+          await db.insert({ ...fresco, version, ultimo_visto: now, updated_at: now });
+          break;
+        } catch (e) {
+          if ((e.statusCode === 409 || e.error === "conflict") && intento < 2) continue;
+          console.warn("[ota/resultado] no se pudo actualizar version del device:", e.message);
+          break;
+        }
+      }
     }
 
     // O7 — Antes solo se borraba el pendiente en "ok" → si fallaba, el
