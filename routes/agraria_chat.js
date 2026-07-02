@@ -76,7 +76,7 @@ async function appendMensaje(uid, sesionId, orgSlug, mensajeUser, respuestaIA) {
 }
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL   = "claude-sonnet-4-20250514";
+const MODEL   = "claude-sonnet-4-6";
 
 const SYSTEM_BASE = `Sos agrarIA, el asistente agronómico de OrbitX de Agro Parallel.
 Respondés en español rioplatense. Tono directo, práctico y técnico pero accesible para productores y maquinistas.

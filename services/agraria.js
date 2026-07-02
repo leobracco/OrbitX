@@ -7,7 +7,7 @@ async function call(system, user, max_tokens=500) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens,
         system,
         messages: [{ role:"user", content:user }]
