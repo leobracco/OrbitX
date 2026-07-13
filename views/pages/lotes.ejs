@@ -745,9 +745,9 @@ async function guardarCapa() {
 // ── Ver en mapa ───────────────────────────────────────────
 function verEnMapa() {
   closeModal('modal-lote');
-  // Abrir mapa y seleccionar el lote
-  window.location = '/mapa';
-  // TODO: pasar el lote como parámetro cuando el mapa soporte deep-link
+  // Deep-link: pasamos el lote por query param; el mapa lo lee al cargar
+  // (DOMContentLoaded) y lo centra/dibuja automáticamente.
+  window.location = `/mapa?lote=${encodeURIComponent(_loteActual)}`;
 }
 
 // ── Analizar con IA ───────────────────────────────────────

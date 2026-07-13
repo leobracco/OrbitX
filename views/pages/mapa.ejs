@@ -1050,5 +1050,14 @@ document.addEventListener("DOMContentLoaded", () => {
   initMapa();
   recargarLista();
   if (typeof OrbitNDVI !== 'undefined') OrbitNDVI.init('ndvi-controls');
+
+  // Deep-link desde Lotes: /mapa?lote=NOMBRE[&estab=SLUG] → seleccionar y
+  // centrar el lote automáticamente. URLSearchParams devuelve el valor ya
+  // decodificado; seleccionarLote espera el nombre codificado, re-encode.
+  const params = new URLSearchParams(window.location.search);
+  const loteParam = params.get("lote");
+  if (loteParam) {
+    seleccionarLote(encodeURIComponent(loteParam), params.get("estab") || "");
+  }
 });
 </script>
