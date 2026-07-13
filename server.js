@@ -33,6 +33,7 @@ const routeCamaras           = require("./routes/camaras");
 const { startStun }          = require("./lib/stun-server");
 const routeNotifOrg          = require("./routes/notif_org");
 const routeAgraria           = require("./routes/agraria_chat");
+const routeGrupos            = require("./routes/grupos");
 let routeNDVI;
 try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] ndvi.js:", e.message); }
 
@@ -177,6 +178,8 @@ app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
 app.use("/api/agraria",        auth.required, routeAgraria);
+// Grupos: JWT + guard superadmin interno (router.use(soloAdmin) en grupos.js).
+app.use("/api/grupos",         auth.required, routeGrupos);
 app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
 app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.
@@ -268,6 +271,26 @@ cron.schedule(
       }
     } catch (e) {
       console.error("[CRON]", e.message);
+    }
+  },
+  { timezone: "America/Argentina/Cordoba" },
+);
+
+// Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
+const { runBackup } = require("./scripts/backup-couchdb");
+cron.schedule(
+  "0 3 * * *",
+  async () => {
+    try {
+      const s = await runBackup();
+      const nErr = Object.keys(s.errores).length;
+      console.log(
+        `[backup] ✓ ${Object.keys(s.dbs).length} DBs → ${s.dir}` +
+          (nErr ? ` · ${nErr} con error` : ""),
+      );
+      if (nErr) console.error("[backup]", s.errores);
+    } catch (e) {
+      console.error("[backup] ✗", e.message);
     }
   },
   { timezone: "America/Argentina/Cordoba" },
