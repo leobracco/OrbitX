@@ -9,6 +9,17 @@ function navItem(href, icon, label, active, badge) {
     ${badge ? `<span class="nav-badge">${badge}</span>` : ""}
 </a>`;
 }
+// Acordeón: cada sección envuelve sus ítems en un grupo colapsable. El
+// estado abierto/cerrado se persiste en localStorage (JS abajo) y la
+// sección que contiene el ítem activo se fuerza abierta al cargar.
+function navGroup(id, titulo, itemsHtml) {
+  return `<div class="nav-group" data-nav="${id}">
+<button type="button" class="nav-section" onclick="toggleNavGroup(this)" aria-expanded="true">
+<span>${titulo}</span><span class="nav-caret">▾</span>
+</button>
+<div class="nav-group-items">${itemsHtml}</div>
+</div>`;
+}
 %>
 <aside class="sidebar" id="sidebar">
 <div class="sidebar-logo">
@@ -16,37 +27,45 @@ function navItem(href, icon, label, active, badge) {
 <span class="logo-name">Orbit<em>X</em></span>
 <span class="logo-badge">Agro Parallel</span>
 </div>
-<nav class="sidebar-nav">
-<div class="nav-section">Principal</div>
-<%- navItem('/dashboard',    '⊞',  'Dashboard',          _nav) %>
-<%- navItem('/alertas',      '⚠',  'Alertas',            _nav) %>
-<%- navItem('/dispositivos', '📡', 'Dispositivos',       _nav) %>
-<%- navItem('/camaras',      '📹', 'Cámaras',            _nav) %>
-<div class="nav-section">Gestión</div>
-<%- navItem('/establecimientos', '◫', 'Establecimientos', _nav) %>
-<%- navItem('/lotes',   '🌾', 'Lotes',      _nav) %>
-<%- navItem('/mapa',    '🗺', 'Mapa',        _nav) %>
-<%- navItem('/vehiculos','🚜','Vehículos',   _nav) %>
-<%- navItem('/tracking', '📍','Tracking',    _nav) %>
-<div class="nav-section">Siembra</div>
-<%- navItem('/vistax',           '🌱', 'VistaX',          _nav) %>
-<%- navItem('/vistax-mapas',     '🗾', 'VistaX · Mapas',  _nav) %>
-<%- navItem('/configuraciones',  '⚙',  'Configuraciones', _nav) %>
-<%- navItem('/prescripciones',   '📋', 'Prescripciones',  _nav) %>
-<%- navItem('/agraria',          '✦',  'agrarIA',         _nav) %>
-<div class="nav-section">Satélite</div>
-<%- navItem('/integraciones', '🛰', 'Integraciones', _nav) %>
+<nav class="sidebar-nav" id="sidebar-nav">
+<%- navGroup('principal', 'Principal',
+  navItem('/dashboard',    '⊞',  'Dashboard',    _nav) +
+  navItem('/alertas',      '⚠',  'Alertas',      _nav) +
+  navItem('/dispositivos', '📡', 'Dispositivos', _nav) +
+  navItem('/camaras',      '📹', 'Cámaras',      _nav)
+) %>
+<%- navGroup('gestion', 'Gestión',
+  navItem('/establecimientos', '◫', 'Establecimientos', _nav) +
+  navItem('/lotes',    '🌾', 'Lotes',     _nav) +
+  navItem('/mapa',     '🗺', 'Mapa',      _nav) +
+  navItem('/vehiculos','🚜', 'Vehículos', _nav) +
+  navItem('/tracking', '📍', 'Tracking',  _nav)
+) %>
+<%- navGroup('siembra', 'Siembra',
+  navItem('/vistax',          '🌱', 'VistaX',          _nav) +
+  navItem('/vistax-mapas',    '🗾', 'VistaX · Mapas',  _nav) +
+  navItem('/configuraciones', '⚙',  'Configuraciones', _nav) +
+  navItem('/prescripciones',  '📋', 'Prescripciones',  _nav) +
+  navItem('/agraria',         '✦',  'agrarIA',         _nav)
+) %>
+<%- navGroup('satelite', 'Satélite',
+  navItem('/integraciones', '🛰', 'Integraciones', _nav)
+) %>
 <% if (locals.isAdmin || locals.isSA) { %>
-<div class="nav-section">Admin</div>
-<%- navItem('/registros',  '📬', 'Registros',  _nav, locals.regBadge || 0) %>
-<%- navItem('/usuarios',   '👤', 'Usuarios',   _nav) %>
-<%- navItem('/roles',      '🔑', 'Roles',      _nav) %>
-<%- navItem('/grupos',     '👥', 'Grupos',     _nav) %>
-<%- navItem('/firmwares',  '📦', 'Firmwares',  _nav) %>
-<% if (locals.isSA) { %>
-<%- navItem('/config',  '🔧', 'Config sistema', _nav) %>
-<%- navItem('/couchdb', '🗃', 'CouchDB',        _nav) %>
-<% } %>
+<%
+let _adminItems =
+  navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) +
+  navItem('/usuarios',  '👤', 'Usuarios',  _nav) +
+  navItem('/roles',     '🔑', 'Roles',     _nav) +
+  navItem('/grupos',    '👥', 'Grupos',    _nav) +
+  navItem('/firmwares', '📦', 'Firmwares', _nav);
+if (locals.isSA) {
+  _adminItems +=
+    navItem('/config',  '🔧', 'Config sistema', _nav) +
+    navItem('/couchdb', '🗃', 'CouchDB',        _nav);
+}
+%>
+<%- navGroup('admin', 'Admin', _adminItems) %>
 <% } %>
 </nav>
 <div class="sidebar-footer">
@@ -65,3 +84,35 @@ function navItem(href, icon, label, active, badge) {
 </a>
 </div>
 </aside>
+<script>
+(function () {
+  const LS = "orbitx_nav_open"; // { [id]: true/false }
+  function estado() { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } }
+  function guardar(s) { try { localStorage.setItem(LS, JSON.stringify(s)); } catch {} }
+
+  window.toggleNavGroup = function (btn) {
+    const grp = btn.closest(".nav-group");
+    if (!grp) return;
+    const colapsado = grp.classList.toggle("collapsed");
+    btn.setAttribute("aria-expanded", String(!colapsado));
+    const s = estado(); s[grp.dataset.nav] = !colapsado; guardar(s);
+  };
+
+  function init() {
+    const s = estado();
+    document.querySelectorAll("#sidebar-nav .nav-group").forEach(grp => {
+      const id = grp.dataset.nav;
+      // Prioridad: la sección con el ítem activo siempre abierta. Si no,
+      // respetar lo guardado; por defecto abierta.
+      const tieneActivo = !!grp.querySelector(".nav-item.active");
+      const abierto = tieneActivo ? true : (s[id] !== false);
+      grp.classList.toggle("collapsed", !abierto);
+      const btn = grp.querySelector(".nav-section");
+      if (btn) btn.setAttribute("aria-expanded", String(abierto));
+    });
+  }
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
+</script>

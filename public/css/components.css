@@ -32,7 +32,19 @@
   font-family: var(--font-m); text-transform: uppercase; letter-spacing: 1px;
 }
 .sidebar-nav  { flex: 1; overflow-y: auto; padding: 10px 0; }
-.nav-section  { font-size: 9px; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); padding: 12px 18px 5px; }
+.nav-group    { display: flex; flex-direction: column; }
+.nav-section  {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; background: none; border: 0; text-align: left;
+  font-family: inherit; font-size: 9px; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--muted); padding: 12px 18px 5px;
+  cursor: pointer; transition: color 0.15s;
+}
+.nav-section:hover { color: var(--text); }
+.nav-section > span:first-child { flex: 1; }
+.nav-caret { font-size: 10px; opacity: 0.7; transition: transform 0.2s; }
+.nav-group.collapsed .nav-caret       { transform: rotate(-90deg); }
+.nav-group.collapsed .nav-group-items { display: none; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 18px; font-size: 13px; color: var(--muted2);
@@ -272,6 +284,8 @@ button:disabled   { opacity: 0.5; cursor: not-allowed; }
   .sidebar-logo     { padding: 16px 0; justify-content: center; }
   .logo-name, .logo-badge { display: none; }
   .nav-section      { display: none; }
+  /* Modo icon-only: el acordeón no aplica, mostrar todos los ítems. */
+  .nav-group.collapsed .nav-group-items { display: block; }
   .nav-item         { justify-content: center; padding: 12px 0; }
   .nav-label, .nav-badge { display: none; }
   .nav-icon         { width: auto; font-size: 17px; }
