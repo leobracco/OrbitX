@@ -276,26 +276,6 @@ cron.schedule(
   { timezone: "America/Argentina/Cordoba" },
 );
 
-// Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
-const { runBackup } = require("./scripts/backup-couchdb");
-cron.schedule(
-  "0 3 * * *",
-  async () => {
-    try {
-      const s = await runBackup();
-      const nErr = Object.keys(s.errores).length;
-      console.log(
-        `[backup] ✓ ${Object.keys(s.dbs).length} DBs → ${s.dir}` +
-          (nErr ? ` · ${nErr} con error` : ""),
-      );
-      if (nErr) console.error("[backup]", s.errores);
-    } catch (e) {
-      console.error("[backup] ✗", e.message);
-    }
-  },
-  { timezone: "America/Argentina/Cordoba" },
-);
-
 // ── Bootstrap ─────────────────────────────────────────────
 async function start() {
   console.log("\n🌍  OrbitX Cloud Server — Agro Parallel\n");
