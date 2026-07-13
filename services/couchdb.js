@@ -191,6 +191,8 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","device_id","ts"],
   ["tipo","device_id","bucket_ts"], // O8 — tracking_bucket por device+ventana
   ["tipo","es_lote","lote_nombre"],
+  ["tipo","lote_ref"], // capas por lote: {tipo:"lote_capa", lote_ref:{$in:…}}
+  ["tipo","updated_at"], // lote_maestro ordenado/paginado por fecha
   ["tipo","subtipo"],
   ["tipo","subtipo","es_lote"],
   ["tipo","entregado"],

@@ -84,6 +84,9 @@ router.get("/", async (req, res) => {
     // Índices Mango como fallback si las vistas todavía no están indexadas.
     estabDB.createIndex({ index: { fields: ["tipo", "updated_at"] } }).catch(() => {});
     estabDB.createIndex({ index: { fields: ["tipo", "es_lote", "lote_nombre"] } }).catch(() => {});
+    // O26 — capas por lote: el find de abajo hace {tipo:"lote_capa", lote_ref:{$in:…}}.
+    // Sin este índice cae a scan de la partición `tipo` + filtro en memoria (lento).
+    estabDB.createIndex({ index: { fields: ["tipo", "lote_ref"] } }).catch(() => {});
 
     let lista = [];
     let total = 0;
