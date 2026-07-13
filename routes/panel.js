@@ -215,9 +215,12 @@ router.get("/roles", requireAuth, requireAdmin, (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
-// GRUPOS
+// GRUPOS — solo superadmin. Los grupos son globales (orbitx_global,
+// sin scope por org) y solo el superadmin los gestiona (mutaciones en
+// routes/grupos.js usan soloAdmin=superadmin). owner/admin_org NO deben
+// ver grupos que están por encima de su alcance.
 // ─────────────────────────────────────────────────────────
-router.get("/grupos", requireAuth, requireAdmin, (req, res) => {
+router.get("/grupos", requireAuth, requireSuperadmin, (req, res) => {
   res.render("layout", { ...base(req), title:"Grupos", page:"grupos" });
 });
 

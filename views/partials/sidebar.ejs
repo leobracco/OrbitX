@@ -57,10 +57,11 @@ let _adminItems =
   navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) +
   navItem('/usuarios',  '👤', 'Usuarios',  _nav) +
   navItem('/roles',     '🔑', 'Roles',     _nav) +
-  navItem('/grupos',    '👥', 'Grupos',    _nav) +
   navItem('/firmwares', '📦', 'Firmwares', _nav);
+// Grupos es global y solo-superadmin: owner/admin_org no lo ven.
 if (locals.isSA) {
   _adminItems +=
+    navItem('/grupos',  '👥', 'Grupos',         _nav) +
     navItem('/config',  '🔧', 'Config sistema', _nav) +
     navItem('/couchdb', '🗃', 'CouchDB',        _nav);
 }

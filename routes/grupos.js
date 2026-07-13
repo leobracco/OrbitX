@@ -25,6 +25,12 @@ function soloAdmin(req, res, next) {
   next();
 }
 
+// Los grupos son globales y de nivel superadmin: TODO el router (incluidos
+// los GET de listado/detalle) exige superadmin. Antes los GET no tenían
+// guard, así que un owner/admin_org podía leer grupos por encima de su
+// alcance. Las mutaciones igual repiten soloAdmin, no molesta.
+router.use(soloAdmin);
+
 // ══════════════════════════════════════════════════════════
 //  GET /api/grupos — listar todos los grupos
 // ══════════════════════════════════════════════════════════
