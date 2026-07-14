@@ -209,13 +209,14 @@ async function ubicacionEstab(estabSlug) {
   const pts = [];
   for (const d of docs) {
     const o = parseFieldTxt(d.contenido);
-    if (o) pts.push(o);
+    if (o) pts.push({ ...o, nombre: d.lote_nombre || d.nombre || null });
   }
   if (!pts.length) return null;
   return {
-    lat:   pts.reduce((a, p) => a + p.lat, 0) / pts.length,
-    lon:   pts.reduce((a, p) => a + p.lon, 0) / pts.length,
-    lotes: pts.length,
+    lat:    pts.reduce((a, p) => a + p.lat, 0) / pts.length,
+    lon:    pts.reduce((a, p) => a + p.lon, 0) / pts.length,
+    lotes:  pts.length,
+    puntos: pts.map(p => ({ nombre: p.nombre, lat: p.lat, lon: p.lon })),
   };
 }
 

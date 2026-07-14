@@ -1,4 +1,6 @@
 <%# pages/lluvias.ejs — Registro manual de lluvias + análisis agrarIA %>
+<link rel="stylesheet" href="/css/leaflet.min.css"/>
+<script src="/js/leaflet.min.js"></script>
 
 <div class="page-header">
   <div>
@@ -60,16 +62,28 @@
     <div class="modal-title">🛰 Importar histórico del INA</div>
     <div class="modal-sub">Red Hidrológica Nacional · alerta.ina.gob.ar</div>
 
+    <!-- Elegir punto: lote sincronizado, mapa clickeable o texto -->
     <div style="margin-top:14px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:160px">Buscar estación (nombre o distrito)
+      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">Traer un lote
+        <select id="ina-lote" onchange="lluElegirLote()"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none">
+          <option value="">— sin lotes sincronizados —</option>
+        </select>
+      </label>
+      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">o buscar por nombre
         <input type="text" id="ina-q" placeholder="Ej: Pergamino"
           onkeydown="if(event.key==='Enter'){event.preventDefault();lluBuscarINA()}"
           style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
       </label>
       <button class="btn btn-ghost" style="flex-shrink:0" onclick="lluBuscarINA()">Buscar</button>
-      <button class="btn btn-ghost" style="flex-shrink:0" onclick="lluEstacionesCercanas()">📍 Cercanas al campo</button>
     </div>
-    <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted);margin-top:6px"></div>
+
+    <div style="font-size:11px;color:var(--ap-muted);margin-top:10px">📍 O marcá un punto en el mapa (click) y buscá las estaciones más cercanas:</div>
+    <div id="ina-mapa" style="height:220px;margin-top:6px;border:1px solid var(--ap-border);border-radius:8px;overflow:hidden"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button class="btn" style="flex-shrink:0" id="ina-btn-punto" onclick="lluBuscarEnPunto()" disabled>🛰 Estaciones cercanas al punto</button>
+      <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted)"></div>
+    </div>
 
     <div id="ina-lista" style="margin-top:12px;overflow:auto;flex:1;min-height:80px"></div>
 
@@ -268,39 +282,86 @@ async function lluAnalizar() {
 }
 
 // ── Importar de INA ──────────────────────────────────────
-let _inaUbic = null;   // { lat, lon, lotes } o null
-let _inaSel  = null;   // estación seleccionada
+let _inaUbic  = null;  // { lat, lon, lotes, puntos:[{nombre,lat,lon}] } o null
+let _inaSel   = null;  // estación INA seleccionada
+let _inaMapa  = null;  // instancia Leaflet
+let _inaMarker = null; // marcador del punto elegido
+let _inaPunto = null;  // { lat, lon } marcado
 
-function lluAbrirINA() {
+async function lluAbrirINA() {
   openModal("modal-llu-ina");
   document.getElementById("ina-import-box").style.display = "none";
   _inaSel = null;
+  document.getElementById("ina-lista").innerHTML = "";
   // Rango por defecto: últimos 2 años.
   const hoy = new Date();
   const hace2 = new Date(hoy); hace2.setFullYear(hoy.getFullYear() - 2);
   document.getElementById("ina-hasta").value = hoy.toISOString().slice(0, 10);
   document.getElementById("ina-desde").value = hace2.toISOString().slice(0, 10);
-  // Auto: buscar estaciones cercanas al campo.
-  lluEstacionesCercanas();
+  // Cargar ubicación del campo (centroide + lotes) y montar el mapa.
+  try {
+    if (_inaUbic === null) {
+      const r = await Auth.get("/api/lluvias/ina/ubicacion");
+      _inaUbic = r.ubicacion || false;  // false = ya intentado, sin datos
+    }
+  } catch { _inaUbic = false; }
+  lluMontarMapa();
+  lluLlenarLotes();
 }
 
-async function lluEstacionesCercanas() {
+function lluMontarMapa() {
+  // El mapa se crea una sola vez; Leaflet necesita el contenedor visible.
+  setTimeout(() => {
+    if (!_inaMapa) {
+      const centro = (_inaUbic && Number.isFinite(_inaUbic.lat))
+        ? [_inaUbic.lat, _inaUbic.lon] : [-34.6, -60.0]; // default: pampa húmeda
+      const zoom = (_inaUbic && Number.isFinite(_inaUbic.lat)) ? 11 : 5;
+      _inaMapa = L.map("ina-mapa", { zoomControl: true, preferCanvas: true }).setView(centro, zoom);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        { attribution: "Esri World Imagery", maxZoom: 19 }).addTo(_inaMapa);
+      _inaMapa.on("click", (e) => lluMarcarPunto(e.latlng.lat, e.latlng.lng));
+    }
+    _inaMapa.invalidateSize();
+    // Si hay campo, marcarlo por defecto.
+    if (!_inaPunto && _inaUbic && Number.isFinite(_inaUbic.lat))
+      lluMarcarPunto(_inaUbic.lat, _inaUbic.lon, false);
+  }, 120);
+}
+
+function lluMarcarPunto(lat, lon, recenter = true) {
+  _inaPunto = { lat, lon };
+  if (_inaMarker) _inaMarker.setLatLng([lat, lon]);
+  else _inaMarker = L.marker([lat, lon]).addTo(_inaMapa);
+  if (recenter) _inaMapa.panTo([lat, lon]);
+  document.getElementById("ina-btn-punto").disabled = false;
+  document.getElementById("ina-ubic-msg").textContent = `Punto: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+}
+
+function lluLlenarLotes() {
+  const sel = document.getElementById("ina-lote");
+  const puntos = (_inaUbic && Array.isArray(_inaUbic.puntos)) ? _inaUbic.puntos.filter(p => p.nombre) : [];
+  if (!puntos.length) {
+    sel.innerHTML = '<option value="">— sin lotes sincronizados —</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">— elegí un lote —</option>' +
+    puntos.map((p, i) => `<option value="${i}">${lluEscape(p.nombre)}</option>`).join("");
+}
+
+function lluElegirLote() {
+  const i = document.getElementById("ina-lote").value;
+  if (i === "" || !_inaUbic?.puntos?.[i]) return;
+  const p = _inaUbic.puntos[i];
+  lluMarcarPunto(p.lat, p.lon, true);
+  if (_inaMapa) _inaMapa.setView([p.lat, p.lon], 12);
+}
+
+async function lluBuscarEnPunto() {
+  if (!_inaPunto) return;
   const lista = document.getElementById("ina-lista");
-  const umsg  = document.getElementById("ina-ubic-msg");
-  lista.innerHTML = '<div class="loading"><span class="spinner"></span> Ubicando el campo…</div>';
+  lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando estaciones cercanas…</div>';
   try {
-    if (!_inaUbic) {
-      const r = await Auth.get("/api/lluvias/ina/ubicacion");
-      _inaUbic = r.ubicacion || null;
-    }
-    if (!_inaUbic || !Number.isFinite(_inaUbic.lat) || !Number.isFinite(_inaUbic.lon)) {
-      umsg.textContent = "No se pudo ubicar el campo (no hay lotes con coordenadas). Buscá una estación por nombre.";
-      lista.innerHTML = "";
-      return;
-    }
-    umsg.textContent = `Campo ≈ ${_inaUbic.lat.toFixed(4)}, ${_inaUbic.lon.toFixed(4)} (${_inaUbic.lotes || 0} lote${_inaUbic.lotes === 1 ? "" : "s"})`;
-    lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando estaciones cercanas…</div>';
-    const r = await Auth.get(`/api/lluvias/ina/estaciones?lat=${_inaUbic.lat}&lon=${_inaUbic.lon}`);
+    const r = await Auth.get(`/api/lluvias/ina/estaciones?lat=${_inaPunto.lat}&lon=${_inaPunto.lon}`);
     lluRenderEstaciones(r.estaciones || []);
   } catch (e) {
     lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
@@ -310,7 +371,7 @@ async function lluEstacionesCercanas() {
 async function lluBuscarINA() {
   const q = document.getElementById("ina-q").value.trim();
   const lista = document.getElementById("ina-lista");
-  if (!q) { lluEstacionesCercanas(); return; }
+  if (!q) { lluBuscarEnPunto(); return; }
   lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando…</div>';
   try {
     const r = await Auth.get(`/api/lluvias/ina/estaciones?q=${encodeURIComponent(q)}`);
