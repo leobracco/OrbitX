@@ -696,4 +696,13 @@ router.get("/tracking", requireAuth, async (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────
+// LLUVIAS — registro manual + análisis agrarIA (datos vía /api/lluvias)
+// ─────────────────────────────────────────────────────────
+router.get("/lluvias", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Lluvias", page: "lluvias" });
+});
+
 module.exports = router;

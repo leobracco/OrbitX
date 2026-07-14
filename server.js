@@ -34,6 +34,7 @@ const { startStun }          = require("./lib/stun-server");
 const routeNotifOrg          = require("./routes/notif_org");
 const routeAgraria           = require("./routes/agraria_chat");
 const routeGrupos            = require("./routes/grupos");
+const routeLluvias           = require("./routes/lluvias");
 let routeNDVI;
 try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] ndvi.js:", e.message); }
 
@@ -180,6 +181,7 @@ app.use("/api/notif-org",      auth.required, routeNotifOrg);
 app.use("/api/agraria",        auth.required, routeAgraria);
 // Grupos: JWT + guard superadmin interno (router.use(soloAdmin) en grupos.js).
 app.use("/api/grupos",         auth.required, routeGrupos);
+app.use("/api/lluvias",        auth.required, routeLluvias);
 app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
 app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.

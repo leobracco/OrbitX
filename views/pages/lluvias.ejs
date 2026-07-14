@@ -1,0 +1,232 @@
+<%# pages/lluvias.ejs — Registro manual de lluvias + análisis agrarIA %>
+
+<div class="page-header">
+  <div>
+    <h2>Lluvias</h2>
+    <p>Registro de precipitaciones del establecimiento</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn" onclick="lluAnalizar()">✦ Analizar con agrarIA</button>
+    <button class="btn btn-ghost" onclick="lluCargar()">↻</button>
+  </div>
+</div>
+
+<!-- Métricas -->
+<div id="llu-metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px"></div>
+
+<div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start">
+
+  <!-- Form carga -->
+  <div class="card" id="llu-form-card" style="padding:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:12px">Cargar lluvia</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:11px;color:var(--ap-muted)">Fecha
+        <input type="date" id="llu-fecha" style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+      </label>
+      <label style="font-size:11px;color:var(--ap-muted)">Milímetros
+        <input type="number" id="llu-mm" min="0" max="1000" step="0.5" placeholder="Ej: 25"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+      </label>
+      <label style="font-size:11px;color:var(--ap-muted)">Lote (opcional)
+        <input type="text" id="llu-lote" placeholder="Ej: Lote 5"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+      </label>
+      <label style="font-size:11px;color:var(--ap-muted)">Nota (opcional)
+        <input type="text" id="llu-nota" placeholder="Observación"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+      </label>
+      <button class="btn" style="width:100%" onclick="lluGuardar()">Guardar</button>
+      <div id="llu-form-msg" style="font-size:11px;color:var(--ap-muted)"></div>
+    </div>
+  </div>
+
+  <!-- Gráfico + tabla -->
+  <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+    <div class="card" style="padding:16px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px">Acumulado mensual (mm)</div>
+      <div id="llu-chart" style="display:flex;align-items:flex-end;gap:6px;height:140px;overflow-x:auto;padding-bottom:4px"></div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="llu-tabla"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal análisis agrarIA -->
+<div class="modal-backdrop" id="modal-llu-ia">
+  <div class="modal" style="width:560px;max-height:80vh;display:flex;flex-direction:column">
+    <div class="modal-title">✦ agrarIA · Análisis de lluvias</div>
+    <div class="modal-sub">Interpretación de lo cargado (no es pronóstico)</div>
+    <div id="llu-ia-body" style="margin-top:14px;font-size:14px;line-height:1.6;color:var(--ap-text);overflow:auto;flex:1;white-space:pre-wrap"></div>
+    <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-llu-ia')">Cerrar</button>
+  </div>
+</div>
+
+<script>
+let _lluItems = [];
+let _lluPuedeEditar = true;
+
+const MESES_ABR = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+
+function lluEscape(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function lluFmtFecha(f) {
+  if (!f) return "–";
+  const [y, m, d] = f.split("-");
+  return `${d}/${m}/${y.slice(2)}`;
+}
+
+async function lluCargar() {
+  document.getElementById("llu-tabla").innerHTML = '<div class="loading" style="padding:20px"><span class="spinner"></span> Cargando…</div>';
+  try {
+    const r = await Auth.get("/api/lluvias");
+    _lluItems = r.registros || [];
+    _lluPuedeEditar = r.puede_editar !== false;
+    if (!_lluPuedeEditar) document.getElementById("llu-form-card").style.display = "none";
+    lluRender();
+  } catch (e) {
+    document.getElementById("llu-tabla").innerHTML = `<div class="alert error show" style="margin:16px">${lluEscape(e.message)}</div>`;
+  }
+}
+
+function lluRender() {
+  lluRenderMetrics();
+  lluRenderChart();
+  lluRenderTabla();
+}
+
+function lluRenderMetrics() {
+  const total = _lluItems.reduce((a, r) => a + (Number(r.mm) || 0), 0);
+  const mesActual = new Date().toISOString().slice(0, 7);
+  const mesMM = _lluItems.filter(r => (r.fecha || "").startsWith(mesActual)).reduce((a, r) => a + (Number(r.mm) || 0), 0);
+  const ordenados = [..._lluItems].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  const ultima = ordenados[0];
+  const dias = ultima ? Math.max(0, Math.round((Date.now() - new Date(ultima.fecha)) / 86400000)) : null;
+
+  const card = (label, valor, sub) => `
+    <div class="card" style="padding:14px 16px">
+      <div style="font-size:11px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px">${label}</div>
+      <div style="font-size:24px;font-weight:700;color:var(--ap-green);margin-top:4px">${valor}</div>
+      <div style="font-size:11px;color:var(--ap-muted);margin-top:2px">${sub || ""}</div>
+    </div>`;
+
+  document.getElementById("llu-metrics").innerHTML =
+    card("Total cargado", `${Math.round(total * 10) / 10} <span style='font-size:13px;color:var(--ap-muted)'>mm</span>`, `${_lluItems.length} registros`) +
+    card("Este mes", `${Math.round(mesMM * 10) / 10} <span style='font-size:13px;color:var(--ap-muted)'>mm</span>`, mesActual) +
+    card("Última lluvia", ultima ? `${ultima.mm} <span style='font-size:13px;color:var(--ap-muted)'>mm</span>` : "–", ultima ? lluFmtFecha(ultima.fecha) : "sin datos") +
+    card("Días sin llover", dias != null ? dias : "–", "desde la última");
+}
+
+function lluRenderChart() {
+  const porMes = {};
+  _lluItems.forEach(r => {
+    const mes = (r.fecha || "").slice(0, 7);
+    if (mes) porMes[mes] = (porMes[mes] || 0) + (Number(r.mm) || 0);
+  });
+  const meses = Object.keys(porMes).sort().slice(-12);
+  const chart = document.getElementById("llu-chart");
+  if (!meses.length) {
+    chart.innerHTML = `<div style="color:var(--ap-muted);font-size:12px;align-self:center">Sin datos todavía</div>`;
+    return;
+  }
+  const max = Math.max(...meses.map(m => porMes[m]), 1);
+  chart.innerHTML = meses.map(m => {
+    const mm = Math.round(porMes[m] * 10) / 10;
+    const h = Math.max(4, Math.round((porMes[m] / max) * 110));
+    const [y, mo] = m.split("-");
+    return `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:36px;flex-shrink:0">
+        <div style="font-size:10px;color:var(--ap-green);font-weight:600">${mm}</div>
+        <div title="${m}: ${mm} mm" style="width:26px;height:${h}px;background:var(--ap-green-dim);border:1px solid rgba(164,186,62,0.35);border-radius:4px 4px 0 0"></div>
+        <div style="font-size:10px;color:var(--ap-muted)">${MESES_ABR[parseInt(mo,10)-1]}<br>${y.slice(2)}</div>
+      </div>`;
+  }).join("");
+}
+
+function lluRenderTabla() {
+  const t = document.getElementById("llu-tabla");
+  if (!_lluItems.length) {
+    t.innerHTML = `<div class="empty-state" style="padding:32px"><span class="icon">🌧</span><p>No hay lluvias cargadas todavía.</p></div>`;
+    return;
+  }
+  const ordenados = [..._lluItems].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  t.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="text-align:left;color:var(--ap-muted);font-size:11px;text-transform:uppercase;letter-spacing:1px">
+          <th style="padding:10px 16px">Fecha</th>
+          <th style="padding:10px 16px">mm</th>
+          <th style="padding:10px 16px">Lote</th>
+          <th style="padding:10px 16px">Nota</th>
+          <th style="padding:10px 16px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ordenados.map(r => `
+          <tr style="border-top:1px solid var(--ap-border)">
+            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}</td>
+            <td style="padding:10px 16px;color:var(--ap-green);font-weight:600">${r.mm}</td>
+            <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.lote || "–")}</td>
+            <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.nota || "")}</td>
+            <td style="padding:10px 16px;text-align:right">
+              ${_lluPuedeEditar ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" onclick="lluBorrar('${lluEscape(r._id)}')">✕</button>` : ""}
+            </td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+
+async function lluGuardar() {
+  const fecha = document.getElementById("llu-fecha").value;
+  const mm    = document.getElementById("llu-mm").value;
+  const lote  = document.getElementById("llu-lote").value;
+  const nota  = document.getElementById("llu-nota").value;
+  const msg   = document.getElementById("llu-form-msg");
+
+  if (!fecha) { msg.textContent = "Poné una fecha."; return; }
+  if (mm === "" || Number(mm) < 0) { msg.textContent = "Poné los milímetros."; return; }
+
+  msg.style.color = "var(--ap-muted)";
+  msg.textContent = "Guardando…";
+  try {
+    await Auth.post("/api/lluvias", { fecha, mm: Number(mm), lote, nota });
+    document.getElementById("llu-mm").value = "";
+    document.getElementById("llu-lote").value = "";
+    document.getElementById("llu-nota").value = "";
+    msg.style.color = "var(--ap-green)";
+    msg.textContent = "Guardado ✓";
+    await lluCargar();
+    setTimeout(() => { msg.textContent = ""; }, 2000);
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
+  }
+}
+
+async function lluBorrar(id) {
+  if (!confirm("¿Borrar este registro de lluvia?")) return;
+  try {
+    await Auth.del("/api/lluvias/" + encodeURIComponent(id));
+    await lluCargar();
+  } catch (e) { alert(e.message); }
+}
+
+async function lluAnalizar() {
+  const body = document.getElementById("llu-ia-body");
+  body.innerHTML = '<div class="loading"><span class="spinner"></span> agrarIA está analizando…</div>';
+  openModal("modal-llu-ia");
+  try {
+    const r = await Auth.post("/api/lluvias/analizar", {});
+    body.textContent = r.analisis || "Sin respuesta.";
+  } catch (e) {
+    body.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("llu-fecha").value = new Date().toISOString().slice(0, 10);
+  lluCargar();
+});
+</script>

@@ -193,6 +193,7 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","es_lote","lote_nombre"],
   ["tipo","lote_ref"], // capas por lote: {tipo:"lote_capa", lote_ref:{$in:…}}
   ["tipo","updated_at"], // lote_maestro ordenado/paginado por fecha
+  ["tipo","fecha"], // lluvia_registro ordenado por fecha
   ["tipo","subtipo"],
   ["tipo","subtipo","es_lote"],
   ["tipo","entregado"],
