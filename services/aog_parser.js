@@ -8,9 +8,10 @@ function parseFieldTxt(contenido) {
   try {
     const lines = (contenido || "").trim().split(/\r?\n/);
 
-    // Formato nuevo: buscar "StartFix" y leer la siguiente línea
+    // Formato nuevo: buscar "StartFix" (con o sin prefijo "$") y leer la
+    // siguiente línea. AOG y el writer de OrbitX emiten "$StartFix".
     for (let i = 0; i < lines.length - 1; i++) {
-      if (lines[i].trim() === "StartFix") {
+      if (lines[i].trim().replace(/^\$/, "") === "StartFix") {
         const parts = lines[i + 1].trim().split(",");
         if (parts.length >= 2) {
           const lat = parseFloat(parts[0]);
