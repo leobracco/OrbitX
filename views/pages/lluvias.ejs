@@ -6,6 +6,7 @@
     <p>Registro de precipitaciones del establecimiento</p>
   </div>
   <div style="display:flex;gap:8px">
+    <button class="btn btn-ghost" id="llu-btn-ina" onclick="lluAbrirINA()">🛰 Importar de INA</button>
     <button class="btn" onclick="lluAnalizar()">✦ Analizar con agrarIA</button>
     <button class="btn btn-ghost" onclick="lluCargar()">↻</button>
   </div>
@@ -53,6 +54,43 @@
   </div>
 </div>
 
+<!-- Modal importar de INA -->
+<div class="modal-backdrop" id="modal-llu-ina">
+  <div class="modal" style="width:640px;max-height:85vh;display:flex;flex-direction:column">
+    <div class="modal-title">🛰 Importar histórico del INA</div>
+    <div class="modal-sub">Red Hidrológica Nacional · alerta.ina.gob.ar</div>
+
+    <div style="margin-top:14px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:160px">Buscar estación (nombre o distrito)
+        <input type="text" id="ina-q" placeholder="Ej: Pergamino"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();lluBuscarINA()}"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+      </label>
+      <button class="btn btn-ghost" style="flex-shrink:0" onclick="lluBuscarINA()">Buscar</button>
+      <button class="btn btn-ghost" style="flex-shrink:0" onclick="lluEstacionesCercanas()">📍 Cercanas al campo</button>
+    </div>
+    <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted);margin-top:6px"></div>
+
+    <div id="ina-lista" style="margin-top:12px;overflow:auto;flex:1;min-height:80px"></div>
+
+    <div id="ina-import-box" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--ap-border)">
+      <div style="font-size:12px;margin-bottom:8px">Importar de <strong id="ina-sel-nombre"></strong></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--ap-muted)">Desde
+          <input type="date" id="ina-desde" style="margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+        </label>
+        <label style="font-size:11px;color:var(--ap-muted)">Hasta
+          <input type="date" id="ina-hasta" style="margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+        </label>
+        <button class="btn" style="flex-shrink:0" id="ina-btn-importar" onclick="lluImportarINA()">Importar</button>
+      </div>
+      <div id="ina-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:8px"></div>
+    </div>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-llu-ina')">Cerrar</button>
+  </div>
+</div>
+
 <!-- Modal análisis agrarIA -->
 <div class="modal-backdrop" id="modal-llu-ia">
   <div class="modal" style="width:560px;max-height:80vh;display:flex;flex-direction:column">
@@ -84,7 +122,11 @@ async function lluCargar() {
     const r = await Auth.get("/api/lluvias");
     _lluItems = r.registros || [];
     _lluPuedeEditar = r.puede_editar !== false;
-    if (!_lluPuedeEditar) document.getElementById("llu-form-card").style.display = "none";
+    if (!_lluPuedeEditar) {
+      document.getElementById("llu-form-card").style.display = "none";
+      const bi = document.getElementById("llu-btn-ina");
+      if (bi) bi.style.display = "none";
+    }
     lluRender();
   } catch (e) {
     document.getElementById("llu-tabla").innerHTML = `<div class="alert error show" style="margin:16px">${lluEscape(e.message)}</div>`;
@@ -166,7 +208,7 @@ function lluRenderTabla() {
       <tbody>
         ${ordenados.map(r => `
           <tr style="border-top:1px solid var(--ap-border)">
-            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}</td>
+            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}${r.fuente === "ina" ? ` <span title="Importado del INA" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">INA</span>` : ""}</td>
             <td style="padding:10px 16px;color:var(--ap-green);font-weight:600">${r.mm}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.lote || "–")}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.nota || "")}</td>
@@ -222,6 +264,122 @@ async function lluAnalizar() {
     body.textContent = r.analisis || "Sin respuesta.";
   } catch (e) {
     body.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
+  }
+}
+
+// ── Importar de INA ──────────────────────────────────────
+let _inaUbic = null;   // { lat, lon, lotes } o null
+let _inaSel  = null;   // estación seleccionada
+
+function lluAbrirINA() {
+  openModal("modal-llu-ina");
+  document.getElementById("ina-import-box").style.display = "none";
+  _inaSel = null;
+  // Rango por defecto: últimos 2 años.
+  const hoy = new Date();
+  const hace2 = new Date(hoy); hace2.setFullYear(hoy.getFullYear() - 2);
+  document.getElementById("ina-hasta").value = hoy.toISOString().slice(0, 10);
+  document.getElementById("ina-desde").value = hace2.toISOString().slice(0, 10);
+  // Auto: buscar estaciones cercanas al campo.
+  lluEstacionesCercanas();
+}
+
+async function lluEstacionesCercanas() {
+  const lista = document.getElementById("ina-lista");
+  const umsg  = document.getElementById("ina-ubic-msg");
+  lista.innerHTML = '<div class="loading"><span class="spinner"></span> Ubicando el campo…</div>';
+  try {
+    if (!_inaUbic) {
+      const r = await Auth.get("/api/lluvias/ina/ubicacion");
+      _inaUbic = r.ubicacion || null;
+    }
+    if (!_inaUbic || !Number.isFinite(_inaUbic.lat) || !Number.isFinite(_inaUbic.lon)) {
+      umsg.textContent = "No se pudo ubicar el campo (no hay lotes con coordenadas). Buscá una estación por nombre.";
+      lista.innerHTML = "";
+      return;
+    }
+    umsg.textContent = `Campo ≈ ${_inaUbic.lat.toFixed(4)}, ${_inaUbic.lon.toFixed(4)} (${_inaUbic.lotes || 0} lote${_inaUbic.lotes === 1 ? "" : "s"})`;
+    lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando estaciones cercanas…</div>';
+    const r = await Auth.get(`/api/lluvias/ina/estaciones?lat=${_inaUbic.lat}&lon=${_inaUbic.lon}`);
+    lluRenderEstaciones(r.estaciones || []);
+  } catch (e) {
+    lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
+  }
+}
+
+async function lluBuscarINA() {
+  const q = document.getElementById("ina-q").value.trim();
+  const lista = document.getElementById("ina-lista");
+  if (!q) { lluEstacionesCercanas(); return; }
+  lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando…</div>';
+  try {
+    const r = await Auth.get(`/api/lluvias/ina/estaciones?q=${encodeURIComponent(q)}`);
+    lluRenderEstaciones(r.estaciones || []);
+  } catch (e) {
+    lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
+  }
+}
+
+function lluRenderEstaciones(ests) {
+  const lista = document.getElementById("ina-lista");
+  if (!ests.length) {
+    lista.innerHTML = `<div class="empty-state" style="padding:24px"><span class="icon">🛰</span><p>No se encontraron estaciones.</p></div>`;
+    return;
+  }
+  lista.innerHTML = ests.map(e => {
+    const cov = [e.from_date, e.to_date].filter(Boolean).map(d => String(d).slice(0, 10)).join(" → ") || "—";
+    const dist = Number.isFinite(e.dist_km) ? `${e.dist_km} km` : "";
+    return `
+      <div onclick='lluSeleccionarEstacion(${JSON.stringify(e).replace(/'/g, "&#39;")})'
+        style="padding:10px 12px;border:1px solid var(--ap-border);border-radius:8px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center"
+        onmouseover="this.style.borderColor='var(--ap-green)'" onmouseout="this.style.borderColor='var(--ap-border)'">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:600">${lluEscape(e.nombre || ("#" + e.sitecode))}</div>
+          <div style="font-size:11px;color:var(--ap-muted)">${lluEscape(e.distrito || e.red || "")} · datos ${cov} · ${e.obs_count || 0} obs</div>
+        </div>
+        <div style="flex-shrink:0;text-align:right">
+          ${dist ? `<div style="font-size:12px;color:var(--ap-green);font-weight:600">${dist}</div>` : ""}
+          <div style="font-size:11px;color:var(--ap-muted)">Elegir ›</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function lluSeleccionarEstacion(e) {
+  _inaSel = e;
+  document.getElementById("ina-sel-nombre").textContent = e.nombre || ("#" + e.sitecode);
+  document.getElementById("ina-import-box").style.display = "block";
+  // Ajustar rango a la cobertura de la estación si está disponible.
+  if (e.to_date) {
+    const to = String(e.to_date).slice(0, 10);
+    if (document.getElementById("ina-hasta").value > to) document.getElementById("ina-hasta").value = to;
+  }
+  document.getElementById("ina-import-msg").textContent = "";
+}
+
+async function lluImportarINA() {
+  if (!_inaSel) return;
+  const desde = document.getElementById("ina-desde").value;
+  const hasta = document.getElementById("ina-hasta").value;
+  const msg   = document.getElementById("ina-import-msg");
+  const btn   = document.getElementById("ina-btn-importar");
+  if (!desde || !hasta) { msg.style.color = "var(--ap-red, #e5484d)"; msg.textContent = "Elegí el rango de fechas."; return; }
+
+  btn.disabled = true;
+  msg.style.color = "var(--ap-muted)";
+  msg.innerHTML = '<span class="spinner"></span> Importando del INA…';
+  try {
+    const r = await Auth.post("/api/lluvias/ina/importar", { sitecode: _inaSel.sitecode, desde, hasta });
+    msg.style.color = "var(--ap-green)";
+    msg.textContent = r.importados
+      ? `Importados ${r.importados} días con lluvia de ${r.estacion} ✓`
+      : `Sin lluvias registradas en el rango para ${r.estacion}.`;
+    await lluCargar();
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
   }
 }
 

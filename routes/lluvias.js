@@ -189,4 +189,121 @@ y 2-3 recomendaciones concretas para el manejo (siembra, humedad de suelo, riesg
   }
 });
 
+// ══════════════════════════════════════════════════════════
+//  INTEGRACIÓN INA (alerta.ina.gob.ar) — histórico de lluvias
+// ══════════════════════════════════════════════════════════
+
+// Centroide aproximado del establecimiento: promedio de los orígenes (Field.txt)
+// de los lotes AOG sincronizados. Sirve para buscar la estación INA más cercana.
+async function ubicacionEstab(estabSlug) {
+  const edb = db.getDB(estabSlug);
+  let docs = [];
+  try {
+    const r = await edb.find({ selector: { tipo: "aog_archivo", subtipo: "field_origin" }, limit: 300 });
+    docs = r.docs;
+  } catch {
+    const all = await edb.list({ include_docs: true });
+    docs = all.rows.map(x => x.doc).filter(d => d && d.tipo === "aog_archivo" && d.subtipo === "field_origin");
+  }
+  const { parseFieldTxt } = require("../services/aog_parser");
+  const pts = [];
+  for (const d of docs) {
+    const o = parseFieldTxt(d.contenido);
+    if (o) pts.push(o);
+  }
+  if (!pts.length) return null;
+  return {
+    lat:   pts.reduce((a, p) => a + p.lat, 0) / pts.length,
+    lon:   pts.reduce((a, p) => a + p.lon, 0) / pts.length,
+    lotes: pts.length,
+  };
+}
+
+// GET /api/lluvias/ina/ubicacion — centroide de los lotes de la org.
+router.get("/ina/ubicacion", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    res.json({ ubicacion: await ubicacionEstab(estabSlug) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/lluvias/ina/estaciones?lat=&lon=&q= — estaciones cercanas o por texto.
+router.get("/ina/estaciones", async (req, res) => {
+  try {
+    const ina = require("../services/ina");
+    const lat = parseFloat(req.query.lat);
+    const lon = parseFloat(req.query.lon);
+    const q   = (req.query.q || "").trim();
+    if (!q && !(Number.isFinite(lat) && Number.isFinite(lon)))
+      return res.status(400).json({ error: "Indicá lat/lon o un texto de búsqueda" });
+    const estaciones = await ina.buscarEstaciones({ lat, lon, q, limit: 8 });
+    res.json({ estaciones });
+  } catch (e) {
+    console.error("[lluvias/ina/estaciones]", e.message);
+    res.status(502).json({ error: `No se pudo consultar el INA: ${e.message}` });
+  }
+});
+
+// POST /api/lluvias/ina/importar { sitecode, desde, hasta }
+// Trae la serie diaria y guarda los días con lluvia como lluvia_registro
+// (fuente:"ina"), con _id determinista para evitar duplicados al re-importar.
+router.post("/ina/importar", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
+
+  const sitecode = parseInt(req.body.sitecode, 10);
+  const { desde, hasta } = req.body;
+  if (!sitecode || !/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
+    return res.status(400).json({ error: "sitecode, desde y hasta (YYYY-MM-DD) requeridos" });
+  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
+
+  try {
+    const ina    = require("../services/ina");
+    const est     = (await ina.estaciones())[sitecode] || null;
+    const serie   = await ina.datosPrecip(sitecode, desde, hasta);
+    const lluvias = serie.filter(x => x.mm > 0);
+    if (!lluvias.length)
+      return res.json({ ok: true, importados: 0, estacion: est?.nombre || String(sitecode), mensaje: "Sin lluvias en el rango" });
+
+    const edb = db.getDB(estabSlug);
+    const now = Date.now();
+    const ids = lluvias.map(x => `lluvia_ina_${sitecode}_${x.fecha}`);
+
+    // Traer los _rev existentes para que re-importar actualice (idempotente).
+    const revs = {};
+    try {
+      const f = await edb.fetch({ keys: ids });
+      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
+    } catch {}
+
+    const docs = lluvias.map(x => {
+      const _id = `lluvia_ina_${sitecode}_${x.fecha}`;
+      return {
+        _id,
+        ...(revs[_id] ? { _rev: revs[_id] } : {}),
+        tipo:         "lluvia_registro",
+        fecha:        x.fecha,
+        mm:           Math.round(x.mm * 10) / 10,
+        lote:         null,
+        nota:         `INA · ${est?.nombre || sitecode}`,
+        fuente:       "ina",
+        ina_sitecode: sitecode,
+        ina_estacion: est?.nombre || null,
+        ts:           new Date(x.fecha).getTime() || now,
+        updated_at:   now,
+      };
+    });
+
+    const r   = await edb.bulk({ docs });
+    const okc = r.filter(x => x.ok).length;
+    console.log(`[Lluvias/INA] ${estabSlug}: ${okc}/${docs.length} días de ${est?.nombre || sitecode}`);
+    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, estacion: est?.nombre || String(sitecode) });
+  } catch (e) {
+    console.error("[lluvias/ina/importar]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
