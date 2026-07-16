@@ -47,6 +47,18 @@
 
   <!-- Gráfico + tabla -->
   <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+    <!-- Pronóstico real (Open-Meteo) -->
+    <div class="card" id="llu-prono-card" style="padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <div style="font-size:14px;font-weight:600">🌐 Pronóstico de lluvia · próximos días</div>
+          <div style="font-size:11px;color:var(--ap-muted)">Open-Meteo · modelo por ubicación del campo</div>
+        </div>
+        <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" onclick="lluCargarPronostico()">↻</button>
+      </div>
+      <div id="llu-prono-body"><div style="color:var(--ap-muted);font-size:12px">Cargando pronóstico…</div></div>
+    </div>
+
     <div class="card" style="padding:16px">
       <div style="font-size:14px;font-weight:600;margin-bottom:12px">Acumulado mensual (mm)</div>
       <div id="llu-chart" style="display:flex;align-items:flex-end;gap:6px;height:140px;overflow-x:auto;padding-bottom:4px"></div>
@@ -61,8 +73,8 @@
 <!-- Modal importar de INA -->
 <div class="modal-backdrop" id="modal-llu-ina">
   <div class="modal" style="width:640px;max-height:85vh;display:flex;flex-direction:column">
-    <div class="modal-title">🛰 Importar histórico del INA</div>
-    <div class="modal-sub">Red Hidrológica Nacional · alerta.ina.gob.ar</div>
+    <div class="modal-title">🛰 Importar histórico de lluvias</div>
+    <div class="modal-sub">INA (estaciones) · Open-Meteo (modelo por punto)</div>
 
     <!-- Elegir punto: lote sincronizado, mapa clickeable o texto -->
     <div style="margin-top:14px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
@@ -85,6 +97,22 @@
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
       <button class="btn" style="flex-shrink:0" id="ina-btn-punto" onclick="lluBuscarEnPunto()" disabled>🛰 Estaciones cercanas al punto</button>
       <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted)"></div>
+    </div>
+
+    <!-- Open-Meteo: histórico grillado por el punto marcado (no necesita estación) -->
+    <div id="om-box" style="display:none;margin-top:12px;padding:12px;border:1px dashed var(--ap-border);border-radius:8px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:2px">🌐 Open-Meteo · histórico del punto marcado</div>
+      <div style="font-size:11px;color:var(--ap-muted);margin-bottom:8px">Modelo grillado: sirve para cualquier lote, sin estación cercana.</div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--ap-muted)">Desde
+          <input type="date" id="om-desde" style="margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+        </label>
+        <label style="font-size:11px;color:var(--ap-muted)">Hasta
+          <input type="date" id="om-hasta" style="margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+        </label>
+        <button class="btn btn-ghost" style="flex-shrink:0" id="om-btn-importar" onclick="lluImportarOM()">Importar histórico</button>
+      </div>
+      <div id="om-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:8px"></div>
     </div>
 
     <div id="ina-lista" style="margin-top:12px;overflow:auto;flex:1;min-height:80px"></div>
@@ -224,7 +252,7 @@ function lluRenderTabla() {
       <tbody>
         ${ordenados.map(r => `
           <tr style="border-top:1px solid var(--ap-border)">
-            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}${r.fuente === "ina" ? ` <span title="Importado del INA" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">INA</span>` : ""}</td>
+            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}${r.fuente === "ina" ? ` <span title="Importado del INA" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">INA</span>` : ""}${r.fuente === "openmeteo" ? ` <span title="Open-Meteo (modelo)" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">OM</span>` : ""}</td>
             <td style="padding:10px 16px;color:var(--ap-green);font-weight:600">${r.mm}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.lote || "–")}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.nota || "")}</td>
@@ -300,6 +328,10 @@ async function lluAbrirINA() {
   const hace2 = new Date(hoy); hace2.setFullYear(hoy.getFullYear() - 2);
   document.getElementById("ina-hasta").value = hoy.toISOString().slice(0, 10);
   document.getElementById("ina-desde").value = hace2.toISOString().slice(0, 10);
+  document.getElementById("om-hasta").value = hoy.toISOString().slice(0, 10);
+  document.getElementById("om-desde").value = hace2.toISOString().slice(0, 10);
+  document.getElementById("om-box").style.display = "none";
+  document.getElementById("om-import-msg").textContent = "";
   // Cargar ubicación del campo (centroide + lotes) y montar el mapa.
   try {
     if (_inaUbic === null) {
@@ -337,6 +369,7 @@ function lluMarcarPunto(lat, lon, recenter = true) {
   if (recenter) _inaMapa.panTo([lat, lon]);
   document.getElementById("ina-btn-punto").disabled = false;
   document.getElementById("ina-ubic-msg").textContent = `Punto: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  document.getElementById("om-box").style.display = "block";
 }
 
 function lluLlenarLotes() {
@@ -446,6 +479,76 @@ async function lluImportarINA() {
   }
 }
 
+// ── Importar histórico de Open-Meteo (punto marcado) ─────
+async function lluImportarOM() {
+  if (!_inaPunto) return;
+  const desde = document.getElementById("om-desde").value;
+  const hasta = document.getElementById("om-hasta").value;
+  const msg   = document.getElementById("om-import-msg");
+  const btn   = document.getElementById("om-btn-importar");
+  if (!desde || !hasta) { msg.style.color = "var(--ap-red, #e5484d)"; msg.textContent = "Elegí el rango de fechas."; return; }
+
+  btn.disabled = true;
+  msg.style.color = "var(--ap-muted)";
+  msg.innerHTML = '<span class="spinner"></span> Trayendo de Open-Meteo…';
+  try {
+    const r = await Auth.post("/api/lluvias/openmeteo/importar",
+      { lat: _inaPunto.lat, lon: _inaPunto.lon, desde, hasta });
+    msg.style.color = "var(--ap-green)";
+    msg.textContent = r.importados
+      ? `Importados ${r.importados} días con lluvia ✓`
+      : "Sin lluvias registradas en el rango.";
+    await lluCargar();
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Pronóstico real (Open-Meteo) del centroide del campo ──
+async function lluCargarPronostico() {
+  const body = document.getElementById("llu-prono-body");
+  body.innerHTML = '<div style="color:var(--ap-muted);font-size:12px">Cargando pronóstico…</div>';
+  try {
+    const r = await Auth.get("/api/lluvias/openmeteo/pronostico?dias=10");
+    lluRenderPronostico(r);
+  } catch (e) {
+    body.innerHTML = `<div style="font-size:12px;color:var(--ap-muted)">No se pudo cargar el pronóstico: ${lluEscape(e.message)}</div>`;
+  }
+}
+
+function lluRenderPronostico(r) {
+  const body = document.getElementById("llu-prono-body");
+  const dias = (r.dias || []).filter(d => d.futuro);
+  if (!dias.length) {
+    body.innerHTML = '<div style="font-size:12px;color:var(--ap-muted)">Sin datos de pronóstico.</div>';
+    return;
+  }
+  const max = Math.max(...dias.map(d => d.mm), 1);
+  const barras = dias.map(d => {
+    const mm = Math.round(d.mm * 10) / 10;
+    const h  = Math.max(3, Math.round((d.mm / max) * 90));
+    const [, mo, da] = d.fecha.split("-");
+    const dow = new Date(d.fecha + "T00:00:00").getDay();
+    const dl = ["do","lu","ma","mi","ju","vi","sa"][dow];
+    return `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:34px;flex-shrink:0">
+        <div style="font-size:10px;color:${mm > 0 ? "#4aa3ff" : "var(--ap-muted)"};font-weight:600">${mm}</div>
+        <div title="${d.fecha}: ${mm} mm" style="width:22px;height:${h}px;background:${mm > 0 ? "rgba(74,163,255,0.4)" : "var(--ap-border)"};border:1px solid rgba(74,163,255,0.35);border-radius:4px 4px 0 0"></div>
+        <div style="font-size:10px;color:var(--ap-muted);text-align:center">${dl}<br>${da}/${mo}</div>
+      </div>`;
+  }).join("");
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <div style="font-size:12px;color:var(--ap-muted)">Acumulado esperado</div>
+      <div style="font-size:20px;font-weight:700;color:#4aa3ff">${r.total_pronostico ?? 0} <span style="font-size:12px;color:var(--ap-muted)">mm</span></div>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:6px;height:120px;overflow-x:auto;padding-bottom:4px">${barras}</div>
+    ${r.punto?.origen === "centroide" ? '<div style="font-size:10px;color:var(--ap-muted);margin-top:6px">Ubicación: centroide del campo</div>' : ""}`;
+}
+
 async function lluCargarLotes() {
   const sel = document.getElementById("llu-lote");
   if (!sel) return;
@@ -462,5 +565,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("llu-fecha").value = new Date().toISOString().slice(0, 10);
   lluCargar();
   lluCargarLotes();
+  lluCargarPronostico();
 });
 </script>

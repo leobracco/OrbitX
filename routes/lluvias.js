@@ -311,4 +311,101 @@ router.post("/ina/importar", async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════
+//  INTEGRACIÓN OPEN-METEO (open-meteo.com) — pronóstico + histórico
+//  Modelo grillado por lat/lon: no necesita estación cercana.
+//  A diferencia de agrarIA, esto SÍ es un pronóstico real del clima.
+// ══════════════════════════════════════════════════════════
+
+// Resuelve lat/lon del request; si faltan, usa el centroide de la org.
+async function resolverPunto(req, estabSlug) {
+  const lat = parseFloat(req.query.lat ?? req.body?.lat);
+  const lon = parseFloat(req.query.lon ?? req.body?.lon);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, origen: "punto" };
+  const u = await ubicacionEstab(estabSlug);
+  if (u) return { lat: u.lat, lon: u.lon, origen: "centroide" };
+  return null;
+}
+
+// GET /api/lluvias/openmeteo/pronostico?lat=&lon=&dias=
+// Días pasados (7) + pronóstico (hasta 16). Sin lat/lon usa el centroide.
+router.get("/openmeteo/pronostico", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const p = await resolverPunto(req, estabSlug);
+    if (!p) return res.status(400).json({ error: "No hay lotes con ubicación; indicá lat/lon" });
+    const om   = require("../services/openmeteo");
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 10, 1), 16);
+    const dias_serie = await om.pronostico(p.lat, p.lon, { dias, pastDays: 7 });
+    const futuro = dias_serie.filter(d => d.futuro);
+    const total_pronostico = Math.round(futuro.reduce((a, d) => a + d.mm, 0) * 10) / 10;
+    res.json({ ok: true, punto: p, dias: dias_serie, total_pronostico });
+  } catch (e) {
+    console.error("[lluvias/openmeteo/pronostico]", e.message);
+    res.status(502).json({ error: `No se pudo consultar Open-Meteo: ${e.message}` });
+  }
+});
+
+// POST /api/lluvias/openmeteo/importar { lat, lon, desde, hasta, lote? }
+// Trae la serie histórica y guarda los días con lluvia como lluvia_registro
+// (fuente:"openmeteo"), con _id determinista por lat/lon/fecha (idempotente).
+router.post("/openmeteo/importar", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
+
+  const { desde, hasta, lote } = req.body;
+  const p = await resolverPunto(req, estabSlug);
+  if (!p) return res.status(400).json({ error: "Indicá lat/lon o cargá lotes con ubicación" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
+    return res.status(400).json({ error: "desde y hasta (YYYY-MM-DD) requeridos" });
+  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
+
+  try {
+    const om      = require("../services/openmeteo");
+    const serie   = await om.historico(p.lat, p.lon, desde, hasta);
+    const lluvias = serie.filter(x => x.mm > 0);
+    if (!lluvias.length)
+      return res.json({ ok: true, importados: 0, mensaje: "Sin lluvias en el rango" });
+
+    const edb  = db.getDB(estabSlug);
+    const now  = Date.now();
+    const clave = `${p.lat.toFixed(3)}_${p.lon.toFixed(3)}`;
+    const ids  = lluvias.map(x => `lluvia_om_${clave}_${x.fecha}`);
+
+    const revs = {};
+    try {
+      const f = await edb.fetch({ keys: ids });
+      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
+    } catch {}
+
+    const docs = lluvias.map(x => {
+      const _id = `lluvia_om_${clave}_${x.fecha}`;
+      return {
+        _id,
+        ...(revs[_id] ? { _rev: revs[_id] } : {}),
+        tipo:       "lluvia_registro",
+        fecha:      x.fecha,
+        mm:         Math.round(x.mm * 10) / 10,
+        lote:       (lote || "").trim() || null,
+        nota:       "Open-Meteo (histórico)",
+        fuente:     "openmeteo",
+        om_lat:     Math.round(p.lat * 1000) / 1000,
+        om_lon:     Math.round(p.lon * 1000) / 1000,
+        ts:         new Date(x.fecha).getTime() || now,
+        updated_at: now,
+      };
+    });
+
+    const r   = await edb.bulk({ docs });
+    const okc = r.filter(x => x.ok).length;
+    console.log(`[Lluvias/OpenMeteo] ${estabSlug}: ${okc}/${docs.length} días @ ${clave}`);
+    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length });
+  } catch (e) {
+    console.error("[lluvias/openmeteo/importar]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
