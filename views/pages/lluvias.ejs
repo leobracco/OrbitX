@@ -546,7 +546,7 @@ function lluRenderPronostico(r) {
       <div style="font-size:20px;font-weight:700;color:#4aa3ff">${r.total_pronostico ?? 0} <span style="font-size:12px;color:var(--ap-muted)">mm</span></div>
     </div>
     <div style="display:flex;align-items:flex-end;gap:6px;height:120px;overflow-x:auto;padding-bottom:4px">${barras}</div>
-    ${r.punto?.origen === "centroide" ? '<div style="font-size:10px;color:var(--ap-muted);margin-top:6px">Ubicación: centroide del campo</div>' : ""}`;
+    <div style="font-size:10px;color:var(--ap-muted);margin-top:6px">${r.punto?.origen === "centroide" ? "Ubicación: centroide del campo · " : ""}${r.plan === "pago" ? "Open-Meteo (tu suscripción)" : "Open-Meteo (plan gratuito)"}</div>`;
 }
 
 async function lluCargarLotes() {

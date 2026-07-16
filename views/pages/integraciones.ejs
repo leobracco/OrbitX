@@ -20,6 +20,33 @@
   </div>
 </div>
 
+<!-- ── Open-Meteo (suscripción propia de la org) ──────── -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-head">
+    <span class="card-title">🌐 Open-Meteo · pronóstico de lluvias</span>
+    <span id="om-badge" class="badge badge-gray">…</span>
+  </div>
+  <div class="card-body">
+    <p style="font-size:12px;color:var(--ap-muted);margin-bottom:12px;line-height:1.6">
+      Provee el pronóstico y el histórico de lluvias por ubicación del campo. Sin configurar nada
+      funciona con el plan gratuito (uso <strong>no comercial</strong>, con límite diario).
+      Para uso comercial contratá tu propio plan en
+      <a href="https://open-meteo.com/en/pricing" target="_blank" rel="noopener" style="color:var(--ap-green)">open-meteo.com/pricing</a>
+      y pegá acá tu API key: cada cliente usa su propia suscripción.
+    </p>
+    <div class="field" style="max-width:520px">
+      <label>API key de Open-Meteo</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="om-apikey" placeholder="Sin configurar (usando plan gratuito)"
+          style="flex:1;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:12px;outline:none"/>
+        <button class="btn btn-primary" id="om-save" onclick="guardarOM()">Guardar</button>
+        <button class="btn btn-sm" id="om-clear" onclick="quitarOM()">Quitar</button>
+      </div>
+      <p id="om-hint" style="font-size:11px;color:var(--ap-muted);margin-top:6px"></p>
+    </div>
+  </div>
+</div>
+
 <!-- ── Notificaciones por org ─────────────────────────── -->
 <div class="card" style="margin-bottom:14px">
   <div class="card-head">
@@ -142,6 +169,72 @@ const auth = (extra) => Object.assign({ "Authorization": `Bearer ${TOKEN}` }, ex
   }
 })();
 
+// ── Open-Meteo (suscripción de la org) ──────────────────
+let _omPuedeEditar = true;
+
+async function cargarOM() {
+  try {
+    const r = await fetch("/api/lluvias/openmeteo/config", { headers: auth() });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Error");
+    _omPuedeEditar = j.puede_editar !== false;
+    const badge = document.getElementById("om-badge");
+    const input = document.getElementById("om-apikey");
+    const hint  = document.getElementById("om-hint");
+
+    if (j.set) {
+      badge.className = "badge badge-lime";
+      badge.textContent = "● Plan pago (tu suscripción)";
+      input.placeholder = j.apikey_mask || "configurada";
+      hint.textContent = "Uso comercial habilitado con tu propia API key.";
+    } else {
+      badge.className = "badge badge-gray";
+      badge.textContent = "○ Plan gratuito (no comercial)";
+      input.placeholder = "Sin configurar (usando plan gratuito)";
+      hint.textContent = "Sin API key: uso no comercial, con límite diario.";
+    }
+    if (!_omPuedeEditar) {
+      input.disabled = true;
+      document.getElementById("om-save").style.display = "none";
+      document.getElementById("om-clear").style.display = "none";
+      hint.textContent += " Solo el owner o admin pueden cambiarla.";
+    }
+  } catch (e) {
+    showAlert("No se pudo cargar Open-Meteo: " + e.message, "error");
+  }
+}
+
+async function guardarOM() {
+  const apikey = document.getElementById("om-apikey").value.trim();
+  if (!apikey) { showAlert("Pegá tu API key o usá 'Quitar' para volver al plan gratuito.", "error"); return; }
+  try {
+    const r = await fetch("/api/lluvias/openmeteo/config", {
+      method: "PUT", headers: auth({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ apikey }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Error");
+    document.getElementById("om-apikey").value = "";
+    showAlert("✓ API key de Open-Meteo guardada", "success");
+    cargarOM();
+  } catch (e) { showAlert("✗ " + e.message, "error"); }
+}
+
+async function quitarOM() {
+  if (!confirm("¿Quitar la API key y volver al plan gratuito (no comercial)?")) return;
+  try {
+    const r = await fetch("/api/lluvias/openmeteo/config", {
+      method: "PUT", headers: auth({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ apikey: "" }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Error");
+    document.getElementById("om-apikey").value = "";
+    showAlert("✓ Volviste al plan gratuito", "success");
+    cargarOM();
+  } catch (e) { showAlert("✗ " + e.message, "error"); }
+}
+
 // ── Notificaciones ──────────────────────────────────────
 let _eventos = [];
 let _config  = null;
@@ -241,5 +334,5 @@ function showAlert(msg, tipo) {
   if (tipo !== "error") setTimeout(() => a.classList.remove("show"), 4000);
 }
 
-document.addEventListener("DOMContentLoaded", cargarNotif);
+document.addEventListener("DOMContentLoaded", () => { cargarNotif(); cargarOM(); });
 </script>

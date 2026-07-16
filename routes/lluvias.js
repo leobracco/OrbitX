@@ -317,6 +317,39 @@ router.post("/ina/importar", async (req, res) => {
 //  A diferencia de agrarIA, esto SÍ es un pronóstico real del clima.
 // ══════════════════════════════════════════════════════════
 
+const omOrg = require("../lib/openmeteo-org");
+const ROLES_CONFIG_OM = ["owner", "admin_org", "superadmin"];
+
+// GET /api/lluvias/openmeteo/config — estado de la API key de la org (enmascarada).
+router.get("/openmeteo/config", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const c   = await omOrg.getConfig(estabSlug);
+    const rol = req.user?.rol || req.user?.rol_global;
+    res.json({
+      set:          !!c.apikey,
+      apikey_mask:  omOrg.mask(c.apikey),
+      updated_at:   c.updated_at,
+      puede_editar: ROLES_CONFIG_OM.includes(rol),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /api/lluvias/openmeteo/config { apikey } — guardar/borrar la key (owner/admin).
+router.put("/openmeteo/config", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  const rol = req.user?.rol || req.user?.rol_global;
+  if (!ROLES_CONFIG_OM.includes(rol))
+    return res.status(403).json({ error: "Solo owner o admin pueden configurar Open-Meteo" });
+  try {
+    const byUid = req.user?.uid ? `usr_${req.user.uid}` : "system";
+    await omOrg.setApiKey(estabSlug, req.body?.apikey || "", byUid);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Resuelve lat/lon del request; si faltan, usa el centroide de la org.
 async function resolverPunto(req, estabSlug) {
   const lat = parseFloat(req.query.lat ?? req.body?.lat);
@@ -336,11 +369,12 @@ router.get("/openmeteo/pronostico", async (req, res) => {
     const p = await resolverPunto(req, estabSlug);
     if (!p) return res.status(400).json({ error: "No hay lotes con ubicación; indicá lat/lon" });
     const om   = require("../services/openmeteo");
+    const key  = await omOrg.getApiKey(estabSlug);
     const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 10, 1), 16);
-    const dias_serie = await om.pronostico(p.lat, p.lon, { dias, pastDays: 7 });
+    const dias_serie = await om.pronostico(p.lat, p.lon, { dias, pastDays: 7, apiKey: key });
     const futuro = dias_serie.filter(d => d.futuro);
     const total_pronostico = Math.round(futuro.reduce((a, d) => a + d.mm, 0) * 10) / 10;
-    res.json({ ok: true, punto: p, dias: dias_serie, total_pronostico });
+    res.json({ ok: true, punto: p, dias: dias_serie, total_pronostico, plan: key ? "pago" : "gratuito" });
   } catch (e) {
     console.error("[lluvias/openmeteo/pronostico]", e.message);
     res.status(502).json({ error: `No se pudo consultar Open-Meteo: ${e.message}` });
@@ -364,7 +398,8 @@ router.post("/openmeteo/importar", async (req, res) => {
 
   try {
     const om      = require("../services/openmeteo");
-    const serie   = await om.historico(p.lat, p.lon, desde, hasta);
+    const key     = await omOrg.getApiKey(estabSlug);
+    const serie   = await om.historico(p.lat, p.lon, desde, hasta, key);
     const lluvias = serie.filter(x => x.mm > 0);
     if (!lluvias.length)
       return res.json({ ok: true, importados: 0, mensaje: "Sin lluvias en el rango" });
