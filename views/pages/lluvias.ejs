@@ -99,11 +99,14 @@
       <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted)"></div>
     </div>
 
-    <!-- Open-Meteo: histórico grillado por el punto marcado (no necesita estación) -->
+    <!-- Fuentes satelitales: histórico por el punto marcado (no necesitan estación) -->
     <div id="om-box" style="display:none;margin-top:12px;padding:12px;border:1px dashed var(--ap-border);border-radius:8px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:2px">🌐 Open-Meteo · histórico del punto marcado</div>
-      <div style="font-size:11px;color:var(--ap-muted);margin-bottom:8px">Modelo grillado: sirve para cualquier lote, sin estación cercana.</div>
+      <div style="font-size:12px;font-weight:600;margin-bottom:2px">🛰 Fuentes satelitales · histórico del punto marcado</div>
+      <div style="font-size:11px;color:var(--ap-muted);margin-bottom:8px">Modelos grillados: sirven para cualquier lote, sin estación cercana.</div>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--ap-muted);min-width:150px">Fuente
+          <select id="om-fuente" onchange="lluDescFuente()" style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"></select>
+        </label>
         <label style="font-size:11px;color:var(--ap-muted)">Desde
           <input type="date" id="om-desde" style="margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
         </label>
@@ -112,7 +115,8 @@
         </label>
         <button class="btn btn-ghost" style="flex-shrink:0" id="om-btn-importar" onclick="lluImportarOM()">Importar histórico</button>
       </div>
-      <div id="om-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:8px"></div>
+      <div id="om-fuente-desc" style="font-size:11px;color:var(--ap-muted);margin-top:6px"></div>
+      <div id="om-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:6px"></div>
     </div>
 
     <div id="ina-lista" style="margin-top:12px;overflow:auto;flex:1;min-height:80px"></div>
@@ -158,6 +162,13 @@ function lluFmtFecha(f) {
   if (!f) return "–";
   const [y, m, d] = f.split("-");
   return `${d}/${m}/${y.slice(2)}`;
+}
+
+const FUENTE_BADGE = { ina: "INA", openmeteo: "OM", nasapower: "POWER", chirps: "CHIRPS" };
+function lluBadgeFuente(fuente) {
+  const t = FUENTE_BADGE[fuente];
+  if (!t) return "";
+  return ` <span title="Fuente: ${lluEscape(fuente)}" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">${t}</span>`;
 }
 
 async function lluCargar() {
@@ -252,7 +263,7 @@ function lluRenderTabla() {
       <tbody>
         ${ordenados.map(r => `
           <tr style="border-top:1px solid var(--ap-border)">
-            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}${r.fuente === "ina" ? ` <span title="Importado del INA" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">INA</span>` : ""}${r.fuente === "openmeteo" ? ` <span title="Open-Meteo (modelo)" style="font-size:9px;color:var(--ap-muted);border:1px solid var(--ap-border);border-radius:4px;padding:1px 4px;vertical-align:middle">OM</span>` : ""}</td>
+            <td style="padding:10px 16px">${lluFmtFecha(r.fecha)}${lluBadgeFuente(r.fuente)}</td>
             <td style="padding:10px 16px;color:var(--ap-green);font-weight:600">${r.mm}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.lote || "–")}</td>
             <td style="padding:10px 16px;color:var(--ap-muted)">${lluEscape(r.nota || "")}</td>
@@ -341,6 +352,7 @@ async function lluAbrirINA() {
   } catch { _inaUbic = false; }
   lluMontarMapa();
   lluLlenarLotes();
+  lluCargarFuentes();
 }
 
 function lluMontarMapa() {
@@ -479,24 +491,46 @@ async function lluImportarINA() {
   }
 }
 
-// ── Importar histórico de Open-Meteo (punto marcado) ─────
+// ── Importar histórico de una fuente satelital (punto marcado) ────
+let _lluFuentes = [];
+
+async function lluCargarFuentes() {
+  const sel = document.getElementById("om-fuente");
+  if (sel.options.length) return; // ya cargadas
+  try {
+    const r = await Auth.get("/api/lluvias/fuentes");
+    _lluFuentes = (r.fuentes || []).filter(f => f.punto && f.capacidades?.historico);
+    sel.innerHTML = _lluFuentes.map(f => `<option value="${lluEscape(f.id)}">${lluEscape(f.nombre)}</option>`).join("");
+    lluDescFuente();
+  } catch { /* si falla, el bloque queda vacío */ }
+}
+
+function lluDescFuente() {
+  const id = document.getElementById("om-fuente").value;
+  const f  = _lluFuentes.find(x => x.id === id);
+  document.getElementById("om-fuente-desc").textContent = f ? f.resolucion : "";
+}
+
 async function lluImportarOM() {
   if (!_inaPunto) return;
+  const id    = document.getElementById("om-fuente").value;
   const desde = document.getElementById("om-desde").value;
   const hasta = document.getElementById("om-hasta").value;
   const msg   = document.getElementById("om-import-msg");
   const btn   = document.getElementById("om-btn-importar");
+  const f     = _lluFuentes.find(x => x.id === id);
+  if (!id) { msg.style.color = "var(--ap-red, #e5484d)"; msg.textContent = "Elegí una fuente."; return; }
   if (!desde || !hasta) { msg.style.color = "var(--ap-red, #e5484d)"; msg.textContent = "Elegí el rango de fechas."; return; }
 
   btn.disabled = true;
   msg.style.color = "var(--ap-muted)";
-  msg.innerHTML = '<span class="spinner"></span> Trayendo de Open-Meteo…';
+  msg.innerHTML = `<span class="spinner"></span> Trayendo de ${lluEscape(f?.nombre || id)}…${id === "chirps" ? " (CHIRPS puede tardar unos segundos)" : ""}`;
   try {
-    const r = await Auth.post("/api/lluvias/openmeteo/importar",
+    const r = await Auth.post(`/api/lluvias/fuentes/${encodeURIComponent(id)}/importar`,
       { lat: _inaPunto.lat, lon: _inaPunto.lon, desde, hasta });
     msg.style.color = "var(--ap-green)";
     msg.textContent = r.importados
-      ? `Importados ${r.importados} días con lluvia ✓`
+      ? `Importados ${r.importados} días con lluvia de ${r.fuente || id} ✓`
       : "Sin lluvias registradas en el rango.";
     await lluCargar();
   } catch (e) {

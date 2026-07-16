@@ -317,7 +317,8 @@ router.post("/ina/importar", async (req, res) => {
 //  A diferencia de agrarIA, esto SÍ es un pronóstico real del clima.
 // ══════════════════════════════════════════════════════════
 
-const omOrg = require("../lib/openmeteo-org");
+const omOrg      = require("../lib/openmeteo-org");
+const fuentesReg = require("../services/lluvias_fuentes");
 const ROLES_CONFIG_OM = ["owner", "admin_org", "superadmin"];
 
 // GET /api/lluvias/openmeteo/config — estado de la API key de la org (enmascarada).
@@ -381,13 +382,56 @@ router.get("/openmeteo/pronostico", async (req, res) => {
   }
 });
 
-// POST /api/lluvias/openmeteo/importar { lat, lon, desde, hasta, lote? }
-// Trae la serie histórica y guarda los días con lluvia como lluvia_registro
-// (fuente:"openmeteo"), con _id determinista por lat/lon/fecha (idempotente).
-router.post("/openmeteo/importar", async (req, res) => {
+// Guarda una serie [{fecha,mm}] como docs lluvia_registro (idempotente por
+// fuente/punto/fecha). Solo guarda los días con lluvia (mm>0).
+async function guardarSerie(edb, { fuenteId, lat, lon, lluvias, lote, nota }) {
+  const now   = Date.now();
+  const clave = `${lat.toFixed(3)}_${lon.toFixed(3)}`;
+  const idDe  = (fecha) => `lluvia_${fuenteId}_${clave}_${fecha}`;
+
+  const revs = {};
+  try {
+    const f = await edb.fetch({ keys: lluvias.map(x => idDe(x.fecha)) });
+    f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
+  } catch {}
+
+  const docs = lluvias.map(x => {
+    const _id = idDe(x.fecha);
+    return {
+      _id,
+      ...(revs[_id] ? { _rev: revs[_id] } : {}),
+      tipo:       "lluvia_registro",
+      fecha:      x.fecha,
+      mm:         Math.round(x.mm * 10) / 10,
+      lote:       (lote || "").trim() || null,
+      nota,
+      fuente:     fuenteId,
+      pt_lat:     Math.round(lat * 1000) / 1000,
+      pt_lon:     Math.round(lon * 1000) / 1000,
+      ts:         new Date(x.fecha).getTime() || now,
+      updated_at: now,
+    };
+  });
+
+  const r = await edb.bulk({ docs });
+  return r.filter(x => x.ok).length;
+}
+
+// GET /api/lluvias/fuentes — catálogo de fuentes disponibles + capacidades.
+router.get("/fuentes", (req, res) => {
+  res.json({ fuentes: fuentesReg.list() });
+});
+
+// POST /api/lluvias/fuentes/:id/importar { lat, lon, desde, hasta, lote? }
+// Importa el histórico de una fuente satelital por-punto (openmeteo/nasapower/chirps).
+router.post("/fuentes/:id/importar", async (req, res) => {
   const estabSlug = estabDe(req);
   if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
   if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
+
+  const fuente = fuentesReg.get(req.params.id);
+  if (!fuente || !fuente.historico)
+    return res.status(404).json({ error: "Fuente desconocida o sin histórico" });
 
   const { desde, hasta, lote } = req.body;
   const p = await resolverPunto(req, estabSlug);
@@ -397,49 +441,22 @@ router.post("/openmeteo/importar", async (req, res) => {
   if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
 
   try {
-    const om      = require("../services/openmeteo");
-    const key     = await omOrg.getApiKey(estabSlug);
-    const serie   = await om.historico(p.lat, p.lon, desde, hasta, key);
+    const opts    = fuente.id === "openmeteo" ? { apiKey: await omOrg.getApiKey(estabSlug) } : {};
+    const serie   = await fuente.historico(p.lat, p.lon, desde, hasta, opts);
     const lluvias = serie.filter(x => x.mm > 0);
     if (!lluvias.length)
       return res.json({ ok: true, importados: 0, mensaje: "Sin lluvias en el rango" });
 
-    const edb  = db.getDB(estabSlug);
-    const now  = Date.now();
-    const clave = `${p.lat.toFixed(3)}_${p.lon.toFixed(3)}`;
-    const ids  = lluvias.map(x => `lluvia_om_${clave}_${x.fecha}`);
-
-    const revs = {};
-    try {
-      const f = await edb.fetch({ keys: ids });
-      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
-    } catch {}
-
-    const docs = lluvias.map(x => {
-      const _id = `lluvia_om_${clave}_${x.fecha}`;
-      return {
-        _id,
-        ...(revs[_id] ? { _rev: revs[_id] } : {}),
-        tipo:       "lluvia_registro",
-        fecha:      x.fecha,
-        mm:         Math.round(x.mm * 10) / 10,
-        lote:       (lote || "").trim() || null,
-        nota:       "Open-Meteo (histórico)",
-        fuente:     "openmeteo",
-        om_lat:     Math.round(p.lat * 1000) / 1000,
-        om_lon:     Math.round(p.lon * 1000) / 1000,
-        ts:         new Date(x.fecha).getTime() || now,
-        updated_at: now,
-      };
+    const edb = db.getDB(estabSlug);
+    const okc = await guardarSerie(edb, {
+      fuenteId: fuente.id, lat: p.lat, lon: p.lon, lluvias, lote,
+      nota: `${fuente.nombre} (histórico)`,
     });
-
-    const r   = await edb.bulk({ docs });
-    const okc = r.filter(x => x.ok).length;
-    console.log(`[Lluvias/OpenMeteo] ${estabSlug}: ${okc}/${docs.length} días @ ${clave}`);
-    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length });
+    console.log(`[Lluvias/${fuente.id}] ${estabSlug}: ${okc}/${lluvias.length} días @ ${p.lat.toFixed(3)},${p.lon.toFixed(3)}`);
+    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, fuente: fuente.nombre });
   } catch (e) {
-    console.error("[lluvias/openmeteo/importar]", e.message);
-    res.status(500).json({ error: e.message });
+    console.error(`[lluvias/fuentes/${req.params.id}/importar]`, e.message);
+    res.status(502).json({ error: `No se pudo consultar ${fuente.nombre}: ${e.message}` });
   }
 });
 
