@@ -471,6 +471,7 @@ async function abrirLote(nombreEnc) {
     renderTabVistaX(ctx);
     renderTabCapas(ctx);
     renderTabInfo(ctx);
+    renderLluviasLote(nombre);
   } catch(e) {
     document.getElementById('tab-content-aog').innerHTML =
       `<div class="alert error show">${e.message}</div>`;
@@ -596,6 +597,79 @@ function renderTabCapas(ctx) {
         </div>`).join('')}
     </div>`).join('') +
   `<button class="btn btn-ghost" style="width:100%;margin-top:4px" onclick="abrirAgregarCapa()">+ Agregar capa</button>`;
+}
+
+// Tarjeta de lluvias del lote (arriba de las capas externas). Filtra los
+// registros lluvia_registro cuyo campo `lote` coincide con el nombre.
+async function renderLluviasLote(nombre) {
+  const cont = document.getElementById('tab-content-capas');
+  if (!cont) return;
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const MESES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+
+  const box = document.createElement('div');
+  box.id = 'llu-lote-card';
+  box.style.cssText = 'margin-bottom:16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px';
+  box.innerHTML = `<div style="font-size:12px;color:var(--muted2)"><span class="spinner" style="width:12px;height:12px"></span> Lluvias…</div>`;
+  cont.prepend(box);
+
+  try {
+    const r = await Auth.get(`/api/lluvias?lote=${encodeURIComponent(nombre)}`);
+    const items = r.registros || [];
+    const verBtn = `<a href="/lluvias" class="btn btn-ghost" style="font-size:11px;padding:4px 10px;text-decoration:none">🌧 Ver lluvias</a>`;
+
+    if (!items.length) {
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="font-size:13px;color:var(--text)">🌧 Lluvias</div>${verBtn}
+        </div>
+        <div style="font-size:11px;color:var(--muted2);margin-top:6px">Sin lluvias cargadas para este lote.</div>`;
+      return;
+    }
+
+    const total  = items.reduce((a, x) => a + (Number(x.mm) || 0), 0);
+    const orden  = [...items].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+    const ultima = orden[0];
+    const dias   = ultima ? Math.max(0, Math.round((Date.now() - new Date(ultima.fecha)) / 86400000)) : null;
+
+    // Mini acumulado por mes (últimos 6).
+    const porMes = {};
+    items.forEach(x => { const m = (x.fecha || '').slice(0, 7); if (m) porMes[m] = (porMes[m] || 0) + (Number(x.mm) || 0); });
+    const meses = Object.keys(porMes).sort().slice(-6);
+    const max   = Math.max(...meses.map(m => porMes[m]), 1);
+    const chart = meses.map(m => {
+      const mm = Math.round(porMes[m] * 10) / 10;
+      const h  = Math.max(4, Math.round((porMes[m] / max) * 46));
+      const [y, mo] = m.split('-');
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;min-width:30px">
+        <div style="font-size:9px;color:var(--lime)">${mm}</div>
+        <div title="${m}: ${mm} mm" style="width:20px;height:${h}px;background:var(--lime);opacity:.6;border-radius:3px 3px 0 0"></div>
+        <div style="font-size:9px;color:var(--muted2)">${MESES[parseInt(mo,10)-1]}</div>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="font-size:13px;color:var(--text)">🌧 Lluvias del lote</div>${verBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+        <div style="text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:var(--lime)">${Math.round(total*10)/10}<span style="font-size:10px;color:var(--muted2)"> mm</span></div>
+          <div style="font-size:9px;color:var(--muted2);margin-top:2px">Acumulado</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:var(--blue)">${ultima ? ultima.mm : '–'}<span style="font-size:10px;color:var(--muted2)"> mm</span></div>
+          <div style="font-size:9px;color:var(--muted2);margin-top:2px">Última (${ultima ? esc(ultima.fecha.split('-').reverse().slice(0,2).join('/')) : '–'})</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-family:var(--font-m);font-size:16px;color:var(--teal)">${dias != null ? dias : '–'}</div>
+          <div style="font-size:9px;color:var(--muted2);margin-top:2px">Días sin llover</div>
+        </div>
+      </div>
+      ${meses.length ? `<div style="display:flex;align-items:flex-end;gap:6px;height:64px;justify-content:center">${chart}</div>` : ''}`;
+  } catch (e) {
+    box.innerHTML = `<div style="font-size:11px;color:var(--muted2)">🌧 Lluvias: ${esc(e.message)}</div>`;
+  }
 }
 
 function renderTabInfo(ctx) {

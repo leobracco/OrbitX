@@ -31,8 +31,10 @@
           style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
       </label>
       <label style="font-size:11px;color:var(--ap-muted)">Lote (opcional)
-        <input type="text" id="llu-lote" placeholder="Ej: Lote 5"
-          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
+        <select id="llu-lote"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none">
+          <option value="">Todo el campo</option>
+        </select>
       </label>
       <label style="font-size:11px;color:var(--ap-muted)">Nota (opcional)
         <input type="text" id="llu-nota" placeholder="Observación"
@@ -444,8 +446,21 @@ async function lluImportarINA() {
   }
 }
 
+async function lluCargarLotes() {
+  const sel = document.getElementById("llu-lote");
+  if (!sel) return;
+  try {
+    const r = await Auth.get("/api/lotes-maestro?lite=1&limit=200");
+    const items = (r.items || []).filter(x => x.nombre).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    if (items.length)
+      sel.insertAdjacentHTML("beforeend",
+        items.map(x => `<option value="${lluEscape(x.nombre)}">${lluEscape(x.nombre)}</option>`).join(""));
+  } catch { /* si no hay lotes, queda solo "Todo el campo" */ }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("llu-fecha").value = new Date().toISOString().slice(0, 10);
   lluCargar();
+  lluCargarLotes();
 });
 </script>

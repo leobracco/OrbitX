@@ -40,7 +40,11 @@ router.get("/", async (req, res) => {
   const estabSlug = estabDe(req);
   if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
   try {
-    res.json({ registros: await listar(estabSlug), puede_editar: puedeEditar(req) });
+    let registros = await listar(estabSlug);
+    // ?lote=<nombre> → solo los registros de ese lote (para el detalle del lote).
+    const lote = (req.query.lote || "").trim();
+    if (lote) registros = registros.filter(r => (r.lote || "") === lote);
+    res.json({ registros, puede_editar: puedeEditar(req) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
