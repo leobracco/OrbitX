@@ -124,7 +124,10 @@
       <span id="capas-count" style="font-size:10px;color:var(--muted2)">–</span>
     </div>
 
-    <div id="capas-lista" style="padding:8px 0;max-height:520px;overflow-y:auto"></div>
+    <!-- Capas de datos (lluvias, etc.) — siempre disponibles con un lote -->
+    <div id="capas-datos" style="padding:4px 0"></div>
+
+    <div id="capas-lista" style="padding:8px 0;max-height:460px;overflow-y:auto"></div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)">
       <button class="btn btn-ghost" style="width:100%;font-size:11px"
@@ -182,6 +185,10 @@ let _lista      = [];
 let _searchTO   = null;
 let _loteActual = null;
 let _primerBoundsCargado = false;  // evita que el 2do SHP pise el fitBounds
+let _loteBoundary = null;          // boundary [[lat,lon]] del lote activo
+let _lluviaLayers = [];            // capas Leaflet de la capa "Lluvias"
+let _lluviaOn     = false;         // estado del toggle de lluvias
+let _lluviaDias   = 90;            // ventana en días del acumulado
 
 // Paleta para capas externas
 const CAPA_COLORES = [
@@ -321,7 +328,12 @@ async function seleccionarLote(nombreEnc, estabSlug) {
   _capaLayers = {};
   _colorIdx   = 0;
   _primerBoundsCargado = false;
+  _lluviaLayers.forEach(l => _mapa.removeLayer(l));
+  _lluviaLayers = [];
+  _lluviaOn = false;
+  _loteBoundary = null;
   document.getElementById("leyenda-capas").innerHTML = "";
+  document.getElementById("capas-datos").innerHTML = "";
   document.getElementById("panel-capas").style.display = "none";
 
   try {
@@ -369,15 +381,22 @@ async function seleccionarLote(nombreEnc, estabSlug) {
 
       if (bounds.length) _mapa.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
 
-      // Avisar a OrbitNDVI con el boundary del lote (para análisis satelital).
-      if (typeof OrbitNDVI !== "undefined" && lote.boundary?.length > 2) {
-        OrbitNDVI.setLoteBoundary(lote.boundary, lote.nombre || _loteActual);
+      // Guardar boundary para la capa de lluvias y avisar a OrbitNDVI.
+      if (lote.boundary?.length > 2) {
+        _loteBoundary = lote.boundary;
+        if (typeof OrbitNDVI !== "undefined")
+          OrbitNDVI.setLoteBoundary(lote.boundary, lote.nombre || _loteActual);
       }
     }
 
     // Pill activo
     document.getElementById("pill-nombre").textContent   = _loteActual;
     document.getElementById("pill-activo").style.display = "flex";
+
+    // Panel de capas + sección de datos (lluvias) — siempre con un lote.
+    document.getElementById("panel-capas").style.display = "block";
+    document.getElementById("capas-count").textContent   = "–";
+    renderCapaDatos(nombreEnc);
 
     // Estado
     const info = [
@@ -597,6 +616,109 @@ function esCapaGeografica(c) {
   return ["geojson","json","csv","kml","shp","shapefile"].includes(ext) ||
          ["ndvi","shapefile","geojson","kml","csv","imagen_drone","imagen_sat"].includes(c.subtipo) ||
          !!c.contenido_texto || !!c.base64;
+}
+
+// ── Capa de datos: Lluvias ────────────────────────────────
+// Pinta el boundary del lote según los mm acumulados en una ventana de
+// tiempo. No es una capa "geográfica" (la lluvia no tiene geometría propia),
+// sino una lectura del lote coloreada por lluvia acumulada.
+function renderCapaDatos(nombreEnc) {
+  const cont = document.getElementById("capas-datos");
+  if (!cont) return;
+  cont.innerHTML = `
+    <div class="capa-item" onclick="toggleCapaLluvias('${nombreEnc}')">
+      <div style="width:10px;height:10px;border-radius:3px;background:#3b82f6;flex-shrink:0"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--text)">🌧 Lluvias</div>
+        <div style="font-size:10px;color:var(--muted2)">acumulado del lote</div>
+      </div>
+      <div class="capa-toggle off" id="toggle-lluvias" title="Mostrar/ocultar en mapa"></div>
+    </div>
+    <div style="padding:0 14px 8px 32px;display:flex;align-items:center;gap:6px">
+      <span style="font-size:10px;color:var(--muted2)">Ventana</span>
+      <select id="lluvia-dias" onchange="cambiarVentanaLluvia('${nombreEnc}')" onclick="event.stopPropagation()"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:11px;padding:3px 6px;border-radius:6px;outline:none">
+        <option value="30">30 días</option>
+        <option value="90" selected>90 días</option>
+        <option value="180">180 días</option>
+        <option value="365">1 año</option>
+        <option value="0">Todo</option>
+      </select>
+    </div>`;
+}
+
+function colorLluvia(mm) {
+  if (mm <= 0)  return "#64748b"; // gris — sin lluvia
+  if (mm < 20)  return "#bae6fd";
+  if (mm < 50)  return "#60a5fa";
+  if (mm < 100) return "#3b82f6";
+  if (mm < 200) return "#2563eb";
+  return "#1e3a8a";
+}
+
+async function toggleCapaLluvias(nombreEnc) {
+  if (_lluviaOn) { quitarLluvias(); return; }
+  await dibujarLluvias(nombreEnc);
+}
+
+async function cambiarVentanaLluvia(nombreEnc) {
+  if (_lluviaOn) await dibujarLluvias(nombreEnc);
+}
+
+async function dibujarLluvias(nombreEnc) {
+  if (!_loteBoundary || _loteBoundary.length < 3) {
+    toast("Lluvias", "Este lote no tiene boundary para pintar.", "red");
+    return;
+  }
+  mostrarLoading("Cargando lluvias…");
+  try {
+    const r = await Auth.get(`/api/lluvias?lote=${nombreEnc}`);
+    let items = r.registros || [];
+    _lluviaDias = parseInt(document.getElementById("lluvia-dias")?.value || "90", 10);
+    if (_lluviaDias > 0) {
+      const desde = new Date(Date.now() - _lluviaDias * 86400000).toISOString().slice(0, 10);
+      items = items.filter(x => (x.fecha || "") >= desde);
+    }
+    const total = items.reduce((a, x) => a + (Number(x.mm) || 0), 0);
+    const color = colorLluvia(total);
+
+    quitarLluvias();
+    const poly = L.polygon(_loteBoundary, {
+      color, weight: 2, opacity: 0.95, fillColor: color, fillOpacity: 0.35,
+    }).addTo(_mapa);
+    poly.bindTooltip(
+      `🌧 ${Math.round(total * 10) / 10} mm · ${items.length} lluvia${items.length !== 1 ? "s" : ""} (${_lluviaDias ? _lluviaDias + "d" : "todo"})`,
+      { sticky: true });
+    _lluviaLayers = [poly];
+    _lluviaOn = true;
+
+    const t = document.getElementById("toggle-lluvias");
+    if (t) { t.classList.remove("off"); t.classList.add("on"); }
+    renderLeyendaLluvia(total);
+  } catch (e) {
+    toast("Error lluvias", e.message, "red");
+  } finally { ocultarLoading(); }
+}
+
+function quitarLluvias() {
+  _lluviaLayers.forEach(l => { if (_mapa) _mapa.removeLayer(l); });
+  _lluviaLayers = [];
+  _lluviaOn = false;
+  const t = document.getElementById("toggle-lluvias");
+  if (t) { t.classList.remove("on"); t.classList.add("off"); }
+  const ley = document.getElementById("leyenda-lluvia");
+  if (ley) ley.remove();
+}
+
+function renderLeyendaLluvia(total) {
+  const cont = document.getElementById("leyenda-capas");
+  if (!cont) return;
+  let box = document.getElementById("leyenda-lluvia");
+  if (!box) { box = document.createElement("div"); box.id = "leyenda-lluvia"; cont.appendChild(box); }
+  box.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);margin-top:4px";
+  box.innerHTML =
+    `<span style="width:12px;height:12px;border-radius:3px;background:${colorLluvia(total)};display:inline-block"></span>` +
+    `🌧 ${Math.round(total * 10) / 10} mm (${_lluviaDias ? _lluviaDias + "d" : "todo"})`;
 }
 
 // ── Toggle capa en el mapa ────────────────────────────────
@@ -1022,10 +1144,13 @@ function limpiarMapa() {
   _colorIdx   = 0;
   _loteActual = null;
   _primerBoundsCargado = false;
+  quitarLluvias();
+  _loteBoundary = null;
   document.getElementById("lote-search").value          = "";
   document.getElementById("pill-activo").style.display   = "none";
   document.getElementById("mapa-empty").style.display    = "flex";
   document.getElementById("panel-capas").style.display   = "none";
+  document.getElementById("capas-datos").innerHTML       = "";
   document.getElementById("leyenda-capas").innerHTML     = "";
   document.getElementById("mapa-estado").textContent     = _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
   if (typeof OrbitNDVI !== "undefined") OrbitNDVI.setLoteBoundary(null);
