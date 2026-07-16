@@ -8,7 +8,7 @@
     <p>Registro de precipitaciones del establecimiento</p>
   </div>
   <div style="display:flex;gap:8px">
-    <button class="btn btn-ghost" id="llu-btn-ina" onclick="lluAbrirINA()">🛰 Importar de INA</button>
+    <button class="btn btn-ghost" id="llu-btn-ina" onclick="lluAbrirINA()">🌧 Traer lluvias</button>
     <button class="btn" onclick="lluAnalizar()">✦ Analizar con agrarIA</button>
     <button class="btn btn-ghost" onclick="lluCargar()">↻</button>
   </div>
@@ -73,18 +73,37 @@
 <!-- Modal importar de INA -->
 <div class="modal-backdrop" id="modal-llu-ina">
   <div class="modal" style="width:640px;max-height:85vh;display:flex;flex-direction:column">
-    <div class="modal-title">🛰 Importar histórico de lluvias</div>
-    <div class="modal-sub">INA (estaciones) · Open-Meteo (modelo por punto)</div>
+    <div class="modal-title">🌧 Traer lluvias de un lote</div>
+    <div class="modal-sub">Elegí el lote y el período — traemos el histórico satelital y lo asociamos al lote</div>
 
-    <!-- Elegir punto: lote sincronizado, mapa clickeable o texto -->
-    <div style="margin-top:14px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">Traer un lote
+    <!-- Flujo simple: lote + período + un botón -->
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:11px;color:var(--ap-muted)">Lote
         <select id="ina-lote" onchange="lluElegirLote()"
           style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none">
           <option value="">— sin lotes sincronizados —</option>
         </select>
       </label>
-      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">o buscar por nombre
+      <label style="font-size:11px;color:var(--ap-muted)">Período
+        <select id="llu-periodo"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none">
+          <option value="180">Últimos 6 meses</option>
+          <option value="365" selected>Último año</option>
+          <option value="730">Últimos 2 años</option>
+        </select>
+      </label>
+      <button class="btn" style="width:100%" id="llu-btn-traer" onclick="lluTraerLluvias()">🌧 Traer lluvias del lote</button>
+      <div id="llu-simple-msg" style="font-size:12px;color:var(--ap-muted)"></div>
+    </div>
+
+    <!-- Opciones avanzadas: estación INA, otras fuentes, mapa -->
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--ap-muted)">Opciones avanzadas · estación INA, otras fuentes, mapa</summary>
+      <div style="margin-top:12px">
+
+    <!-- Buscar estación INA por nombre -->
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">Buscar estación INA por nombre
         <input type="text" id="ina-q" placeholder="Ej: Pergamino"
           onkeydown="if(event.key==='Enter'){event.preventDefault();lluBuscarINA()}"
           style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
@@ -95,13 +114,13 @@
     <div style="font-size:11px;color:var(--ap-muted);margin-top:10px">📍 O marcá un punto en el mapa (click) y buscá las estaciones más cercanas:</div>
     <div id="ina-mapa" style="height:220px;margin-top:6px;border:1px solid var(--ap-border);border-radius:8px;overflow:hidden"></div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-      <button class="btn" style="flex-shrink:0" id="ina-btn-punto" onclick="lluBuscarEnPunto()" disabled>🛰 Estaciones cercanas al punto</button>
+      <button class="btn" style="flex-shrink:0" id="ina-btn-punto" onclick="lluBuscarEnPunto()" disabled>📡 Estaciones cercanas al punto</button>
       <div id="ina-ubic-msg" style="font-size:11px;color:var(--ap-muted)"></div>
     </div>
 
     <!-- Fuentes satelitales: histórico por el punto marcado (no necesitan estación) -->
     <div id="om-box" style="display:none;margin-top:12px;padding:12px;border:1px dashed var(--ap-border);border-radius:8px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:2px">🛰 Fuentes satelitales · histórico del punto marcado</div>
+      <div style="font-size:12px;font-weight:600;margin-bottom:2px">🌧 Fuentes satelitales · histórico del punto marcado</div>
       <div style="font-size:11px;color:var(--ap-muted);margin-bottom:8px">Modelos grillados: sirven para cualquier lote, sin estación cercana.</div>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--ap-muted);min-width:150px">Fuente
@@ -134,6 +153,9 @@
       </div>
       <div id="ina-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:8px"></div>
     </div>
+
+      </div>
+    </details>
 
     <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-llu-ina')">Cerrar</button>
   </div>
@@ -403,6 +425,48 @@ function lluElegirLote() {
   if (_inaMapa) _inaMapa.setView([p.lat, p.lon], 12);
 }
 
+// Nombre del lote elegido en el selector (para asociar los registros al lote
+// y que la capa 🌧 del mapa los encuentre). Sin selección → null (campo).
+function lluLoteSeleccionado() {
+  const i = document.getElementById("ina-lote")?.value;
+  if (i === "" || i == null) return null;
+  return _inaUbic?.puntos?.[i]?.nombre || null;
+}
+
+// Flujo simple: elegís lote + período y en un click trae el histórico satelital
+// (CHIRPS, 5 km, estándar agro) ya asociado al lote. Después se ve en la tabla y,
+// en el mapa, como capa 🌧 coloreada por lluvia acumulada.
+async function lluTraerLluvias() {
+  const i   = document.getElementById("ina-lote").value;
+  const msg = document.getElementById("llu-simple-msg");
+  const btn = document.getElementById("llu-btn-traer");
+  const p   = (i !== "" && _inaUbic?.puntos?.[i]) || null;
+  if (!p) { msg.style.color = "var(--ap-red, #e5484d)"; msg.textContent = "Elegí un lote de la lista."; return; }
+
+  const dias  = parseInt(document.getElementById("llu-periodo").value, 10) || 365;
+  const hoy   = new Date();
+  const desde = new Date(hoy.getTime() - dias * 86400000).toISOString().slice(0, 10);
+  const hasta = hoy.toISOString().slice(0, 10);
+
+  btn.disabled = true;
+  msg.style.color = "var(--ap-muted)";
+  msg.innerHTML = `<span class="spinner"></span> Trayendo lluvias de ${lluEscape(p.nombre)}… (puede tardar unos segundos)`;
+  try {
+    const r = await Auth.post("/api/lluvias/fuentes/chirps/importar",
+      { lat: p.lat, lon: p.lon, desde, hasta, lote: p.nombre });
+    msg.style.color = "var(--ap-green)";
+    msg.textContent = r.importados
+      ? `Listo: ${r.importados} días con lluvia en ${p.nombre} ✓ — ya aparece en la tabla y en el mapa (capa Lluvias).`
+      : `No se registraron lluvias en el período para ${p.nombre}.`;
+    await lluCargar();
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function lluBuscarEnPunto() {
   if (!_inaPunto) return;
   const lista = document.getElementById("ina-lista");
@@ -431,7 +495,7 @@ async function lluBuscarINA() {
 function lluRenderEstaciones(ests) {
   const lista = document.getElementById("ina-lista");
   if (!ests.length) {
-    lista.innerHTML = `<div class="empty-state" style="padding:24px"><span class="icon">🛰</span><p>No se encontraron estaciones.</p></div>`;
+    lista.innerHTML = `<div class="empty-state" style="padding:24px"><span class="icon">📡</span><p>No se encontraron estaciones.</p></div>`;
     return;
   }
   lista.innerHTML = ests.map(e => {
@@ -477,7 +541,7 @@ async function lluImportarINA() {
   msg.style.color = "var(--ap-muted)";
   msg.innerHTML = '<span class="spinner"></span> Importando del INA…';
   try {
-    const r = await Auth.post("/api/lluvias/ina/importar", { sitecode: _inaSel.sitecode, desde, hasta });
+    const r = await Auth.post("/api/lluvias/ina/importar", { sitecode: _inaSel.sitecode, desde, hasta, lote: lluLoteSeleccionado() });
     msg.style.color = "var(--ap-green)";
     msg.textContent = r.importados
       ? `Importados ${r.importados} días con lluvia de ${r.estacion} ✓`
@@ -527,7 +591,7 @@ async function lluImportarOM() {
   msg.innerHTML = `<span class="spinner"></span> Trayendo de ${lluEscape(f?.nombre || id)}…${id === "chirps" ? " (CHIRPS puede tardar unos segundos)" : ""}`;
   try {
     const r = await Auth.post(`/api/lluvias/fuentes/${encodeURIComponent(id)}/importar`,
-      { lat: _inaPunto.lat, lon: _inaPunto.lon, desde, hasta });
+      { lat: _inaPunto.lat, lon: _inaPunto.lon, desde, hasta, lote: lluLoteSeleccionado() });
     msg.style.color = "var(--ap-green)";
     msg.textContent = r.importados
       ? `Importados ${r.importados} días con lluvia de ${r.fuente || id} ✓`

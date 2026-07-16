@@ -260,9 +260,14 @@ router.post("/ina/importar", async (req, res) => {
 
   const sitecode = parseInt(req.body.sitecode, 10);
   const { desde, hasta } = req.body;
+  const lote = (req.body.lote || "").trim() || null;
   if (!sitecode || !/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
     return res.status(400).json({ error: "sitecode, desde y hasta (YYYY-MM-DD) requeridos" });
   if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
+
+  // Sufijo de lote para el _id: separa los registros por lote cuando una misma
+  // estación INA sirve a varios lotes (sin lote → campo, sin sufijo).
+  const loteSlug = lote ? "_" + lote.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
 
   try {
     const ina    = require("../services/ina");
@@ -274,7 +279,7 @@ router.post("/ina/importar", async (req, res) => {
 
     const edb = db.getDB(estabSlug);
     const now = Date.now();
-    const ids = lluvias.map(x => `lluvia_ina_${sitecode}_${x.fecha}`);
+    const ids = lluvias.map(x => `lluvia_ina_${sitecode}${loteSlug}_${x.fecha}`);
 
     // Traer los _rev existentes para que re-importar actualice (idempotente).
     const revs = {};
@@ -284,14 +289,14 @@ router.post("/ina/importar", async (req, res) => {
     } catch {}
 
     const docs = lluvias.map(x => {
-      const _id = `lluvia_ina_${sitecode}_${x.fecha}`;
+      const _id = `lluvia_ina_${sitecode}${loteSlug}_${x.fecha}`;
       return {
         _id,
         ...(revs[_id] ? { _rev: revs[_id] } : {}),
         tipo:         "lluvia_registro",
         fecha:        x.fecha,
         mm:           Math.round(x.mm * 10) / 10,
-        lote:         null,
+        lote:         lote,
         nota:         `INA · ${est?.nombre || sitecode}`,
         fuente:       "ina",
         ina_sitecode: sitecode,
