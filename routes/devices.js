@@ -174,6 +174,50 @@ router.post("/heartbeat", deviceAuth, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
+//  GET /api/devices/contexto-agraria — datos vivos para AgrarIA
+//  Device auth (X-Device-ID + X-Auth-Token), sin JWT. Devuelve
+//  dispositivos + posiciones live del establecimiento del device.
+// ══════════════════════════════════════════════════════════
+router.get("/contexto-agraria", deviceAuth, async (req, res) => {
+  try {
+    const globalDB = db.getDB("global");
+    const slug = req.deviceDoc?.estab_slug;
+    if (!slug || slug === "unassigned")
+      return res.status(400).json({ error: "Device sin establecimiento asignado" });
+
+    const rDev = await globalDB.find({
+      selector: { tipo: "device", estab_slug: slug },
+      limit: 100,
+    });
+    const dispositivos = rDev.docs.map(d => ({
+      device_id:    d.device_id,
+      nombre:       d.hostname || d.nombre || d.device_id,
+      online:       !!d.online,
+      ultimo_visto: d.ultimo_visto || null,
+      version:      d.version || null,
+    }));
+
+    const rLive = await globalDB.find({
+      selector: {
+        tipo: "tracking_live",
+        estab_slug: slug,
+        ts: { "$gt": Date.now() - 30 * 60 * 1000 }, // últimos 30 min
+      },
+      limit: 100,
+    });
+    const posiciones = rLive.docs.map(d => ({
+      device_id: d.device_id,
+      lat: d.lat, lon: d.lon,
+      speed: d.speed, field: d.field, ts: d.ts,
+    }));
+
+    res.json({ estab: slug, dispositivos, posiciones });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
 //  GET /api/devices  — superadmin ve todo, otros ven solo los de su org
 // ══════════════════════════════════════════════════════════
 router.get("/", noDevices, async (req, res) => {

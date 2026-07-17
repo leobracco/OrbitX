@@ -228,6 +228,8 @@ app.use(
   (req, res, next) => {
     // Heartbeat no requiere JWT — tiene su propio auth (deviceAuth) dentro del router
     if (req.method === "POST" && req.path === "/heartbeat") return next();
+    // Contexto para AgrarIA — device auth propio (deviceAuth) dentro del router.
+    if (req.method === "GET" && req.path === "/contexto-agraria") return next();
     // Pairing init/status — el tractor todavía no tiene token, no puede pasar JWT.
     // Seguridad: el código es ephemeral + el secret hashado bloquea pickup ajeno.
     if (req.method === "POST" && req.path === "/pair/init") return next();
