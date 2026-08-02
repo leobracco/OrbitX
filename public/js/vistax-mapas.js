@@ -1,16 +1,20 @@
 // vistax-mapas.js — Viewer cloud-side de sesiones VistaX (SHP + DBF).
 // Lee los shapefiles sincronizados desde AOG (subtipo vistax_shp/vistax_log)
 // vía /api/aog/vistax-sesiones + /api/aog/archivo (que devuelve contenido_base64),
-// decodifica el SHP (Point) y el DBF en el navegador, y renderea con Leaflet.
+// decodifica el SHP (Point/Polygon) y el DBF en el navegador, y renderea con Leaflet.
 //
 // Soporta:
 //   - SHP shapeType 1 (Point)        → renderiza CircleMarker coloreado por SPM
-//   - SHP shapeType 5 (Polygon)      → TODO para heatmap; placeholder por ahora
-// Sin dependencias npm: parser SHP+DBF embebido (minimalista, ~150 líneas).
+//   - SHP shapeType 5 (Polygon)      → renderiza celdas de heatmap coloreadas por clase
+// Sin dependencias npm: parser SHP+DBF embebido (minimalista, ~200 líneas).
 
 let _mapa = null;
 let _capaPuntos = null;
+let _capaHeatmap = null;
+let _capaActiva = "puntos";      // "puntos" | "heatmap"
 let _sesiones = [];
+let _sesionActual = null;
+let _heatmapCargado = false;     // evita re-parsear el mismo SHP si el usuario toggle-a de ida y vuelta
 
 // ── Map init ────────────────────────────────────────────────────
 function initMapa() {
@@ -35,6 +39,18 @@ function colorSPM(spm) {
   return "#00e676";
 }
 
+// ── Color por clase de heatmap (ver VistaXFieldLogger.ExportHeatmapShapefile) ──
+// 0 = sin datos, 1 = bueno, 2 = medio, 3 = bajo, 4 = falla
+function colorClase(clase) {
+  switch (clase) {
+    case 1: return "#00e676";
+    case 2: return "#ffea00";
+    case 3: return "#ff9100";
+    case 4: return "#ff1744";
+    default: return "#888888";
+  }
+}
+
 // ── Parser SHP (sólo Point) ────────────────────────────────────
 // Spec: ESRI Shapefile Technical Description (julio 1998).
 // File header: 100 bytes. Record header: 8 bytes (rec#, content len) big-endian.
@@ -44,7 +60,7 @@ function parseShpPoints(buf) {
   if (buf.byteLength < 100) return [];
   const shapeType = dv.getInt32(32, true);
   if (shapeType !== 1) {
-    console.warn("[VistaX] SHP shapeType", shapeType, "- viewer sólo soporta Point (1)");
+    console.warn("[VistaX] SHP shapeType", shapeType, "- parseShpPoints sólo soporta Point (1)");
     return [];
   }
   const pts = [];
@@ -62,6 +78,53 @@ function parseShpPoints(buf) {
     off += 8 + contentLen;
   }
   return pts;
+}
+
+// ── Parser SHP (sólo Polygon, shapeType 5) ─────────────────────
+// Usado para el heatmap: cada feature es un anillo rectangular simple
+// (una sola parte), producido por VistaXFieldLogger.ExportHeatmapShapefile.
+// Record body: shapeType i32 LE=5 ; Box[4] f64 LE ; NumParts i32 ;
+// NumPoints i32 ; Parts[NumParts] i32 (índices) ; Points[NumPoints] (X,Y f64 LE).
+function parseShpPolygons(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 100) return [];
+  const shapeType = dv.getInt32(32, true);
+  if (shapeType !== 5) {
+    console.warn("[VistaX] SHP shapeType", shapeType, "- parseShpPolygons sólo soporta Polygon (5)");
+    return [];
+  }
+  const polys = [];
+  let off = 100;
+  while (off + 8 <= buf.byteLength) {
+    const contentLen = dv.getInt32(off + 4, false) * 2; // bytes
+    const recStart = off + 8;
+    if (recStart + contentLen > buf.byteLength) break;
+    const recType = dv.getInt32(recStart, true);
+    if (recType === 5) {
+      const numParts  = dv.getInt32(recStart + 36, true);
+      const numPoints = dv.getInt32(recStart + 40, true);
+      const partsOff  = recStart + 44;
+      const parts = [];
+      for (let i = 0; i < numParts; i++) parts.push(dv.getInt32(partsOff + i * 4, true));
+      const ptsOff = partsOff + numParts * 4;
+      const allPts = [];
+      for (let i = 0; i < numPoints; i++) {
+        const x = dv.getFloat64(ptsOff + i * 16, true);
+        const y = dv.getFloat64(ptsOff + i * 16 + 8, true);
+        allPts.push([y, x]); // [lat, lon] para Leaflet
+      }
+      // Separar en anillos según `parts`.
+      const rings = [];
+      for (let p = 0; p < numParts; p++) {
+        const start = parts[p];
+        const end = p + 1 < numParts ? parts[p + 1] : numPoints;
+        rings.push(allPts.slice(start, end));
+      }
+      polys.push({ rings });
+    }
+    off = recStart + contentLen;
+  }
+  return polys;
 }
 
 // ── Parser DBF (xBase III) ─────────────────────────────────────
@@ -132,6 +195,13 @@ async function fetchArchivoBuf(ruta_rel) {
   return b64ToBuf(j.contenido_base64);
 }
 
+// ── Formato de tamaño (bytes → KB/MB legible) ───────────────────
+function fmtTamano(bytes) {
+  if (!bytes) return "0 KB";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+}
+
 // ── Carga lista de sesiones ────────────────────────────────────
 async function cargarSesiones() {
   const sel = document.getElementById("vxm-sesion");
@@ -161,59 +231,169 @@ async function cargarSesiones() {
   }
 }
 
+// ── Renderiza los puntos por surco (capa por default) ───────────
+async function renderPuntos(sesion) {
+  const info = document.getElementById("vxm-info");
+  info.textContent = "Descargando shapefile de puntos...";
+  if (_capaPuntos) { _mapa.removeLayer(_capaPuntos); _capaPuntos = null; }
+
+  const shpBuf = await fetchArchivoBuf(sesion.puntos.shp);
+  let dbfRecs = null;
+  if (sesion.puntos.dbf) {
+    try {
+      const dbfBuf = await fetchArchivoBuf(sesion.puntos.dbf);
+      dbfRecs = parseDbf(dbfBuf);
+    } catch (e) { console.warn("[VistaX Mapas] DBF parse:", e.message); }
+  }
+  const pts = parseShpPoints(shpBuf);
+  if (pts.length === 0) {
+    info.textContent = "El SHP no tiene puntos (¿formato no soportado?).";
+    return;
+  }
+
+  const markers = [];
+  let nSpm = 0, sumSpm = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const attr = dbfRecs && dbfRecs[i] ? dbfRecs[i] : {};
+    const spm = attr.spm != null ? attr.spm : null;
+    if (spm != null) { nSpm++; sumSpm += spm; }
+    const surco = attr.surco != null ? attr.surco : "?";
+    const kmh = attr.vel_kmh != null ? attr.vel_kmh.toFixed(1) : "?";
+    const m = L.circleMarker([p.lat, p.lon], {
+      radius: 2.5, color: colorSPM(spm), weight: 0,
+      fillColor: colorSPM(spm), fillOpacity: 0.7,
+    });
+    m.bindTooltip(`surco ${surco} · ${kmh} km/h · spm ${spm != null ? spm.toFixed(1) : "?"}`,
+                  { sticky: true, opacity: 0.9 });
+    markers.push(m);
+  }
+  _capaPuntos = L.layerGroup(markers).addTo(_mapa);
+  _mapa.fitBounds(L.featureGroup(markers).getBounds(), { padding: [20, 20] });
+
+  const avgSpm = nSpm > 0 ? (sumSpm / nSpm).toFixed(2) : "—";
+  info.textContent = `${pts.length.toLocaleString("es-AR")} puntos · SPM promedio ${avgSpm}`;
+}
+
+// ── Renderiza el heatmap (celdas, capa alternativa a demanda) ───
+async function renderHeatmap(sesion) {
+  const info = document.getElementById("vxm-info");
+  if (!sesion.heatmap || !sesion.heatmap.shp) {
+    info.textContent = "Esta sesión no tiene heatmap sincronizado.";
+    return;
+  }
+  info.textContent = "Descargando heatmap...";
+  if (_capaHeatmap) { _mapa.removeLayer(_capaHeatmap); _capaHeatmap = null; }
+
+  const shpBuf = await fetchArchivoBuf(sesion.heatmap.shp);
+  let dbfRecs = null;
+  if (sesion.heatmap.dbf) {
+    try {
+      const dbfBuf = await fetchArchivoBuf(sesion.heatmap.dbf);
+      dbfRecs = parseDbf(dbfBuf);
+    } catch (e) { console.warn("[VistaX Mapas] DBF heatmap parse:", e.message); }
+  }
+  const polys = parseShpPolygons(shpBuf);
+  if (polys.length === 0) {
+    info.textContent = "El SHP de heatmap no tiene celdas (¿formato no soportado?).";
+    return;
+  }
+
+  const cells = [];
+  for (let i = 0; i < polys.length; i++) {
+    const attr = dbfRecs && dbfRecs[i] ? dbfRecs[i] : {};
+    const clase = attr.clase != null ? attr.clase : 0;
+    const color = colorClase(clase);
+    const poly = L.polygon(polys[i].rings, {
+      color, weight: 0.5, opacity: 0.6,
+      fillColor: color, fillOpacity: 0.55,
+    });
+    const spmAvg = attr.spm_avg != null ? attr.spm_avg.toFixed(1) : "?";
+    const pctFall = attr.pct_fall != null ? attr.pct_fall.toFixed(0) : "?";
+    poly.bindTooltip(`SPM prom ${spmAvg} · fallas ${pctFall}% · lecturas ${attr.lecturas || "?"}`,
+                      { sticky: true, opacity: 0.9 });
+    cells.push(poly);
+  }
+  _capaHeatmap = L.layerGroup(cells).addTo(_mapa);
+  info.textContent = `${polys.length.toLocaleString("es-AR")} celdas de heatmap.`;
+  _heatmapCargado = true;
+}
+
+// ── Toggle entre capa de puntos y heatmap ───────────────────────
+async function mostrarCapa(tipo) {
+  if (!_sesionActual || tipo === _capaActiva) return;
+  _capaActiva = tipo;
+
+  const btnPuntos  = document.getElementById("vxm-btn-puntos");
+  const btnHeatmap = document.getElementById("vxm-btn-heatmap");
+  btnPuntos.classList.toggle("btn-primary", tipo === "puntos");
+  btnHeatmap.classList.toggle("btn-primary", tipo === "heatmap");
+
+  if (_capaPuntos)  _mapa[tipo === "puntos"  ? "addLayer" : "removeLayer"](_capaPuntos);
+  document.getElementById("vxm-leyenda").style.display = tipo === "puntos" ? "" : "none";
+  document.getElementById("vxm-leyenda-heatmap").style.display = tipo === "heatmap" ? "" : "none";
+
+  if (tipo === "heatmap") {
+    if (!_heatmapCargado) {
+      try { await renderHeatmap(_sesionActual); }
+      catch (e) { console.error("[VistaX Mapas] heatmap:", e); document.getElementById("vxm-info").textContent = "Error: " + e.message; }
+    } else if (_capaHeatmap) {
+      _mapa.addLayer(_capaHeatmap);
+    }
+  } else if (_capaHeatmap) {
+    _mapa.removeLayer(_capaHeatmap);
+  }
+}
+
+// ── Lista de links de descarga individuales (no hay lib de zip) ─
+function construirDescargas(sesion) {
+  const cont = document.getElementById("vxm-descargas");
+  const token = Auth.getToken ? Auth.getToken() : "";
+  const rutas = [
+    sesion.ndjson,
+    sesion.puntos && sesion.puntos.shp, sesion.puntos && sesion.puntos.shx,
+    sesion.puntos && sesion.puntos.dbf, sesion.puntos && sesion.puntos.prj,
+    sesion.heatmap && sesion.heatmap.shp, sesion.heatmap && sesion.heatmap.shx,
+    sesion.heatmap && sesion.heatmap.dbf, sesion.heatmap && sesion.heatmap.prj,
+  ].filter(Boolean);
+  if (rutas.length === 0) { cont.innerHTML = ""; return; }
+  const links = rutas.map(r => {
+    const nombre = r.split(/[/\\]/).pop();
+    const href = `/api/aog/archivo/descarga?ruta=${encodeURIComponent(r)}&token=${encodeURIComponent(token || "")}`;
+    return `<a href="${href}" download="${nombre}" style="color:var(--lime)">${nombre}</a>`;
+  }).join(" · ");
+  cont.innerHTML = `<strong>Descargar sesión</strong> (${rutas.length} archivo${rutas.length !== 1 ? "s" : ""}): ${links}`;
+}
+
 // ── Renderiza sesión seleccionada ──────────────────────────────
 async function renderSesion(ts) {
   const sesion = _sesiones.find(s => s.ts === ts);
   if (!sesion) return;
+  _sesionActual = sesion;
+  _heatmapCargado = false;
+  _capaActiva = "puntos";
+  if (_capaHeatmap) { _mapa.removeLayer(_capaHeatmap); _capaHeatmap = null; }
 
-  const info = document.getElementById("vxm-info");
-  info.textContent = "Descargando shapefile...";
-  if (_capaPuntos) { _mapa.removeLayer(_capaPuntos); _capaPuntos = null; }
+  const btnPuntos  = document.getElementById("vxm-btn-puntos");
+  const btnHeatmap = document.getElementById("vxm-btn-heatmap");
+  btnPuntos.classList.add("btn-primary");
+  btnHeatmap.classList.remove("btn-primary");
+  btnHeatmap.disabled = !(sesion.heatmap && sesion.heatmap.shp);
+  document.getElementById("vxm-leyenda").style.display = "";
+  document.getElementById("vxm-leyenda-heatmap").style.display = "none";
+
+  construirDescargas(sesion);
 
   try {
-    const shpBuf = await fetchArchivoBuf(sesion.puntos.shp);
-    let dbfRecs = null;
-    if (sesion.puntos.dbf) {
-      try {
-        const dbfBuf = await fetchArchivoBuf(sesion.puntos.dbf);
-        dbfRecs = parseDbf(dbfBuf);
-      } catch (e) { console.warn("[VistaX Mapas] DBF parse:", e.message); }
-    }
-    const pts = parseShpPoints(shpBuf);
-    if (pts.length === 0) {
-      info.textContent = "El SHP no tiene puntos (¿formato no soportado?).";
-      return;
-    }
-
-    const markers = [];
-    let nSpm = 0, sumSpm = 0;
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i];
-      const attr = dbfRecs && dbfRecs[i] ? dbfRecs[i] : {};
-      const spm = attr.spm != null ? attr.spm : null;
-      if (spm != null) { nSpm++; sumSpm += spm; }
-      const surco = attr.surco != null ? attr.surco : "?";
-      const kmh = attr.vel_kmh != null ? attr.vel_kmh.toFixed(1) : "?";
-      const m = L.circleMarker([p.lat, p.lon], {
-        radius: 2.5, color: colorSPM(spm), weight: 0,
-        fillColor: colorSPM(spm), fillOpacity: 0.7,
-      });
-      m.bindTooltip(`surco ${surco} · ${kmh} km/h · spm ${spm != null ? spm.toFixed(1) : "?"}`,
-                    { sticky: true, opacity: 0.9 });
-      markers.push(m);
-    }
-    _capaPuntos = L.layerGroup(markers).addTo(_mapa);
-    _mapa.fitBounds(L.featureGroup(markers).getBounds(), { padding: [20, 20] });
-
-    const avgSpm = nSpm > 0 ? (sumSpm / nSpm).toFixed(2) : "—";
-    info.textContent =
-      `${pts.length.toLocaleString("es-AR")} puntos · SPM promedio ${avgSpm}` +
-      (sesion.heatmap && sesion.heatmap.shp
-        ? " · TODO: render heatmap (Polygon parser pendiente)"
-        : "");
+    await renderPuntos(sesion);
+    const info = document.getElementById("vxm-info");
+    const extra = [];
+    if (sesion.archivos) extra.push(`${sesion.archivos} archivos`);
+    if (sesion.tamano)   extra.push(fmtTamano(sesion.tamano));
+    if (extra.length) info.textContent += ` · ${extra.join(" · ")}`;
   } catch (e) {
     console.error("[VistaX Mapas] render:", e);
-    info.textContent = "Error: " + e.message;
+    document.getElementById("vxm-info").textContent = "Error: " + e.message;
   }
 }
 

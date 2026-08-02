@@ -387,10 +387,13 @@ router.get("/vistax-sesiones", async (req, res) => {
       const isHeatmap = /heatmap/i.test(n);
       const ext = (n.match(/\.([a-z0-9]+)$/i) || [,""])[1].toLowerCase();
       if (!sesiones[ts]) sesiones[ts] = { ts, fecha: parseInt(ts, 10), lote: d.lote_nombre || null,
-                                          ndjson: null, puntos: {}, heatmap: {}, device_id: d.device_id };
+                                          ndjson: null, puntos: {}, heatmap: {}, device_id: d.device_id,
+                                          archivos: 0, tamano: 0 };
       const slot = isHeatmap ? sesiones[ts].heatmap : sesiones[ts].puntos;
       if (ext === "ndjson") sesiones[ts].ndjson = d.ruta_rel;
       else slot[ext] = d.ruta_rel;
+      sesiones[ts].archivos += 1;
+      sesiones[ts].tamano += (d.tamaño || 0);
     }
     // Sólo sesiones con .shp de puntos (lo mínimo viable para render).
     const out = Object.values(sesiones)
@@ -418,6 +421,28 @@ router.get("/archivo", async (req, res) => {
     if (typeof doc.contenido_base64 === "string") out.contenido_base64 = doc.contenido_base64;
     else out.contenido = doc.contenido;
     res.json(out);
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// GET /api/aog/archivo/descarga?ruta=...
+// Igual que /archivo pero devuelve los bytes crudos con Content-Disposition,
+// para usar directo en un <a href> (descarga de sesión VistaX archivo por
+// archivo — no hay lib de zip en el proyecto, así que se bajan sueltos).
+router.get("/archivo/descarga", async (req, res) => {
+  try {
+    if (!req.query.ruta) return res.status(400).json({ error:"ruta requerida" });
+    const safeRel = req.query.ruta.replace(/[/\\:*?"<>|]/g, "_");
+    const id      = `aog_${req.user.estabSlug}_${safeRel}`.slice(0, 200);
+    const doc     = await getEstabDB(req.user.estabSlug).get(id).catch(()=>null);
+    if (!doc) return res.status(404).json({ error:"No encontrado" });
+    const nombre = doc.nombre || "archivo";
+    const buf = typeof doc.contenido_base64 === "string"
+      ? Buffer.from(doc.contenido_base64, "base64")
+      : Buffer.from(doc.contenido || "", "utf8");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", buf.length);
+    res.send(buf);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
