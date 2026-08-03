@@ -57,8 +57,9 @@ router.get("/flota/:estab", async (req, res) => {
       limit: 200,
     });
     const ahora = Date.now();
-    res.json({
-      devices: (r.docs || []).map((d) => ({
+    // Online ARRIBA, offline abajo; dentro de cada grupo, el visto mas
+    // reciente primero (pedido explicito del admin del CRM).
+    const devices = (r.docs || []).map((d) => ({
         device_id: d.device_id,
         nombre: d.nombre || d.device_id,
         hostname: d.hostname || null,
@@ -66,8 +67,10 @@ router.get("/flota/:estab", async (req, res) => {
         ultimo_visto: d.ultimo_visto || null,
         online: !!d.ultimo_visto && ahora - d.ultimo_visto < ONLINE_MS,
         rustdesk_id: d.rustdesk_id || null,
-      })),
-    });
+      }));
+    devices.sort((a, b) =>
+      (b.online - a.online) || ((b.ultimo_visto || 0) - (a.ultimo_visto || 0)));
+    res.json({ devices });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
