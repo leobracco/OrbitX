@@ -37,13 +37,21 @@ router.use((req, res, next) => {
 
 router.get("/establecimientos", async (_req, res) => {
   try {
-    const est = await db.getEstablecimientos();
-    res.json({
-      establecimientos: (est || []).map((e) => ({
-        slug: e.slug,
-        nombre: e.nombre || e.slug,
-      })),
+    // Prod guarda las organizaciones como tipo:"org" (org_<slug>); el código
+    // viejo usaba tipo:"establecimiento". Se aceptan ambos y se mergea por
+    // slug para que el puente ande contra cualquier base.
+    const g = db.getDB("global");
+    const r = await g.find({
+      selector: { tipo: { $in: ["org", "establecimiento"] } },
+      limit: 500,
     });
+    const porSlug = new Map();
+    for (const d of r.docs || []) {
+      if (d.slug && !porSlug.has(d.slug)) {
+        porSlug.set(d.slug, { slug: d.slug, nombre: d.nombre || d.slug });
+      }
+    }
+    res.json({ establecimientos: [...porSlug.values()] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
