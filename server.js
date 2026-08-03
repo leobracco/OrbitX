@@ -178,6 +178,8 @@ app.use("/api/prescripciones", (req, res, next) => {
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
+// Puente CRM (solo lectura, token de servicio propio — ver routes/crm.js).
+app.use("/api/crm", require("./routes/crm"));
 // AgrarIA local (PC del usuario): estado de solo lectura con deviceAuth, sin JWT.
 app.use("/api/agraria/estado", require("./routes/agraria_estado"));
 app.use("/api/agraria",        auth.required, routeAgraria);

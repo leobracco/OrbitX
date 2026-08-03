@@ -149,7 +149,7 @@ async function upsertDevice(globalDB, id, data) {
 // ══════════════════════════════════════════════════════════
 router.post("/heartbeat", deviceAuth, async (req, res) => {
   const globalDB  = req.app.locals.globalDB;
-  const { hostname, platform, mac, aog_path, version } = req.body;
+  const { hostname, platform, mac, aog_path, version, rustdesk_id } = req.body;
   const now       = Date.now();
   const doc       = req.deviceDoc;
 
@@ -160,6 +160,9 @@ router.post("/heartbeat", deviceAuth, async (req, res) => {
     mac:          mac      || doc.mac,
     aog_path:     aog_path || doc.aog_path,
     version:      version  || "1.0.0",
+    // ID de RustDesk del equipo (soporte remoto): lo reporta PilotX en el
+    // heartbeat; el CRM lo muestra en la ficha del cliente / tickets.
+    rustdesk_id:  rustdesk_id || doc.rustdesk_id || null,
     ultimo_visto: now,
     online:       true,
   });
