@@ -144,7 +144,12 @@ app.locals.fmtDate = (ts) => {
 };
 
 // ── Middleware ────────────────────────────────────────────
-app.use(express.json({ limit: "50mb" }));
+// Bodies JSON: límite chico por defecto y 50mb SOLO donde hace falta (sync de
+// lotes AOG/VistaX y shapefiles de Agraria viajan como base64 dentro del JSON).
+// Con 50mb global cualquier request podía inflar el heap del proceso hasta el
+// high-water (~790MB medidos 2026-08-20) que V8 nunca devuelve al SO.
+app.use(["/api/aog", "/api/vistax", "/api/agraria"], express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));

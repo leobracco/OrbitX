@@ -13,6 +13,8 @@
 //   GET /api/crm/establecimientos → { establecimientos:[{slug,nombre}] }
 //   GET /api/crm/flota/:estab     → { devices:[{device_id,nombre,hostname,
 //                                     version,ultimo_visto,online,rustdesk_id}] }
+//   GET /api/crm/devices          → todos los devices (incluye sin asignar),
+//                                     mismos campos + estab_slug
 // ============================================================================
 "use strict";
 
@@ -52,6 +54,35 @@ router.get("/establecimientos", async (_req, res) => {
       }
     }
     res.json({ establecimientos: [...porSlug.values()] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Todos los devices, INCLUIDOS los sin asignar (estab_slug null): el CRM
+// los usa para el registro de equipos fabricados — un piloto recién armado
+// en el banco ya aparece acá con su RustDesk aunque no tenga cliente.
+router.get("/devices", async (_req, res) => {
+  try {
+    const g = db.getDB("global");
+    const r = await g.find({
+      selector: { tipo: "device" },
+      limit: 500,
+    });
+    const ahora = Date.now();
+    const devices = (r.docs || []).map((d) => ({
+        device_id: d.device_id,
+        nombre: d.nombre || d.device_id,
+        hostname: d.hostname || null,
+        version: d.version || null,
+        ultimo_visto: d.ultimo_visto || null,
+        online: !!d.ultimo_visto && ahora - d.ultimo_visto < ONLINE_MS,
+        rustdesk_id: d.rustdesk_id || null,
+        estab_slug: d.estab_slug || null,
+      }));
+    devices.sort((a, b) =>
+      (b.online - a.online) || ((b.ultimo_visto || 0) - (a.ultimo_visto || 0)));
+    res.json({ devices });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
