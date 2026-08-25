@@ -27,11 +27,11 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
     <div class="kpi-val"><%= dispositivos.length %></div>
     <div class="kpi-delta">registrados</div>
   </div>
-  <div class="kpi <%= sinAsignar.length > 0 ? 'red' : 'lime' %>">
+  <div class="kpi lime">
     <div class="kpi-shine"></div>
-    <div class="kpi-label">Sin asignar</div>
-    <div class="kpi-val" style="<%= sinAsignar.length > 0 ? 'color:var(--red)' : '' %>"><%= sinAsignar.length %></div>
-    <div class="kpi-delta"><%= sinAsignar.length > 0 ? '⚠ requieren asignación' : '✓ todos asignados' %></div>
+    <div class="kpi-label">ViewX · sin cliente</div>
+    <div class="kpi-val"><%= sinAsignar.length %></div>
+    <div class="kpi-delta"><%= sinAsignar.length > 0 ? 'pantallas sin asignar' : '✓ todas asignadas' %></div>
   </div>
   <div class="kpi blue">
     <div class="kpi-shine"></div>
@@ -41,17 +41,17 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
   </div>
 </div>
 
-<!-- Sin asignar -->
+<!-- Sin asignar — pool ViewX -->
 <% if (sinAsignar.length > 0) { %>
-<div style="background:rgba(255,68,68,0.05);border:1px solid rgba(255,68,68,0.2);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+<div style="background:rgba(74,186,62,0.05);border:1px solid rgba(74,186,62,0.2);border-radius:var(--radius);padding:16px;margin-bottom:20px">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-    <span style="font-size:16px">⚠</span>
-    <span style="font-family:var(--font-h);font-size:14px;color:var(--red)">Dispositivos sin asignar (<%= sinAsignar.length %>)</span>
+    <span class="badge badge-lime" style="font-family:var(--font-h)">ViewX</span>
+    <span style="font-family:var(--font-h);font-size:14px;color:var(--muted)">Pantallas sin cliente asignado (<%= sinAsignar.length %>)</span>
   </div>
   <div style="display:flex;flex-direction:column;gap:8px">
     <% sinAsignar.forEach(d => { %>
     <div style="display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
-      <div style="width:36px;height:36px;border-radius:8px;background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🚜</div>
+      <div style="width:36px;height:36px;border-radius:8px;background:rgba(74,186,62,0.1);border:1px solid rgba(74,186,62,0.2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🖥️</div>
       <div style="flex:1;min-width:0">
         <div style="font-family:var(--font-m);font-size:13px;font-weight:500;color:#fff"><%= d.device_id %></div>
         <div style="font-size:11px;color:var(--muted2);margin-top:2px">
@@ -60,6 +60,14 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
           <span style="color:<%= esOnline(d)?'var(--lime)':'var(--muted2)' %>"><%= esOnline(d)?'● Online':'○ Offline' %></span>
         </div>
       </div>
+      <% if (d.rustdesk_id) { %>
+      <button class="btn btn-sm btn-ghost" title="Conectar por RustDesk (<%= d.rustdesk_id %>)"
+        onclick="conectarRustDesk('<%= d.rustdesk_id %>', '<%= d.device_id %>')">
+        🖥️ RustDesk
+      </button>
+      <% } else { %>
+      <span class="badge badge-gray" title="El equipo todavía no reportó su ID de RustDesk">sin RustDesk</span>
+      <% } %>
       <button class="btn btn-sm btn-lime-outline"
         onclick="abrirAsignacion('<%= d.device_id %>', '<%= d.hostname||d.device_id %>')">
         Asignar →
@@ -79,7 +87,7 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>Dispositivo</th><th>Nombre</th><th>Establecimiento</th><th>Última vez visto</th><th>Estado</th><th></th></tr>
+        <tr><th>Dispositivo</th><th>Nombre</th><th>Establecimiento</th><th>RustDesk</th><th>Última vez visto</th><th>Estado</th><th></th></tr>
       </thead>
       <tbody>
         <% asignados.forEach(d => { %>
@@ -91,6 +99,16 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
           <td class="td-main"><%= d.nombre || d.device_id %></td>
           <td>
             <span class="badge badge-blue"><%= d.estab_slug %></span>
+          </td>
+          <td>
+            <% if (d.rustdesk_id) { %>
+            <button class="btn btn-sm btn-ghost" title="Conectar por RustDesk (<%= d.rustdesk_id %>)"
+              onclick="conectarRustDesk('<%= d.rustdesk_id %>', '<%= d.device_id %>')">
+              🖥️ <%= d.rustdesk_id %>
+            </button>
+            <% } else { %>
+            <span class="td-dim" style="font-size:11px">sin RustDesk</span>
+            <% } %>
           </td>
           <td class="td-dim" style="font-size:11px"><%= d.ultimo_visto ? fmtDate(d.ultimo_visto) : '–' %></td>
           <td>
@@ -189,6 +207,16 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
 
 <script>
 let _deviceActual = null;
+
+// Conectar por RustDesk: intenta abrir el cliente instalado (rustdesk://<id>) y
+// SIEMPRE copia el ID al portapapeles como red de seguridad — si el equipo no
+// tiene el protocolo registrado, el operador lo pega a mano en RustDesk.
+async function conectarRustDesk(rustdeskId, deviceId) {
+  try { await navigator.clipboard.writeText(rustdeskId); } catch (e) {}
+  toast('🖥️ RustDesk', 'ID ' + rustdeskId + ' copiado · abriendo cliente…', 'lime');
+  // rustdesk://connection/new/<id> es el esquema que registra el cliente de escritorio.
+  window.location.href = 'rustdesk://connection/new/' + rustdeskId;
+}
 
 function abrirAsignacion(deviceId, label, estabActual) {
   _deviceActual = deviceId;
