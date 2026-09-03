@@ -5,6 +5,7 @@ const { Server } = require("socket.io");
 const path = require("path");
 const cron = require("node-cron");
 const cookieParser = require("cookie-parser");
+const jwt = require("jsonwebtoken");
 
 const db = require("./services/couchdb");
 const auth = require("./middleware/auth");
@@ -152,6 +153,24 @@ app.use(["/api/aog", "/api/vistax", "/api/agraria"], express.json({ limit: "50mb
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+// /flash — flasheo ESP32 por USB (esp-web-tools + binarios por producto):
+// SOLO con login del panel (pedido 2026-09-03). Vivía en public/ y quedaba
+// abierto a internet con los binarios incluidos. Mismo cookie-JWT que
+// routes/panel.js: sin token válido → /login. Los binarios de cada producto
+// (flash-app/quantix, etc.) se administran a mano en el server, como
+// firmwares/ — no viajan por git.
+app.use("/flash", (req, res, next) => {
+  const token = req.cookies?.orbitx_token ||
+                (req.headers.authorization || "").replace("Bearer ", "");
+  if (!token) return res.redirect("/login");
+  try {
+    jwt.verify(token, process.env.JWT_SECRET || "orbitx-dev-secret-cambiar");
+    return next();
+  } catch {
+    res.clearCookie("orbitx_token");
+    return res.redirect("/login");
+  }
+}, express.static(path.join(__dirname, "flash-app")));
 app.use(express.static(path.join(__dirname, "public")));
 app.use((req, _, next) => {
   req.io = io;

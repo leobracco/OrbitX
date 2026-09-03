@@ -69,3 +69,9 @@ firmwares/
 coverage/
 .nyc_output/
 .claude/
+
+# ── Flasheo web ESP32 (/flash) ────────────────────────
+# La herramienta (index + esp-web-tools) SÍ va al repo; los binarios de cada
+# producto se administran a mano en el server, como firmwares/.
+flash-app/*/
+!flash-app/esp-web-tools/

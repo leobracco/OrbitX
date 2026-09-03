@@ -58,7 +58,11 @@ let _adminItems =
   navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) +
   navItem('/usuarios',  '👤', 'Usuarios',  _nav) +
   navItem('/roles',     '🔑', 'Roles',     _nav) +
-  navItem('/firmwares', '📦', 'Firmwares', _nav);
+  navItem('/firmwares', '📦', 'Firmwares', _nav) +
+  // Flasheo ESP32 por USB (esp-web-tools). Página estática servida con el
+  // mismo cookie-JWT del panel (ver /flash en server.js) — la barra "/" final
+  // importa: los assets del index son relativos.
+  navItem('/flash/',    '⚡', 'Flasheo USB', _nav);
 // Grupos es global y solo-superadmin: owner/admin_org no lo ven.
 if (locals.isSA) {
   _adminItems +=
