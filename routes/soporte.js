@@ -262,4 +262,88 @@ router.post("/resultado", deviceAuth, async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------
+//  Backup de configuracion del equipo (device)
+//  El equipo sube su config (vehiculo, implemento, secciones, nodos) al
+//  arrancar. Se guarda 1 doc por equipo con las ultimas N versiones, para
+//  poder restaurar si se pierde el disco o se rompe una config en el campo.
+//    POST /api/soporte/config-backup   (device)  { config: {...}, version }
+//    GET  /api/soporte/config-backup   (JWT)     ?device_id=...
+// ------------------------------------------------------------
+const MAX_VERSIONES = 10;             // historial por equipo
+const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
+
+router.post("/config-backup", deviceAuth, async (req, res) => {
+  try {
+    const cfg = req.body && req.body.config;
+    if (cfg === undefined || cfg === null)
+      return res.status(400).json({ error: "Falta 'config'" });
+
+    const payload = JSON.stringify(cfg);
+    if (payload.length > MAX_BACKUP_BYTES)
+      return res.status(413).json({ error: "Config demasiado grande" });
+
+    const id = `config_backup_${req.deviceId}`;
+    const t = ahora();
+    const doc = await db(req).get(id).catch(() => null);
+
+    // Firma para no versionar dos veces lo mismo: si el equipo rearranca sin
+    // cambios, se actualiza solo la fecha del ultimo visto, no se agrega copia.
+    const firma = require("crypto").createHash("sha256").update(payload).digest("hex");
+    const versiones = (doc && doc.versiones) || [];
+    const ultima = versiones[versiones.length - 1];
+
+    if (ultima && ultima.firma === firma) {
+      await db(req).insert({ ...doc, ultimo_visto: t, updated_at: t });
+      return res.json({ ok: true, sin_cambios: true, total: versiones.length });
+    }
+
+    versiones.push({
+      ts: t,
+      version_pilotx: String(req.body.version || "").slice(0, 40),
+      firma,
+      config: cfg,
+    });
+    while (versiones.length > MAX_VERSIONES) versiones.shift();
+
+    await db(req).insert({
+      _id: id,
+      ...(doc ? { _rev: doc._rev } : {}),
+      tipo: "config_backup",
+      device_id: req.deviceId,
+      estab_slug: (req.deviceDoc && req.deviceDoc.estab_slug) || null,
+      versiones,
+      ultimo_visto: t,
+      created_at: (doc && doc.created_at) || t,
+      updated_at: t,
+    });
+    res.json({ ok: true, total: versiones.length });
+  } catch (e) {
+    console.error("[soporte/config-backup POST]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get("/config-backup", soloPersonas, async (req, res) => {
+  try {
+    if (!req.query.device_id)
+      return res.status(400).json({ error: "Falta device_id" });
+    const doc = await db(req).get(`config_backup_${req.query.device_id}`).catch(() => null);
+    if (!doc) return res.status(404).json({ error: "Sin backup para ese equipo" });
+    // Si piden ?full=1 devuelve las configs completas; por defecto solo el indice.
+    if (req.query.full === "1") return res.json(doc);
+    res.json({
+      device_id: doc.device_id,
+      estab_slug: doc.estab_slug,
+      ultimo_visto: doc.ultimo_visto,
+      versiones: (doc.versiones || []).map((v) => ({
+        ts: v.ts, version_pilotx: v.version_pilotx, firma: v.firma,
+      })),
+    });
+  } catch (e) {
+    console.error("[soporte/config-backup GET]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

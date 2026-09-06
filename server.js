@@ -242,7 +242,8 @@ app.use(
   (req, res, next) => {
     const deDispositivo =
       (req.method === "GET"  && req.path === "/pendientes") ||
-      (req.method === "POST" && req.path === "/resultado");
+      (req.method === "POST" && req.path === "/resultado") ||
+      (req.method === "POST" && req.path === "/config-backup");
     if (deDispositivo) return next();
     return auth.required(req, res, next);
   },
