@@ -36,6 +36,7 @@ const routeNotifOrg          = require("./routes/notif_org");
 const routeAgraria           = require("./routes/agraria_chat");
 const routeGrupos            = require("./routes/grupos");
 const routeLluvias           = require("./routes/lluvias");
+const routeSoporte           = require("./routes/soporte");
 let routeNDVI;
 try { routeNDVI = require("./routes/ndvi"); } catch(e) { console.warn("[WARN] ndvi.js:", e.message); }
 
@@ -232,6 +233,20 @@ app.use(
     return auth.required(req, res, next);
   },
   routeVistaX,
+);
+// /api/soporte: la pantalla pregunta si tiene diagnosticos pendientes y
+// devuelve el texto. Esos dos van sin JWT (deviceAuth adentro del router);
+// encolar pedidos y ver resultados es del panel y si lleva JWT.
+app.use(
+  "/api/soporte",
+  (req, res, next) => {
+    const deDispositivo =
+      (req.method === "GET"  && req.path === "/pendientes") ||
+      (req.method === "POST" && req.path === "/resultado");
+    if (deDispositivo) return next();
+    return auth.required(req, res, next);
+  },
+  routeSoporte,
 );
 // /api/aog: sync y descargas sin JWT (agente del tractor con deviceAuth interno)
 // resto con JWT (panel web)
