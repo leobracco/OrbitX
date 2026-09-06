@@ -51,6 +51,7 @@ const CATALOGO = {
   flowx_diag:       "FlowX: caudal, PWM, objetivo, config y secciones",
   flowx_pwm:        "FlowX: mueve la valvula a un PWM (params: uid, pwm, seg)",
   flowx_pisos:      "FlowX: graba pwm_min de arranque (params: uid, pos, neg)",
+  flowx_config:     "FlowX: ajusta config en PilotX (params: uid, pwm_min, dosis_lha, modo_manual, manual_lmin, meter_cal)",
   secciones_manual: "Maestro de secciones en manual (param: on)",
 };
 
