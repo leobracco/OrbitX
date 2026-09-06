@@ -53,6 +53,9 @@ const CATALOGO = {
   flowx_pisos:      "FlowX: graba pwm_min de arranque (params: uid, pos, neg)",
   flowx_config:     "FlowX: ajusta config en PilotX (params: uid, pwm_min, dosis_lha, modo_manual, manual_lmin, meter_cal)",
   secciones_manual: "Maestro de secciones en manual (param: on)",
+  nodos_live:       "Nodos que ve el Engine: online/offline, IP, version, ultimo visto",
+  nodo_estado:      "Matriz wifi/mqtt/target/status de un nodo (param: uid)",
+  ping:             "Ping a una IP privada de la LAN (param: ip)",
 };
 
 // Un pedido que nadie levanta no se acumula para siempre: si la pantalla
