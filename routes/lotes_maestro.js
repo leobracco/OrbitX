@@ -345,7 +345,18 @@ router.get("/", async (req, res) => {
 router.get("/:nombre/contexto", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
-    const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    let slug      = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    // ?estab= permite pedir el contexto de otra org: superadmin (mapa global)
+    // o usuarios con membresía en esa org.
+    const qEstab = req.query.estab;
+    if (qEstab && qEstab !== slug) {
+      const esSA      = jwtUser?.rol_global === "superadmin";
+      const esMiembro = (jwtUser?.memberships || []).some(m => m.orgSlug === qEstab);
+      if (!esSA && !esMiembro)
+        return res.status(403).json({ error: "Sin acceso a esa organización" });
+      slug = qEstab;
+    }
+    if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
     const nombre  = decodeURIComponent(req.params.nombre);
     const estabDB = getDB(slug);
 
@@ -366,10 +377,19 @@ router.get("/:nombre/contexto", async (req, res) => {
     if (aogDocs.length) {
       const { parseLote } = require("../services/aog_parser");
       const parsed = parseLote(aogDocs);
+      const st = parsed.stats || {};
       contexto.capas.aog = {
         tiene_boundary:  !!parsed.boundary,
         tiene_sections:  !!parsed.sections,
-        pasadas:         parsed.sections?.length || 0,
+        // Antes habia un campo "pasadas": era la cantidad de bloques del
+        // Sections.txt (y mal contados). Un bloque no es una pasada; se saco
+        // porque confundia. Lo que sirve son las hectareas.
+        bloques:         st.bloques || 0,
+        trabajado_ha:    st.trabajado_ha ?? null,
+        neto_ha:         st.neto_ha ?? null,
+        repintado_ha:    st.repintado_ha ?? null,
+        repintado_pct:   st.repintado_pct ?? null,
+        contorno_ha:     st.contorno_ha ?? null,
         tiene_origen:    !!parsed.origen,
         origen:          parsed.origen,
         archivos:        aogDocs.map(d => ({ subtipo: d.subtipo, nombre: d.nombre, ts: d.ts })),

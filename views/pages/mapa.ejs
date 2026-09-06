@@ -401,7 +401,7 @@ async function seleccionarLote(nombreEnc, estabSlug) {
     // Estado
     const info = [
       lote?.boundary ? "⬡ Boundary" : null,
-      lote?.sections ? `▦ ${lote.sections.length} pasadas` : null,
+      lote?.stats ? `▦ ${lote.stats.neto_ha.toFixed(1)} ha netas` + (lote.stats.repintado_pct > 0.5 ? ` (${lote.stats.repintado_pct.toFixed(1)} % repintado)` : '') : (lote?.sections ? "▦ Cobertura" : null),
       lote?.origen   ? "📍 GPS" : null,
     ].filter(Boolean).join(" · ");
     document.getElementById("mapa-estado").textContent = _loteActual + (info ? "  " + info : "");
@@ -426,7 +426,7 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
   const t0 = performance.now();
   console.groupCollapsed(`%c[MAPA] cargarCapasLote("${decodeURIComponent(nombreEnc)}")`, "color:#3C9EFF;font-weight:bold");
   try {
-    const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+    const ctx = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto${estabSlug ? `?estab=${encodeURIComponent(estabSlug)}` : ""}`);
     console.log(`/contexto → ${(performance.now() - t0).toFixed(0)}ms`);
     console.log("contexto:", { aog: ctx.capas?.aog, vistax: ctx.capas?.vistax, externas_keys: Object.keys(ctx.capas?.externas || {}) });
     const externas = ctx.capas?.externas || {};

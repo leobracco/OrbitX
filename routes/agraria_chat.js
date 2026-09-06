@@ -418,7 +418,12 @@ async function getDatosLote(estabSlug, loteNombre) {
       nombre:         loteNombre,
       tiene_boundary: !!parsed.boundary,
       tiene_origen:   !!parsed.origen,
-      pasadas:        parsed.sections?.length || 0,
+      // Hectareas reales de la cobertura (antes habia "pasadas": bloques del
+      // archivo, no pasadas; confundia).
+      neto_ha:        parsed.stats?.neto_ha ?? null,
+      trabajado_ha:   parsed.stats?.trabajado_ha ?? null,
+      repintado_pct:  parsed.stats?.repintado_pct ?? null,
+      contorno_ha:    parsed.stats?.contorno_ha ?? null,
       geometry,
     };
   } catch { return null; }
@@ -765,7 +770,10 @@ router.post("/analizar-lote", async (req, res) => {
       `Nombre: ${datos.nombre}`,
       `Boundary: ${datos.tiene_boundary ? "Sí" : "No"}`,
       `GPS: ${datos.tiene_origen ? "Sí" : "No"}`,
-      `Pasadas registradas: ${datos.pasadas}`,
+      `Contorno: ${datos.contorno_ha != null ? datos.contorno_ha + " ha" : "sin dato"}`,
+      `Suelo cubierto (neto): ${datos.neto_ha != null ? datos.neto_ha + " ha" : "sin cobertura"}`,
+      `Trabajado por la barra: ${datos.trabajado_ha != null ? datos.trabajado_ha + " ha" : "sin cobertura"}`,
+      `Repintado: ${datos.repintado_pct != null ? datos.repintado_pct + " %" : "sin dato"}`,
     ];
 
     // Solo agregamos info satelital si la tenemos. Si falló, NO mencionamos nada
@@ -821,7 +829,8 @@ router.post("/comparar-lotes", async (req, res) => {
   try {
     const estabSlug = req.user?.estabSlug||req.jwtUser?.estabSlug;
     const [dA,dB]  = await Promise.all([getDatosLote(estabSlug,lote_a), getDatosLote(estabSlug,lote_b)]);
-    const prompt = `Comparé estos lotes:\nA: ${lote_a} — pasadas:${dA?.pasadas||0}, boundary:${dA?.tiene_boundary?"Sí":"No"}, GPS:${dA?.tiene_origen?"Sí":"No"}\nB: ${lote_b} — pasadas:${dB?.pasadas||0}, boundary:${dB?.tiene_boundary?"Sí":"No"}, GPS:${dB?.tiene_origen?"Sí":"No"}\n¿Cuál tiene mejor cobertura?`;
+    const ha = (d) => d?.neto_ha != null ? `neto:${d.neto_ha} ha de ${d.contorno_ha ?? "?"} ha, repintado:${d.repintado_pct ?? 0} %` : "sin cobertura";
+    const prompt = `Comparé estos lotes:\nA: ${lote_a} — ${ha(dA)}, boundary:${dA?.tiene_boundary?"Sí":"No"}, GPS:${dA?.tiene_origen?"Sí":"No"}\nB: ${lote_b} — ${ha(dB)}, boundary:${dB?.tiene_boundary?"Sí":"No"}, GPS:${dB?.tiene_origen?"Sí":"No"}\n¿Cuál tiene mejor cobertura?`;
     const analisis = await callClaude(SYSTEM_BASE, [{ role:"user", content:prompt }], 500);
     res.json({ analisis, lote_a:dA, lote_b:dB });
   } catch(e) { res.status(500).json({ error:e.message }); }

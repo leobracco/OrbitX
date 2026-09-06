@@ -400,7 +400,7 @@ function renderTabla(lista) {
             <td>
               <div style="display:flex;gap:4px;flex-wrap:wrap">
                 ${l.aog?.tiene_boundary  ? '<span class="badge badge-lime" style="font-size:9px">⬡ boundary</span>' : ''}
-                ${l.aog?.tiene_sections  ? `<span class="badge badge-blue" style="font-size:9px">▦ ${l.aog.pasadas} pasadas</span>` : ''}
+                ${l.aog?.tiene_sections  ? `<span class="badge badge-blue" style="font-size:9px">▦ ${l.aog.neto_ha != null ? l.aog.neto_ha.toFixed(1) + ' ha netas' : 'cobertura'}</span>` : ''}
                 ${!l.aog ? '<span class="badge badge-gray" style="font-size:9px">sin PilotX</span>' : ''}
               </div>
             </td>
@@ -498,19 +498,24 @@ function renderTabAOG(ctx) {
     return;
   }
   document.getElementById('tab-content-aog').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:10px">
+      ${[
+        ['Contorno',  aog.contorno_ha,  'var(--text)',  'ha del lote'],
+        ['Neto',      aog.neto_ha,      'var(--lime)',  'ha de suelo cubierto'],
+        ['Trabajado', aog.trabajado_ha, 'var(--blue)',  'ha que sumo la barra'],
+        ['Repintado', aog.repintado_ha, aog.repintado_pct > 10 ? 'var(--orange, #e8a33d)' : 'var(--muted2)',
+                      aog.repintado_pct != null ? aog.repintado_pct.toFixed(1) + ' % de lo trabajado' : ''],
+      ].map(([t, v, c, sub]) => `
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:20px;color:${aog.tiene_boundary?'var(--lime)':'var(--muted2)'}">${aog.tiene_boundary?'✓':'–'}</div>
-        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Boundary</div>
-      </div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-family:var(--font-m);font-size:18px;color:var(--blue)">${aog.pasadas||'–'}</div>
-        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Pasadas</div>
-      </div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:20px;color:${aog.tiene_origen?'var(--lime)':'var(--muted2)'}">${aog.tiene_origen?'✓':'–'}</div>
-        <div style="font-size:10px;color:var(--muted2);margin-top:3px">Origen GPS</div>
-      </div>
+        <div style="font-family:var(--font-m);font-size:20px;color:${c}">${v != null ? v.toFixed(2) : '–'}<span style="font-size:11px;color:var(--muted2)"> ha</span></div>
+        <div style="font-size:11px;color:var(--text);margin-top:3px">${t}</div>
+        <div style="font-size:9px;color:var(--muted2);margin-top:1px">${sub}</div>
+      </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+      <span class="badge ${aog.tiene_boundary?'badge-lime':'badge-gray'}" style="font-size:9px">⬡ Boundary ${aog.tiene_boundary?'✓':'–'}</span>
+      <span class="badge ${aog.tiene_origen?'badge-lime':'badge-gray'}" style="font-size:9px">📍 Origen GPS ${aog.tiene_origen?'✓':'–'}</span>
+      <span class="badge ${aog.tiene_sections?'badge-blue':'badge-gray'}" style="font-size:9px">▦ Cobertura ${aog.tiene_sections?'✓':'–'}</span>
     </div>
     <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
       Archivos (${aog.archivos?.length||0})
