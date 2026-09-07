@@ -7,7 +7,7 @@
     "Authorization": `Bearer ${TOKEN || ""}`,
   }, extra || {});
 
-  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","FlowX","ToolX","PilotX","PilotXAndroid","CoreX-ECU"];
+  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","FlowX","ToolX","PilotX","PilotXParche","PilotXAndroid","CoreX-ECU"];
 
   // Convención: <Producto>_v<X.Y.Z>.<ext>  (ej: FlowX_v1.9.1.bin)
   // Devuelve { producto, productoRaw, version } o null si no matchea.
