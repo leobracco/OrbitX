@@ -258,21 +258,20 @@ router.get("/establecimientos", requireAuth, requireAdmin, async (req, res) => {
     // Mapa id→nombre para owners
     docs.filter(d => d.tipo==="usuario").forEach(u => { ownerNombre[u._id] = u.nombre || u.email; });
 
-    // Asegurar que cada estab tenga campos completos para el modal
+    // Asegurar que cada estab tenga los campos que la vista espera
+    // (docs org_*: ha_total, plan, owner_uid, activa — ver auth_service.js aprobarRegistro)
     establecimientos = establecimientos.map(e => ({
       _id:          e._id,
       slug:         e.slug       || "",
       nombre:       e.nombre     || "",
-      rut:          e.rut        || "",
-      domicilio:    e.domicilio  || "",
-      localidad:    e.localidad  || "",
       provincia:    e.provincia  || "",
       pais:         e.pais       || "Argentina",
-      email:        e.email      || "",
-      telefono:     e.telefono   || "",
-      owner_id:     e.owner_id   || "",
-      activo:       e.activo !== false,
-      ts_creacion:  e.ts_creacion || null,
+      ciudad:       e.ciudad     || "",
+      ha_total:     e.ha_total   || 0,
+      plan:         e.plan       || "free",
+      owner_uid:    e.owner_uid  || "",
+      activa:       e.activa !== false,
+      created_at:   e.created_at || null,
     }));
 
   } catch(e) { console.error("[Panel/estab]", e.message); }
@@ -370,6 +369,8 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
   const db     = req.app.locals.globalDB;
   const SA     = isSA(req);
   const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
+  const ultimasFw = {};
+  const backups = {};
   let dispositivos = [], establecimientos = [];
   const ahora = Date.now();
 
@@ -390,10 +391,30 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
       online: d.ultimo_visto && (ahora - d.ultimo_visto) < 2*60*1000,
     }));
 
+    // Ultima version publicada por producto (catalogo OTA): para marcar en
+    // Dispositivos las pantallas y los nodos que tienen algo mas nuevo.
+    const cmpVer = (a, b) => {
+      const pa = String(a || "").split(".").map(x => parseInt(x, 10) || 0);
+      const pb = String(b || "").split(".").map(x => parseInt(x, 10) || 0);
+      for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+      return 0;
+    };
+    for (const f of docs.filter(d => d.tipo === "firmware" && d.producto && d.version)) {
+      if (!ultimasFw[f.producto] || cmpVer(f.version, ultimasFw[f.producto]) > 0) ultimasFw[f.producto] = f.version;
+    }
+
+    // Respaldo de configuracion por equipo (config_backup_<device>): fecha del
+    // ultimo y cantidad de versiones guardadas.
+    for (const b of docs.filter(d => d.tipo === "config_backup" && d.device_id)) {
+      const vs = Array.isArray(b.versiones) ? b.versiones : [];
+      const ult = vs[vs.length - 1] || {};
+      backups[b.device_id] = { ultimo_visto: b.ultimo_visto || null, n: vs.length, ts: ult.ts || null, version_pilotx: ult.version_pilotx || "" };
+    }
+
   } catch(e) { console.error("[Panel/dispositivos]", e.message); }
 
   const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos });
+  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos, ultimasFw, backups });
 });
 
 // ─────────────────────────────────────────────────────────

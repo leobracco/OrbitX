@@ -149,9 +149,30 @@ async function upsertDevice(globalDB, id, data) {
 // ══════════════════════════════════════════════════════════
 router.post("/heartbeat", deviceAuth, async (req, res) => {
   const globalDB  = req.app.locals.globalDB;
-  const { hostname, platform, mac, aog_path, version, rustdesk_id } = req.body;
+  const { hostname, platform, mac, aog_path, version, rustdesk_id, nodos } = req.body;
   const now       = Date.now();
   const doc       = req.deviceDoc;
+
+  // Nodos ESP32 que PilotX ve en su broker (uid, tipo, firmware, online…).
+  // Viaja en cada heartbeat desde PilotX 1.0.60; se guarda saneado (lista
+  // blanca de campos, maximo 64) para mostrarlo en Dispositivos y comparar
+  // el firmware con el catalogo OTA. Un heartbeat viejo sin `nodos` no pisa
+  // lo ultimo que se supo.
+  let nodosLimpios = null;
+  if (Array.isArray(nodos)) {
+    nodosLimpios = nodos.slice(0, 64).filter(n => n && typeof n.uid === "string").map(n => ({
+      uid:         String(n.uid).slice(0, 40),
+      tipo:        String(n.tipo || "").slice(0, 24),
+      fw:          String(n.fw || "").slice(0, 32),
+      ip:          String(n.ip || "").slice(0, 45),
+      online:      !!n.online,
+      motors:      Number.isFinite(n.motors) ? n.motors : 0,
+      cables:      Number.isFinite(n.cables) ? n.cables : 0,
+      safe_mode:   !!n.safe_mode,
+      crash_count: Number.isFinite(n.crash_count) ? n.crash_count : 0,
+      last_seen:   n.last_seen ? String(n.last_seen).slice(0, 40) : null,
+    }));
+  }
 
   await upsertDevice(globalDB, `device_${req.deviceId}`, {
     ...doc,
@@ -163,6 +184,8 @@ router.post("/heartbeat", deviceAuth, async (req, res) => {
     // ID de RustDesk del equipo (soporte remoto): lo reporta PilotX en el
     // heartbeat; el CRM lo muestra en la ficha del cliente / tickets.
     rustdesk_id:  rustdesk_id || doc.rustdesk_id || null,
+    nodos:        nodosLimpios !== null ? nodosLimpios : (doc.nodos || []),
+    nodos_ts:     nodosLimpios !== null ? now : (doc.nodos_ts || null),
     ultimo_visto: now,
     online:       true,
   });

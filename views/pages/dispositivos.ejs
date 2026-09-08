@@ -17,6 +17,18 @@ const sinAsignar = dispositivos.filter(d => !d.estab_slug);
 const asignados  = dispositivos.filter(d =>  d.estab_slug);
 const ahora      = Date.now();
 const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 1000;
+// Versiones: pantalla y nodos contra el catalogo OTA (ultimasFw viene del route).
+const _fw = (typeof ultimasFw === 'object' && ultimasFw) ? ultimasFw : {};
+const _bk = (typeof backups === 'object' && backups) ? backups : {};
+const cmpVer = (a, b) => {
+  const pa = String(a || '').split('.').map(x => parseInt(x, 10) || 0);
+  const pb = String(b || '').split('.').map(x => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+  return 0;
+};
+// El registro de PilotX capitaliza el tipo ("Quantix", "Vistax", "Flow"…); el catalogo usa "QuantiX", "VistaX", "FlowX"…
+const productoDe = t => { const k = String(t || '').toLowerCase().replace(/x$/, ''); const m = { quanti:'QuantiX', vista:'VistaX', flow:'FlowX', tool:'ToolX', section:'SectionX', storm:'StormX', cow:'CowX', soil:'SoilX', signal:'SignalX', line:'LineX' }; return m[k] || null; };
+const hace = ts => { if (!ts) return '–'; const m = Math.round((ahora - ts) / 60000); if (m < 60) return 'hace ' + m + ' min'; const h = Math.round(m / 60); if (h < 48) return 'hace ' + h + ' h'; return 'hace ' + Math.round(h / 24) + ' d'; };
 %>
 
 <!-- KPIs rápidos -->
@@ -87,7 +99,7 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>Dispositivo</th><th>Nombre</th><th>Establecimiento</th><th>RustDesk</th><th>Última vez visto</th><th>Estado</th><th></th></tr>
+        <tr><th>Dispositivo</th><th>Nombre</th><th>Establecimiento</th><th>Versión</th><th>Nodos</th><th>Config</th><th>RustDesk</th><th>Última vez visto</th><th>Estado</th><th></th></tr>
       </thead>
       <tbody>
         <% asignados.forEach(d => { %>
@@ -99,6 +111,33 @@ const esOnline   = d => d.ultimo_visto && (ahora - d.ultimo_visto) < 2 * 60 * 10
           <td class="td-main"><%= d.nombre || d.device_id %></td>
           <td>
             <span class="badge badge-blue"><%= d.estab_slug %></span>
+          </td>
+          <td>
+            <% const vDesact = _fw.PilotX && d.version && cmpVer(_fw.PilotX, d.version) > 0; %>
+            <div class="td-mono" style="font-size:12px"><%= d.version || '–' %></div>
+            <% if (vDesact) { %><span class="badge" style="font-size:9px;background:#3a2a10;color:#e8a33d" title="Hay una versión más nueva en el catálogo">↑ <%= _fw.PilotX %></span><% } else if (d.version && _fw.PilotX) { %><span class="td-dim" style="font-size:10px">al día</span><% } %>
+          </td>
+          <td style="font-size:11px;line-height:1.5">
+            <% const nodos = Array.isArray(d.nodos) ? d.nodos : []; %>
+            <% if (!nodos.length) { %><span class="td-dim">sin datos<%= d.version && cmpVer(d.version, '1.0.60') < 0 ? ' (desde 1.0.60)' : '' %></span><% } %>
+            <% nodos.forEach(n => { const prod = productoDe(n.tipo); const ult = prod ? _fw[prod] : null; const viejo = ult && n.fw && cmpVer(ult, n.fw) > 0; %>
+              <div title="<%= n.uid %><%= n.ip ? ' · ' + n.ip : '' %><%= n.last_seen ? ' · visto ' + n.last_seen : '' %>">
+                <span style="color:<%= n.online ? 'var(--lime)' : 'var(--muted2)' %>"><%= n.online ? '●' : '○' %></span>
+                <span style="color:var(--text)"><%= prod || n.tipo %></span>
+                <span class="td-mono td-dim"><%= String(n.uid).slice(-6) %></span>
+                <span class="td-mono"><%= n.fw || '?' %></span>
+                <% if (viejo) { %><span class="badge" style="font-size:9px;background:#3a2a10;color:#e8a33d" title="Catálogo: <%= ult %>">↑ <%= ult %></span><% } %>
+                <% if (n.safe_mode) { %><span class="badge badge-gray" style="font-size:9px;color:var(--red)">safe mode</span><% } %>
+              </div>
+            <% }); %>
+            <% if (d.nodos_ts) { %><div class="td-dim" style="font-size:10px"><%= hace(d.nodos_ts) %></div><% } %>
+          </td>
+          <td style="font-size:11px">
+            <% const bk = _bk[d.device_id]; %>
+            <% if (bk && bk.n) { %>
+              <div><%= hace(bk.ultimo_visto || bk.ts) %> · <%= bk.n %> <%= bk.n === 1 ? 'versión' : 'versiones' %></div>
+              <button class="btn btn-sm btn-ghost" title="Descargar la última configuración (JSON)" onclick="descargarConfig('<%= d.device_id %>')">⬇ config</button>
+            <% } else { %><span class="td-dim">sin respaldo<%= d.version && cmpVer(d.version, '1.0.58') < 0 ? ' (desde 1.0.58)' : '' %></span><% } %>
           </td>
           <td>
             <% if (d.rustdesk_id) { %>
@@ -211,6 +250,25 @@ let _deviceActual = null;
 // Conectar por RustDesk: intenta abrir el cliente instalado (rustdesk://<id>) y
 // SIEMPRE copia el ID al portapapeles como red de seguridad — si el equipo no
 // tiene el protocolo registrado, el operador lo pega a mano en RustDesk.
+// Descarga la ultima configuracion respaldada del equipo como JSON (JWT del panel).
+async function descargarConfig(deviceId) {
+  try {
+    const tok = localStorage.getItem('orbitx_token');
+    const r = await fetch('/api/soporte/config-backup?device_id=' + encodeURIComponent(deviceId) + '&full=1', { headers: { Authorization: 'Bearer ' + tok } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const doc = await r.json();
+    const vs = Array.isArray(doc.versiones) ? doc.versiones : [];
+    const ult = vs[vs.length - 1];
+    if (!ult) throw new Error('sin versiones');
+    const blob = new Blob([JSON.stringify(ult.config, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'config_' + deviceId + '_' + new Date(ult.ts).toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('⬇ Config', deviceId + ' · ' + vs.length + ' versiones respaldadas · PilotX ' + (ult.version_pilotx || '?'), 'lime');
+  } catch (e) { toast('Config', 'No se pudo descargar: ' + e.message, 'red'); }
+}
+
 async function conectarRustDesk(rustdeskId, deviceId) {
   try { await navigator.clipboard.writeText(rustdeskId); } catch (e) {}
   toast('🖥️ RustDesk', 'ID ' + rustdeskId + ' copiado · abriendo cliente…', 'lime');
