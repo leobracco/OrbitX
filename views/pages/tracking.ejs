@@ -12,7 +12,7 @@
 </div>
 
 <!-- KPIs -->
-<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+<div class="kpi-grid trk-kpis" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
   <div class="kpi lime">
     <div class="kpi-shine"></div>
     <div class="kpi-label">Vehículos online</div>
@@ -33,7 +33,19 @@
   </div>
 </div>
 
-<div class="g2">
+<style id="trk-responsive">
+  @media (max-width: 768px) {
+    .trk-g2 { display: flex !important; flex-direction: column; gap: 12px; }
+    .trk-mapa-card { order: -1; }
+    #trk-mapa { height: 58vh !important; min-height: 300px; }
+    #trk-lista { max-height: 40vh !important; }
+    .kpi-grid.trk-kpis { grid-template-columns: repeat(3, 1fr) !important; gap: 8px !important; }
+    .kpi-grid.trk-kpis .kpi-val { font-size: 20px; }
+    .kpi-grid.trk-kpis .kpi-delta { display: none; }
+    .leaflet-control-zoom a { width: 38px !important; height: 38px !important; line-height: 38px !important; font-size: 20px !important; }
+  }
+</style>
+<div class="g2 trk-g2">
   <!-- Lista de vehículos -->
   <div class="card">
     <div class="card-head">
@@ -57,7 +69,7 @@
   </div>
 
   <!-- Mapa -->
-  <div class="card" style="flex:1">
+  <div class="card trk-mapa-card" style="flex:1">
     <div class="card-head">
       <span class="card-title" id="mapa-titulo">Mapa en vivo</span>
       <div style="display:flex;gap:6px">

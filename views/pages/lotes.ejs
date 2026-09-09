@@ -125,14 +125,14 @@
 
     <!-- Tabs -->
     <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0">
-      <% ['aog','vistax','capas','info'].forEach((t,i) => { %>
+      <% ['aog','vistax','capas','marcas','info'].forEach((t,i) => { %>
       <button id="tab-<%= t %>" onclick="switchTab('<%= t %>')"
         style="padding:10px 18px;background:none;border:none;color:var(--muted2);
                font-size:12px;cursor:pointer;border-bottom:2px solid transparent;
                font-family:var(--font-b);transition:all .15s"
         onmouseover="if(!this.classList.contains('tab-active'))this.style.color='var(--text)'"
         onmouseout="if(!this.classList.contains('tab-active'))this.style.color='var(--muted2)'">
-        <%= {aog:'🗺 PilotX',vistax:'🌱 VistaX',capas:'📁 Capas',info:'ℹ Info'}[t] %>
+        <%= {aog:'🗺 PilotX',vistax:'🌱 VistaX',capas:'📁 Capas',marcas:'✎ Marcas',info:'ℹ Info'}[t] %>
       </button>
       <% }) %>
     </div>
@@ -142,6 +142,7 @@
       <div id="tab-content-aog">    <div class="loading"><span class="spinner"></span></div></div>
       <div id="tab-content-vistax" style="display:none"><div class="loading"><span class="spinner"></span></div></div>
       <div id="tab-content-capas"  style="display:none"><div class="loading"><span class="spinner"></span></div></div>
+      <div id="tab-content-marcas" style="display:none"><div class="loading"><span class="spinner"></span></div></div>
       <div id="tab-content-info"   style="display:none"><div class="loading"><span class="spinner"></span></div></div>
     </div>
 
@@ -470,6 +471,7 @@ async function abrirLote(nombreEnc) {
     renderTabAOG(ctx);
     renderTabVistaX(ctx);
     renderTabCapas(ctx);
+    renderTabMarcas(ctx);
     renderTabInfo(ctx);
     renderLluviasLote(nombre);
   } catch(e) {
@@ -569,6 +571,52 @@ function renderTabVistaX(ctx) {
     </div>`;
 }
 
+// Marcas de ingeniero ("de aca hasta aca se sembro X a Y"). Se crean y se
+// editan sobre el mapa (/mapa?lote=...), aca se listan y se pueden borrar.
+const MK_TIPO   = { semilla:'Semilla', fertilizante:'Fertilizante', fitosanitario:'Fitosanitario', otro:'Otro' };
+const MK_UNIDAD = { sem_m:'sem/m', sem_ha:'sem/ha', kg_ha:'kg/ha', l_ha:'l/ha', pl_ha:'pl/ha', otro:'' };
+const MK_COLOR  = { semilla:'#b8ff3c', fertilizante:'#3c9eff', fitosanitario:'#ff6b6b', otro:'#f59e0b' };
+function mkEsc(t) { return String(t || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function mkTexto(m) {
+  const hay = m.dosis !== null && m.dosis !== undefined && m.dosis !== '';
+  return (MK_TIPO[m.insumo_tipo] || m.insumo_tipo) + (m.insumo ? ': ' + m.insumo : '') + (hay ? ' · ' + m.dosis + ' ' + (MK_UNIDAD[m.unidad] || m.unidad || '') : '');
+}
+function renderTabMarcas(ctx) {
+  const marcas = Array.isArray(ctx.marcas) ? ctx.marcas : [];
+  const enc = encodeURIComponent(_loteActual);
+  const cab = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+      <div style="font-size:11px;color:var(--muted2)">${marcas.length} ${marcas.length === 1 ? 'marca' : 'marcas'} · de dónde hasta dónde se aplicó qué</div>
+      <a class="btn btn-sm btn-primary" href="/mapa?lote=${enc}${ctx.estab_slug ? '&estab=' + encodeURIComponent(ctx.estab_slug) : ''}">✎ Marcar en el mapa</a>
+    </div>`;
+  if (!marcas.length) {
+    document.getElementById('tab-content-marcas').innerHTML = cab + `<div class="empty-state" style="padding:24px">
+      <p>Todavía no hay marcas. Abrí el mapa, tocá <b>Marcar</b> y señalá de dónde hasta dónde se sembró o fertilizó.</p></div>`;
+    return;
+  }
+  document.getElementById('tab-content-marcas').innerHTML = cab + marcas.map(m => `
+    <div style="display:flex;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--surface2);align-items:flex-start">
+      <span style="width:12px;height:12px;border-radius:50%;background:${MK_COLOR[m.insumo_tipo] || MK_COLOR.otro};margin-top:3px;flex-shrink:0"></span>
+      <div style="flex:1;min-width:0">
+        <div style="color:#fff;font-size:13px">${mkEsc(mkTexto(m))}</div>
+        <div style="color:var(--muted2);font-size:11px;margin-top:2px">${mkEsc(m.fecha || '')}${m.creado_por ? ' · ' + mkEsc(m.creado_por) : ''} · ${m.geom && m.geom.tipo === 'poligono' ? 'polígono' : 'tramo'} de ${(m.geom && m.geom.puntos ? m.geom.puntos.length : 0)} puntos</div>
+        ${m.notas ? `<div style="color:var(--text);font-size:12px;margin-top:4px;white-space:pre-wrap">${mkEsc(m.notas)}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <a class="btn btn-sm btn-ghost" title="Ver en el mapa" href="/mapa?lote=${enc}${ctx.estab_slug ? '&estab=' + encodeURIComponent(ctx.estab_slug) : ''}">🗺</a>
+        <button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="borrarMarcaLote('${m._id}')">🗑</button>
+      </div>
+    </div>`).join('');
+}
+async function borrarMarcaLote(id) {
+  const m = (_contextoActual && _contextoActual.marcas || []).find(x => x._id === id);
+  if (!m || !confirm('¿Borrar la marca "' + mkTexto(m) + '"?')) return;
+  try {
+    await Auth.del(`/api/lotes-maestro/${encodeURIComponent(_loteActual)}/marca/${id}`);
+    _contextoActual.marcas = _contextoActual.marcas.filter(x => x._id !== id);
+    renderTabMarcas(_contextoActual);
+    toast('Marca borrada', '', 'lime');
+  } catch (e) { toast('Marcas', 'No se pudo borrar: ' + e.message, 'red'); }
+}
 function renderTabCapas(ctx) {
   const externas = ctx.capas?.externas || {};
   const entries  = Object.entries(externas);
@@ -708,7 +756,7 @@ function renderTabInfo(ctx) {
 function switchTab(tab, force) {
   if (tab === _tabActual && !force) return;
   _tabActual = tab;
-  ['aog','vistax','capas','info'].forEach(t => {
+  ['aog','vistax','capas','marcas','info'].forEach(t => {
     document.getElementById(`tab-${t}`)?.classList.toggle('tab-active', t === tab);
     const cont = document.getElementById(`tab-content-${t}`);
     if (cont) cont.style.display = t === tab ? 'block' : 'none';

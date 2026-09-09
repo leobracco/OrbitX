@@ -442,6 +442,18 @@ router.get("/:nombre/contexto", async (req, res) => {
       contexto.capas.externas = porSubtipo;
     }
 
+    // Marcas de ingeniero ("de aca hasta aca se sembro X a Y sem/m"): van
+
+    // con el contexto para que el mapa las dibuje sin otra llamada.
+
+    try {
+
+      const marcasDocs = await findAll(estabDB, { tipo: "lote_marca", lote_ref: nombre }, 500);
+
+      contexto.marcas = marcasDocs.map(limpiarMarca).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    } catch (e) { contexto.marcas = []; }
+
     res.json(contexto);
   } catch(e) {
     console.error("[lotes-maestro/contexto]", e.message);
@@ -532,6 +544,122 @@ router.post("/:nombre/capa", async (req, res) => {
     console.error("[lotes-maestro/capa]", e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ══════════════════════════════════════════════════════════
+//  MARCAS DE LOTE (para ingenieros)
+//  "De aca hasta aca se sembro <insumo> a <dosis> <unidad>": un tramo o un
+//  poligono dibujado sobre el mapa con insumo, dosis, fecha y notas.
+//  Doc en la DB del establecimiento:
+//    { tipo:"lote_marca", lote_ref, estab_slug, geom:{ tipo:"tramo"|"poligono",
+//      puntos:[[lat,lon],...] }, insumo_tipo, insumo, dosis, unidad, fecha,
+//      notas, creado_por, ts, editado_ts }
+//    GET    /api/lotes-maestro/:nombre/marcas
+//    POST   /api/lotes-maestro/:nombre/marca
+//    PUT    /api/lotes-maestro/:nombre/marca/:id
+//    DELETE /api/lotes-maestro/:nombre/marca/:id
+// ══════════════════════════════════════════════════════════
+const MARCA_INSUMOS  = ["semilla", "fertilizante", "fitosanitario", "otro"];
+const MARCA_UNIDADES = ["sem_m", "sem_ha", "kg_ha", "l_ha", "pl_ha", "otro"];
+
+function limpiarMarca(d) {
+  return {
+    _id: d._id, lote_ref: d.lote_ref, geom: d.geom, insumo_tipo: d.insumo_tipo, insumo: d.insumo,
+    dosis: d.dosis, unidad: d.unidad, fecha: d.fecha, notas: d.notas, creado_por: d.creado_por,
+    ts: d.ts, editado_ts: d.editado_ts || null,
+  };
+}
+
+function validarMarca(b) {
+  const geom = b.geom || {};
+  const puntos = Array.isArray(geom.puntos) ? geom.puntos
+    .filter(p => Array.isArray(p) && p.length >= 2 && Number.isFinite(+p[0]) && Number.isFinite(+p[1]))
+    .map(p => [Math.round(+p[0] * 1e7) / 1e7, Math.round(+p[1] * 1e7) / 1e7]).slice(0, 200) : [];
+  const tipoGeom = geom.tipo === "poligono" ? "poligono" : "tramo";
+  if (puntos.length < 2) return { error: "La marca necesita al menos dos puntos" };
+  if (tipoGeom === "poligono" && puntos.length < 3) return { error: "Un poligono necesita al menos tres puntos" };
+  const insumoTipo = MARCA_INSUMOS.includes(b.insumo_tipo) ? b.insumo_tipo : "otro";
+  const unidad = MARCA_UNIDADES.includes(b.unidad) ? b.unidad : "otro";
+  const dosis = b.dosis === "" || b.dosis === null || b.dosis === undefined ? null : +b.dosis;
+  if (dosis !== null && !Number.isFinite(dosis)) return { error: "Dosis invalida" };
+  return {
+    ok: {
+      geom: { tipo: tipoGeom, puntos },
+      insumo_tipo: insumoTipo,
+      insumo: String(b.insumo || "").slice(0, 120),
+      dosis, unidad,
+      fecha: String(b.fecha || "").slice(0, 10) || new Date().toISOString().slice(0, 10),
+      notas: String(b.notas || "").slice(0, 2000),
+    },
+  };
+}
+
+function slugMarca(req) {
+  const jwtUser = req.jwtUser || req.user;
+  let slug = jwtUser?.estabSlug || jwtUser?.estab_slug;
+  const qEstab = req.query.estab || (req.body && req.body.estab);
+  if (qEstab && qEstab !== slug) {
+    const esSA = jwtUser?.rol_global === "superadmin";
+    const esMiembro = (jwtUser?.memberships || []).some(m => m.orgSlug === qEstab);
+    if (!esSA && !esMiembro) return { error: "Sin acceso a esa organizacion" };
+    slug = qEstab;
+  }
+  if (!slug) return { error: "Sin establecimiento" };
+  return { slug, jwtUser };
+}
+
+router.get("/:nombre/marcas", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const nombre  = decodeURIComponent(req.params.nombre);
+    const marcas  = await findAll(estabDB, { tipo: "lote_marca", lote_ref: nombre }, 500);
+    res.json({ ok: true, marcas: marcas.map(limpiarMarca).sort((a, b) => (b.ts || 0) - (a.ts || 0)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/:nombre/marca", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const v = validarMarca(req.body || {}); if (v.error) return res.status(400).json({ error: v.error });
+    const estabDB = getDB(r.slug);
+    const nombre  = decodeURIComponent(req.params.nombre);
+    const now     = Date.now();
+    const id      = `lote_marca_${r.slug}_${nombre}_${now}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 220);
+    const doc = { _id: id, tipo: "lote_marca", lote_ref: nombre, estab_slug: r.slug, ...v.ok,
+      creado_por: r.jwtUser?.nombre || r.jwtUser?.email || `usr_${r.jwtUser?.uid || "?"}`, ts: now };
+    await estabDB.insert(doc);
+    res.json({ ok: true, marca: limpiarMarca(doc) });
+  } catch (e) { console.error("[lotes-maestro/marca]", e.message); res.status(500).json({ error: e.message }); }
+});
+
+// El cliente del panel (Auth) tiene patch pero no put: se aceptan los dos.
+async function actualizarMarca(req, res) {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const doc = await estabDB.get(req.params.id).catch(() => null);
+    if (!doc || doc.tipo !== "lote_marca") return res.status(404).json({ error: "Marca no encontrada" });
+    if (doc.lote_ref !== decodeURIComponent(req.params.nombre)) return res.status(403).json({ error: "La marca no pertenece a ese lote" });
+    const v = validarMarca({ ...doc, ...(req.body || {}) }); if (v.error) return res.status(400).json({ error: v.error });
+    const nuevo = { ...doc, ...v.ok, editado_ts: Date.now() };
+    await estabDB.insert(nuevo);
+    res.json({ ok: true, marca: limpiarMarca(nuevo) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+}
+router.put("/:nombre/marca/:id", actualizarMarca);
+router.patch("/:nombre/marca/:id", actualizarMarca);
+
+router.delete("/:nombre/marca/:id", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const doc = await estabDB.get(req.params.id).catch(() => null);
+    if (!doc || doc.tipo !== "lote_marca") return res.status(404).json({ error: "Marca no encontrada" });
+    if (doc.lote_ref !== decodeURIComponent(req.params.nombre)) return res.status(403).json({ error: "La marca no pertenece a ese lote" });
+    await estabDB.destroy(doc._id, doc._rev);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ══════════════════════════════════════════════════════════

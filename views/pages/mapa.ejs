@@ -66,7 +66,7 @@
 </div>
 
 <!-- Layout: mapa + panel capas -->
-<div style="display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start">
+<div class="mapa-grid" style="display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start">
 
   <!-- Mapa -->
   <div style="position:relative;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)">
@@ -129,6 +129,15 @@
 
     <div id="capas-lista" style="padding:8px 0;max-height:460px;overflow-y:auto"></div>
 
+    <!-- Marcas de ingeniero: "de aca hasta aca se sembro X a Y" -->
+    <div id="marcas-panel" style="border-top:1px solid var(--border)">
+      <div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:12px;font-weight:500;color:#fff">Marcas</span>
+        <button class="btn btn-sm btn-primary" style="font-size:11px" onclick="iniciarMarca()">✎ Marcar</button>
+      </div>
+      <div id="marcas-lista" style="padding:0 6px 8px;max-height:260px;overflow-y:auto;font-size:11px"></div>
+    </div>
+
     <div style="padding:10px 14px;border-top:1px solid var(--border)">
       <button class="btn btn-ghost" style="width:100%;font-size:11px"
         onclick="window.location='/lotes'">
@@ -139,6 +148,57 @@
 
 </div>
 
+<!-- Barra de dibujo de marca (aparece mientras se marca sobre el mapa) -->
+<div id="marca-barra" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:5000;
+     background:rgba(10,14,20,0.96);border:1px solid var(--lime);border-radius:12px;padding:10px 14px;
+     box-shadow:0 10px 40px rgba(0,0,0,0.6);gap:8px;align-items:center;flex-wrap:wrap;max-width:94vw">
+  <span id="marca-barra-txt" style="font-size:12px;color:#fff">Tocá el mapa: primero de dónde, después hasta dónde</span>
+  <label style="font-size:11px;color:var(--muted2);display:flex;align-items:center;gap:4px"><input type="checkbox" id="marca-poligono" onchange="marcaRedibujar()"> polígono</label>
+  <button class="btn btn-sm btn-ghost" onclick="marcaDeshacer()">↶</button>
+  <button class="btn btn-sm btn-ghost" onclick="cancelarMarca()">Cancelar</button>
+  <button class="btn btn-sm btn-primary" id="marca-btn-listo" onclick="terminarMarca()" disabled>Listo →</button>
+</div>
+
+<!-- Formulario de la marca -->
+<div id="marca-modal" style="display:none;position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:12px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:100%;max-width:440px;max-height:92vh;overflow-y:auto;padding:18px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:14px;font-weight:600;color:#fff" id="marca-modal-titulo">Nueva marca</div>
+      <button class="btn btn-sm btn-ghost" onclick="cerrarMarcaModal()">✕</button>
+    </div>
+    <div id="marca-modal-geom" style="font-size:11px;color:var(--muted2);margin-bottom:10px"></div>
+    <div class="form-grid">
+      <div class="field"><label>Insumo</label>
+        <select id="mk-tipo">
+          <option value="semilla">Semilla</option>
+          <option value="fertilizante">Fertilizante</option>
+          <option value="fitosanitario">Fitosanitario</option>
+          <option value="otro">Otro</option>
+        </select>
+      </div>
+      <div class="field"><label>Fecha</label><input type="date" id="mk-fecha"></div>
+      <div class="field field-full"><label>Qué (variedad / producto)</label><input id="mk-insumo" placeholder="ej. Soja DM 46R18 · Urea"></div>
+      <div class="field"><label>Dosis</label><input id="mk-dosis" type="number" step="0.1" inputmode="decimal" placeholder="4.5"></div>
+      <div class="field"><label>Unidad</label>
+        <select id="mk-unidad">
+          <option value="sem_m">sem/m</option>
+          <option value="sem_ha">sem/ha</option>
+          <option value="kg_ha">kg/ha</option>
+          <option value="l_ha">l/ha</option>
+          <option value="pl_ha">pl/ha</option>
+          <option value="otro">otra</option>
+        </select>
+      </div>
+      <div class="field field-full"><label>Notas</label><textarea id="mk-notas" rows="3" placeholder="lo que tiene que saber el ingeniero"></textarea></div>
+    </div>
+    <div id="marca-modal-err" class="alert error" style="display:none;margin-top:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn btn-ghost" onclick="cerrarMarcaModal()">Cancelar</button>
+      <button class="btn btn-primary" id="mk-guardar" onclick="guardarMarca()">Guardar marca</button>
+    </div>
+  </div>
+</div>
+
 <!-- Panel NDVI — se monta por OrbitNDVI.init() -->
 <div id="ndvi-controls"></div>
 
@@ -147,6 +207,17 @@
 <script src="/lib/leaflet/leaflet.min.js"></script>
 <style>
 .leaflet-container { background: #050810 !important; }
+/* Celular: mapa arriba a pantalla casi completa, panel de capas debajo a todo el ancho. */
+@media (max-width: 768px) {
+  .mapa-grid { grid-template-columns: 1fr !important; gap: 10px !important; }
+  #mapa { height: 62vh !important; min-height: 320px; }
+  #panel-capas { width: 100% !important; }
+  #mapa-leyenda { display: none !important; }
+  .leaflet-control-zoom a { width: 38px !important; height: 38px !important; line-height: 38px !important; font-size: 20px !important; }
+  #marca-barra { bottom: 10px; padding: 8px 10px; }
+}
+.marca-item { padding: 8px 8px; border-radius: 8px; margin: 4px 0; background: var(--surface2); border: 1px solid var(--border); }
+.marca-item:hover { border-color: var(--lime); }
 #search-dropdown > div { transition: background .1s; }
 
 .capa-item {
@@ -332,6 +403,7 @@ async function seleccionarLote(nombreEnc, estabSlug) {
   _lluviaLayers = [];
   _lluviaOn = false;
   _loteBoundary = null;
+  limpiarMarcasMapa(); _estabActual = estabSlug || "";
   document.getElementById("leyenda-capas").innerHTML = "";
   document.getElementById("capas-datos").innerHTML = "";
   document.getElementById("panel-capas").style.display = "none";
@@ -430,6 +502,8 @@ async function cargarCapasLote(nombreEnc, estabSlug) {
     console.log(`/contexto → ${(performance.now() - t0).toFixed(0)}ms`);
     console.log("contexto:", { aog: ctx.capas?.aog, vistax: ctx.capas?.vistax, externas_keys: Object.keys(ctx.capas?.externas || {}) });
     const externas = ctx.capas?.externas || {};
+    // Marcas de ingeniero: siempre, aunque no haya capas.
+    renderMarcas(ctx.marcas || []);
     const todasCapas = Object.entries(externas).flatMap(([subtipo, capas]) =>
       capas.map(c => ({ ...c, subtipo }))
     );
@@ -1154,6 +1228,227 @@ function limpiarMapa() {
   document.getElementById("leyenda-capas").innerHTML     = "";
   document.getElementById("mapa-estado").textContent     = _lista.length + " lote" + (_lista.length !== 1 ? "s" : "");
   if (typeof OrbitNDVI !== "undefined") OrbitNDVI.setLoteBoundary(null);
+}
+
+// ── Marcas de ingeniero ────────────────────────────────────
+// "De aca hasta aca se sembro <insumo> a <dosis>": tramo (2+ puntos) o
+// poligono dibujado tocando el mapa. Se guardan en /api/lotes-maestro/:lote/marca
+// y vuelven con el contexto del lote. Color por tipo de insumo.
+let _estabActual = "";
+let _marcas = [];
+let _marcaLayers = [];
+let _marcaDibujo = null;   // { puntos:[[lat,lon]], layer, marcadores:[] } mientras se dibuja
+let _marcaForm = null;
+
+const MARCA_COLOR = { semilla: "#b8ff3c", fertilizante: "#3c9eff", fitosanitario: "#ff6b6b", otro: "#f59e0b" };
+const UNIDAD_TXT  = { sem_m: "sem/m", sem_ha: "sem/ha", kg_ha: "kg/ha", l_ha: "l/ha", pl_ha: "pl/ha", otro: "" };
+const TIPO_TXT    = { semilla: "Semilla", fertilizante: "Fertilizante", fitosanitario: "Fitosanitario", otro: "Otro" };
+
+function marcaTexto(m) {
+  const hayDosis = m.dosis !== null && m.dosis !== undefined && m.dosis !== "";
+  const dosis = hayDosis ? (" · " + m.dosis + " " + (UNIDAD_TXT[m.unidad] || m.unidad || "")).trim() : "";
+  return (TIPO_TXT[m.insumo_tipo] || m.insumo_tipo) + (m.insumo ? ": " + m.insumo : "") + (hayDosis ? " " + dosis : "");
+}
+
+function escapeHtml(t) {
+  return String(t || "").replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function limpiarMarcasMapa() {
+  _marcaLayers.forEach(function (l) { try { _mapa.removeLayer(l); } catch (e) {} });
+  _marcaLayers = [];
+  const el = document.getElementById("marcas-lista"); if (el) el.innerHTML = "";
+}
+
+function renderMarcas(marcas) {
+  _marcas = marcas || [];
+  limpiarMarcasMapa();
+  const lista = document.getElementById("marcas-lista");
+  if (!_marcas.length) {
+    if (lista) lista.innerHTML = '<div style="padding:6px 8px;color:var(--muted2)">Sin marcas. Tocá <b>Marcar</b> y señalá en el mapa de dónde hasta dónde.</div>';
+    return;
+  }
+  _marcas.forEach(function (m) {
+    const pts = (m.geom && m.geom.puntos ? m.geom.puntos : []).map(function (p) { return [p[0], p[1]]; });
+    if (pts.length < 2) return;
+    const color = MARCA_COLOR[m.insumo_tipo] || MARCA_COLOR.otro;
+    const layer = m.geom.tipo === "poligono"
+      ? L.polygon(pts, { color: color, weight: 2, opacity: 0.95, fillColor: color, fillOpacity: 0.18, dashArray: "6 4" })
+      : L.polyline(pts, { color: color, weight: 6, opacity: 0.9, lineCap: "round" });
+    layer.bindTooltip('<b style="color:' + color + '">' + escapeHtml(marcaTexto(m)) + '</b><br><span style="font-size:10px">' + escapeHtml(m.fecha || "") + (m.notas ? " · " + escapeHtml(m.notas).slice(0, 80) : "") + '</span>', { sticky: true });
+    layer.on("click", function () { centrarMarca(m._id); });
+    layer.addTo(_mapa);
+    _marcaLayers.push(layer);
+    if (m.geom.tipo !== "poligono") {
+      [pts[0], pts[pts.length - 1]].forEach(function (p) {
+        const c = L.circleMarker(p, { radius: 6, color: "#000", weight: 1.5, fillColor: color, fillOpacity: 1 }).addTo(_mapa);
+        _marcaLayers.push(c);
+      });
+    }
+  });
+  if (lista) lista.innerHTML = _marcas.map(function (m) {
+    const color = MARCA_COLOR[m.insumo_tipo] || MARCA_COLOR.otro;
+    return '<div class="marca-item">' +
+      '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="centrarMarca(\'' + m._id + '\')">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:' + color + ';flex-shrink:0"></span>' +
+        '<span style="color:#fff;flex:1">' + escapeHtml(marcaTexto(m)) + '</span>' +
+      '</div>' +
+      '<div style="color:var(--muted2);margin:3px 0 0 16px">' + escapeHtml(m.fecha || "") + (m.creado_por ? " · " + escapeHtml(m.creado_por) : "") + (m.geom && m.geom.tipo === "poligono" ? " · polígono" : "") + '</div>' +
+      (m.notas ? '<div style="color:var(--text);margin:3px 0 0 16px;white-space:pre-wrap">' + escapeHtml(m.notas) + '</div>' : "") +
+      '<div style="display:flex;gap:4px;margin:6px 0 0 16px">' +
+        '<button class="btn btn-sm btn-ghost" style="font-size:10px" onclick="editarMarca(\'' + m._id + '\')">✏ editar</button>' +
+        '<button class="btn btn-sm btn-ghost" style="font-size:10px;color:var(--red)" onclick="borrarMarca(\'' + m._id + '\')">🗑</button>' +
+      '</div>' +
+    '</div>';
+  }).join("");
+}
+
+function centrarMarca(id) {
+  const m = _marcas.find(function (x) { return x._id === id; }); if (!m) return;
+  const pts = m.geom.puntos.map(function (p) { return [p[0], p[1]]; });
+  _mapa.fitBounds(pts, { padding: [60, 60], maxZoom: 18 });
+}
+
+// ── dibujo ──
+function iniciarMarca() {
+  if (!_loteActual) { toast("Marcas", "Primero elegí un lote", "red"); return; }
+  cancelarMarca();
+  _marcaDibujo = { puntos: [], layer: null, marcadores: [] };
+  document.getElementById("marca-barra").style.display = "flex";
+  document.getElementById("marca-barra-txt").textContent = "Tocá el mapa: primero de dónde, después hasta dónde";
+  document.getElementById("marca-btn-listo").disabled = true;
+  _mapa.getContainer().style.cursor = "crosshair";
+  _mapa.on("click", marcaClickMapa);
+  if (window.innerWidth <= 768) document.getElementById("mapa").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function marcaClickMapa(e) {
+  if (!_marcaDibujo) return;
+  _marcaDibujo.puntos.push([e.latlng.lat, e.latlng.lng]);
+  marcaRedibujar();
+}
+
+function marcaRedibujar() {
+  const d = _marcaDibujo; if (!d) return;
+  if (d.layer) { _mapa.removeLayer(d.layer); d.layer = null; }
+  d.marcadores.forEach(function (m) { _mapa.removeLayer(m); }); d.marcadores = [];
+  const poli = document.getElementById("marca-poligono").checked;
+  if (d.puntos.length >= 2) {
+    d.layer = (poli && d.puntos.length >= 3)
+      ? L.polygon(d.puntos, { color: "#fff", weight: 2, dashArray: "6 4", fillColor: "#fff", fillOpacity: 0.12 })
+      : L.polyline(d.puntos, { color: "#fff", weight: 5, dashArray: "8 6", lineCap: "round" });
+    d.layer.addTo(_mapa);
+  }
+  d.puntos.forEach(function (p, i) {
+    const c = L.circleMarker(p, { radius: 7, color: "#000", weight: 1.5, fillColor: "#fff", fillOpacity: 1 }).addTo(_mapa);
+    const esExtremo = i === 0 || i === d.puntos.length - 1;
+    c.bindTooltip(i === 0 ? "desde" : (i === d.puntos.length - 1 ? "hasta" : ""), { permanent: esExtremo, direction: "top", offset: [0, -6] });
+    d.marcadores.push(c);
+  });
+  const n = d.puntos.length;
+  document.getElementById("marca-barra-txt").textContent =
+    n === 0 ? "Tocá el mapa: primero de dónde, después hasta dónde"
+    : n === 1 ? "Ahora tocá hasta dónde (podés agregar más puntos)"
+    : n + " puntos" + (poli ? " · polígono" : "") + " · seguí tocando o Listo";
+  document.getElementById("marca-btn-listo").disabled = n < 2 || (poli && n < 3);
+}
+
+function marcaDeshacer() { if (_marcaDibujo && _marcaDibujo.puntos.length) { _marcaDibujo.puntos.pop(); marcaRedibujar(); } }
+
+function cancelarMarca() {
+  if (_marcaDibujo) {
+    if (_marcaDibujo.layer) _mapa.removeLayer(_marcaDibujo.layer);
+    _marcaDibujo.marcadores.forEach(function (m) { _mapa.removeLayer(m); });
+  }
+  _marcaDibujo = null;
+  try { _mapa.off("click", marcaClickMapa); _mapa.getContainer().style.cursor = ""; } catch (e) {}
+  document.getElementById("marca-barra").style.display = "none";
+}
+
+function terminarMarca() {
+  if (!_marcaDibujo || _marcaDibujo.puntos.length < 2) return;
+  const poli = document.getElementById("marca-poligono").checked && _marcaDibujo.puntos.length >= 3;
+  abrirMarcaModal({ geom: { tipo: poli ? "poligono" : "tramo", puntos: _marcaDibujo.puntos.slice() } });
+}
+
+// ── formulario ──
+function distanciaTramo(pts) {
+  let d = 0;
+  for (let i = 1; i < pts.length; i++) d += _mapa.distance(L.latLng(pts[i - 1][0], pts[i - 1][1]), L.latLng(pts[i][0], pts[i][1]));
+  return d;
+}
+
+function abrirMarcaModal(m) {
+  _marcaForm = m;
+  document.getElementById("marca-modal-titulo").textContent = m._id ? "Editar marca" : "Nueva marca";
+  const n = m.geom && m.geom.puntos ? m.geom.puntos.length : 0;
+  const esPoli = m.geom && m.geom.tipo === "poligono";
+  document.getElementById("marca-modal-geom").textContent = (esPoli ? "Polígono" : "Tramo") + " de " + n + " puntos" + (n >= 2 && !esPoli ? " · " + (distanciaTramo(m.geom.puntos) / 1000).toFixed(2) + " km" : "");
+  document.getElementById("mk-tipo").value   = m.insumo_tipo || "semilla";
+  document.getElementById("mk-fecha").value  = m.fecha || new Date().toISOString().slice(0, 10);
+  document.getElementById("mk-insumo").value = m.insumo || "";
+  document.getElementById("mk-dosis").value  = (m.dosis === null || m.dosis === undefined) ? "" : m.dosis;
+  document.getElementById("mk-unidad").value = m.unidad || (m.insumo_tipo === "fertilizante" ? "kg_ha" : "sem_m");
+  document.getElementById("mk-notas").value  = m.notas || "";
+  document.getElementById("marca-modal-err").style.display = "none";
+  document.getElementById("marca-modal").style.display = "flex";
+}
+document.addEventListener("change", function (e) {
+  if (e.target && e.target.id === "mk-tipo") {
+    const u = document.getElementById("mk-unidad");
+    if (e.target.value === "fertilizante") u.value = "kg_ha";
+    else if (e.target.value === "fitosanitario") u.value = "l_ha";
+    else if (e.target.value === "semilla") u.value = "sem_m";
+  }
+});
+function cerrarMarcaModal() { document.getElementById("marca-modal").style.display = "none"; }
+
+async function guardarMarca() {
+  if (!_marcaForm || !_loteActual) return;
+  const body = {
+    geom: _marcaForm.geom,
+    insumo_tipo: document.getElementById("mk-tipo").value,
+    fecha: document.getElementById("mk-fecha").value,
+    insumo: document.getElementById("mk-insumo").value.trim(),
+    dosis: document.getElementById("mk-dosis").value,
+    unidad: document.getElementById("mk-unidad").value,
+    notas: document.getElementById("mk-notas").value.trim(),
+  };
+  if (_estabActual) body.estab = _estabActual;
+  const btn = document.getElementById("mk-guardar"); btn.disabled = true;
+  try {
+    const enc = encodeURIComponent(_loteActual);
+    const r = _marcaForm._id
+      ? await Auth.patch("/api/lotes-maestro/" + enc + "/marca/" + _marcaForm._id, body)
+      : await Auth.post("/api/lotes-maestro/" + enc + "/marca", body);
+    if (!r || r.ok === false) throw new Error((r && r.error) || "No se pudo guardar");
+    cerrarMarcaModal(); cancelarMarca();
+    if (_marcaForm._id) _marcas = _marcas.map(function (x) { return x._id === r.marca._id ? r.marca : x; });
+    else _marcas = [r.marca].concat(_marcas);
+    renderMarcas(_marcas);
+    toast("✓ Marca guardada", marcaTexto(r.marca), "lime");
+  } catch (e) {
+    const err = document.getElementById("marca-modal-err"); err.textContent = e.message; err.style.display = "block";
+  } finally { btn.disabled = false; }
+}
+
+function editarMarca(id) {
+  const m = _marcas.find(function (x) { return x._id === id; }); if (!m) return;
+  abrirMarcaModal(Object.assign({}, m));
+}
+
+async function borrarMarca(id) {
+  const m = _marcas.find(function (x) { return x._id === id; }); if (!m) return;
+  if (!confirm('¿Borrar la marca "' + marcaTexto(m) + '"?')) return;
+  try {
+    const enc = encodeURIComponent(_loteActual);
+    await Auth.del("/api/lotes-maestro/" + enc + "/marca/" + id + (_estabActual ? "?estab=" + encodeURIComponent(_estabActual) : ""));
+    _marcas = _marcas.filter(function (x) { return x._id !== id; });
+    renderMarcas(_marcas);
+    toast("Marca borrada", "", "lime");
+  } catch (e) { toast("Marcas", "No se pudo borrar: " + e.message, "red"); }
 }
 
 // ── Loading helpers ────────────────────────────────────────
