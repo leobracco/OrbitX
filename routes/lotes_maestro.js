@@ -594,6 +594,17 @@ function validarMarca(b) {
   };
 }
 
+// El JWT no trae nombre ni email (solo uid): para que la marca diga quien la
+// hizo se busca el usuario en la DB global. Best-effort: si falla, usr_<uid>.
+async function nombreUsuario(jwtUser) {
+  const uid = jwtUser?.uid;
+  if (!uid) return "?";
+  try {
+    const u = await db.getDB("global").get(`usr_${uid}`);
+    return u.nombre || u.email || `usr_${uid}`;
+  } catch { return `usr_${uid}`; }
+}
+
 function slugMarca(req) {
   const jwtUser = req.jwtUser || req.user;
   let slug = jwtUser?.estabSlug || jwtUser?.estab_slug;
@@ -627,7 +638,7 @@ router.post("/:nombre/marca", async (req, res) => {
     const now     = Date.now();
     const id      = `lote_marca_${r.slug}_${nombre}_${now}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 220);
     const doc = { _id: id, tipo: "lote_marca", lote_ref: nombre, estab_slug: r.slug, ...v.ok,
-      creado_por: r.jwtUser?.nombre || r.jwtUser?.email || `usr_${r.jwtUser?.uid || "?"}`, ts: now };
+      creado_por: await nombreUsuario(r.jwtUser), ts: now };
     await estabDB.insert(doc);
     res.json({ ok: true, marca: limpiarMarca(doc) });
   } catch (e) { console.error("[lotes-maestro/marca]", e.message); res.status(500).json({ error: e.message }); }
