@@ -56,6 +56,7 @@ const CATALOGO = {
   nodos_live:       "Nodos que ve el Engine: online/offline, IP, version, ultimo visto",
   nodo_estado:      "Matriz wifi/mqtt/target/status de un nodo (param: uid)",
   ping:             "Ping a una IP privada de la LAN (param: ip)",
+  corte_config:     "Config del corte (rumbo, anticipacion, secciones, implemento) + motores QuantiX + live",
 };
 
 // Un pedido que nadie levanta no se acumula para siempre: si la pantalla
