@@ -186,7 +186,27 @@ app.use("/api/sync", auth.required, routeSync);
 app.use("/api/lotes", auth.required, routeLotes);
 app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
-app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
+// Lotes maestros: iba sólo con auth.required, o sea que CUALQUIER usuario
+// logueado —incluido un viewer— podía crear lotes, editarles la metadata y
+// borrarles capas. La matriz PERMS ya existía (middleware/auth.js) y no se
+// estaba usando acá.
+//
+// El permiso va por método porque el router mezcla lectura y escritura:
+// GET lee, DELETE borra, el resto muta. La excepción es /shp-to-geojson, que
+// convierte un shapefile a GeoJSON para dibujarlo en el mapa y no toca ningún
+// dato: exigirle "write" le sacaría al agrónomo la carga de shapefiles, que
+// hoy puede hacer.
+//
+// Ojo: requirePermiso rechaza devices a propósito. Ninguna ruta de este router
+// la consume un device (el tractor va por /api/aog y /api/prescripciones), así
+// que no rompe el sync.
+app.use("/api/lotes-maestro", auth.required, (req, res, next) => {
+  if (req.method === "GET" || req.path === "/shp-to-geojson")
+    return auth.requirePermiso("lotes", "read")(req, res, next);
+  if (req.method === "DELETE")
+    return auth.requirePermiso("lotes", "delete")(req, res, next);
+  return auth.requirePermiso("lotes", "write")(req, res, next);
+}, routeLotesMaestro);
 app.use("/api/integraciones", auth.required, routeIntegraciones);
 if (routeNDVI) app.use("/api/ndvi", auth.required, routeNDVI);
 // Tracking: POST position sin JWT (device auth), GET live/history con JWT.
