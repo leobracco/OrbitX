@@ -9,7 +9,7 @@ const SHELL = [
   "/app/", "/app/index.html", "/app/app.css", "/app/main.js", "/app/manifest.webmanifest",
   "/app/core/store.js", "/app/core/api.js", "/app/core/auth.js", "/app/core/sync.js",
   "/app/core/permisos.js", "/app/core/fecha.js", "/app/core/socket.js", "/app/core/push.js",
-  "/app/ui/nav.js", "/app/ui/sheet.js", "/app/ui/toast.js",
+  "/app/ui/nav.js", "/app/ui/sheet.js", "/app/ui/toast.js", "/app/ui/html.js",
   "/app/pantallas/mapa.js", "/app/pantallas/lotes.js", "/app/pantallas/lluvias.js",
   "/app/pantallas/alertas.js", "/app/pantallas/equipos.js",
   "/app/icons/icon-192.png", "/app/icons/icon-512.png",

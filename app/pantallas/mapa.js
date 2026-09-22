@@ -4,6 +4,7 @@
 // sobre fondo liso (los tiles no se cachean, ver spec).
 import { crearSheet } from "../ui/sheet.js";
 import { haceCuanto } from "../core/fecha.js";
+import { esc } from "../ui/html.js";
 
 const TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const VIEJO_MS = 2 * 60 * 1000; // sin dato hace >2 min → marcador amarillo (mismo criterio que devices.js:254)
@@ -39,7 +40,7 @@ export async function montar(ctx, root) {
       const viejo = Date.now() - d.ts > VIEJO_MS; viejo ? viejas++ : activas++;
       const li = document.createElement("li");
       li.innerHTML = `<button class="fila"><span class="dot ${viejo ? "warn" : "ok"}"></span>
-        <span class="txt"><b>${d.nombre || d.device_id}</b><span>${d.field ? "Lote " + d.field + " · " : ""}${(d.speed ?? 0).toFixed(1)} km/h</span></span>
+        <span class="txt"><b>${esc(d.nombre || d.device_id)}</b><span>${d.field ? "Lote " + esc(d.field) + " · " : ""}${(d.speed ?? 0).toFixed(1)} km/h</span></span>
         <span class="val">${haceCuanto(d.ts)}</span></button>`;
       li.querySelector("button").addEventListener("click", () => { mapa.setView([d.lat, d.lon], 16); sheet.cerrar(); });
       ul.appendChild(li);
@@ -55,7 +56,7 @@ export async function montar(ctx, root) {
       capaLotes.clearLayers();
       const bounds = [];
       for (const l of lotes.data) if (Array.isArray(l.boundary) && l.boundary.length > 2) {
-        L.polygon(l.boundary, { color: "#A4BA3E", weight: 1.5, fillOpacity: 0.08 }).bindTooltip(l.nombre, { permanent: false }).addTo(capaLotes);
+        L.polygon(l.boundary, { color: "#A4BA3E", weight: 1.5, fillOpacity: 0.08 }).bindTooltip(esc(l.nombre), { permanent: false }).addTo(capaLotes);
         bounds.push(...l.boundary);
       }
       for (const m of marcadores.values()) bounds.push(m.marker.getLatLng());
