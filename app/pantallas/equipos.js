@@ -7,7 +7,11 @@ export async function montar(ctx, root) {
   root.classList.add("scroll");
   async function cargar() {
     let r;
-    try { r = await ctx.api.get("/api/devices"); } catch (e) { root.innerHTML = `<div class="vacio">${esc(e.message)}</div>`; return; }
+    // Siempre con ?estab=: para un superadmin, /api/devices sin filtro devuelve
+    // los equipos de TODAS las orgs (comportamiento del panel).
+    const org = ctx.usuario?.org_activa;
+    const url = org ? `/api/devices?estab=${encodeURIComponent(org)}` : "/api/devices";
+    try { r = await ctx.api.get(url); } catch (e) { root.innerHTML = `<div class="vacio">${esc(e.message)}</div>`; return; }
     ctx.nav.setOffline(r.desdeCache, r.ts);
     const eq = [...r.data].sort((a, b) => (b.online - a.online) || ((b.ultimo_visto || 0) - (a.ultimo_visto || 0)));
     const on = eq.filter(d => d.online).length;
