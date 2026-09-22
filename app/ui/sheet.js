@@ -1,6 +1,7 @@
 // sheet.js — Panel inferior arrastrable (mapa protagonista). Tres alturas:
 // min (solo el resumen), medio (lista), max (casi todo). Se arrastra desde
-// el handle o el encabezado; un toque en el handle alterna min/medio.
+// el handle; un toque en el handle alterna min/medio. Llama a destruir()
+// al desmontar la pantalla para liberar el listener de resize.
 const ALTURAS = { min: 0.22, medio: 0.48, max: 0.85 };
 
 export function crearSheet(el) {
@@ -36,5 +37,5 @@ export function crearSheet(el) {
   el.addEventListener("touchend", fin);
   window.addEventListener("resize", aplicar);
   aplicar();
-  return { setAltura, abrir: () => setAltura("medio"), cerrar: () => setAltura("min") };
+  return { setAltura, abrir: () => setAltura("medio"), cerrar: () => setAltura("min"), destruir: () => window.removeEventListener("resize", aplicar) };
 }

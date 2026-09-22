@@ -2,7 +2,7 @@
 // Las pantallas se cargan bajo demanda desde pantallas/<nombre>.js y reciben
 // un ctx común. Registra el service worker y maneja el aviso de versión nueva.
 import { crearStore, idbBackend } from "./core/store.js";
-import { crearApi, ErrorHttp } from "./core/api.js";
+import { crearApi } from "./core/api.js";
 import { crearAuth } from "./core/auth.js";
 import { crearSync } from "./core/sync.js";
 import { pestanasPara } from "./core/permisos.js";
@@ -21,6 +21,11 @@ const sync  = crearSync({ store, api, onEvento: (e) => {
 sync.escuchar(window);
 
 let ctx = null, actual = null, nav = null;
+
+// Registrar listeners a nivel de módulo: solo actúan si hay sesión (ctx).
+window.addEventListener("hashchange", () => { if (ctx) enrutar(); });
+window.addEventListener("online",  () => { if (!ctx) return; nav.setOffline(false); enrutar(); });
+window.addEventListener("offline", () => { if (ctx) nav.setOffline(true); });
 
 function mostrarLogin(msg) {
   $("topbar").hidden = true; $("pantalla").hidden = true; $("nav").hidden = true;
@@ -63,9 +68,6 @@ async function arrancar() {
   const socket = conectarSocket({ token: auth.token(), onPosicion: (p) => ctx.onPosicion?.(p), onEstado: (s) => { if (s === "conectado") nav.setOffline(false); } });
   ctx = { api, store, auth, sync, usuario, rol, toast, socket, nav, onPosicion: null };
 
-  window.addEventListener("hashchange", enrutar);
-  window.addEventListener("online",  () => { nav.setOffline(false); enrutar(); });
-  window.addEventListener("offline", () => nav.setOffline(true));
   if (!navigator.onLine) nav.setOffline(true);
   sync.drenar();
   await enrutar();

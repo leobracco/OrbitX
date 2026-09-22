@@ -44,15 +44,18 @@ self.addEventListener("message", (ev) => { if (ev.data === "SKIP_WAITING") self.
 self.addEventListener("fetch", (ev) => {
   const url = new URL(ev.request.url);
   if (ev.request.method !== "GET") return;
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/socket.io/") || url.pathname === VERSION_URL) return;
+  // /socket.io/ son conexiones (websocket/polling) y no se interceptan; el
+  // script cliente /socket.io/socket.io.js sí es parte del shell y se cachea.
+  const esScriptSocket = url.pathname === "/socket.io/socket.io.js";
+  if (url.pathname.startsWith("/api/") || (url.pathname.startsWith("/socket.io/") && !esScriptSocket) || url.pathname === VERSION_URL) return;
   if (url.origin !== location.origin) return; // tiles del mapa: nunca se cachean acá
   ev.respondWith((async () => {
     const c = await caches.open(CACHE);
-    const hit = await c.match(ev.request, { ignoreSearch: true });
+    const hit = await c.match(ev.request, { ignoreSearch: true, ignoreVary: true });
     if (hit) return hit;
     try {
       const res = await fetch(ev.request);
-      if (res.ok && url.pathname.startsWith("/app/")) c.put(ev.request, res.clone());
+      if (res.ok && (url.pathname.startsWith("/app/") || esScriptSocket)) c.put(ev.request, res.clone());
       return res;
     } catch {
       if (ev.request.mode === "navigate") return (await c.match("/app/index.html")) || Response.error();
