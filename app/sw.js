@@ -64,4 +64,21 @@ self.addEventListener("fetch", (ev) => {
   })());
 });
 
-// Push: se completa en la Tarea 14.
+self.addEventListener("push", (ev) => {
+  let p = {};
+  try { p = ev.data?.json() || {}; } catch { p = { titulo: "OrbitX", cuerpo: ev.data?.text() || "" }; }
+  ev.waitUntil(self.registration.showNotification(p.titulo || "OrbitX", {
+    body: p.cuerpo || "", icon: "/app/icons/icon-192.png", badge: "/app/icons/icon-192.png",
+    data: { url: p.url || "/app/" }, tag: p.url || "orbitx", renotify: true,
+  }));
+});
+
+self.addEventListener("notificationclick", (ev) => {
+  ev.notification.close();
+  const url = ev.notification.data?.url || "/app/";
+  ev.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(cs => {
+    const abierta = cs.find(c => c.url.includes("/app/"));
+    if (abierta) { abierta.navigate(url); return abierta.focus(); }
+    return self.clients.openWindow(url);
+  }));
+});
