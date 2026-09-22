@@ -18,9 +18,9 @@ export async function montar(ctx, root) {
     let act, hist;
     try { act = await ctx.api.get("/api/alertas"); } catch (e) {
       root.innerHTML = `<div class="vacio">${esc(e.message)}</div>`;
-      // Sin datos ni cache: que la franja lo diga y el badge no mienta.
+      // Sin datos ni cache: que la franja lo diga. El badge se deja como
+      // estaba: un 0 se leería como "confirmado sin alertas", y no lo sabemos.
       ctx.nav.setOffline(true, null);
-      ctx.nav.setBadge("alertas", 0);
       return;
     }
     try { hist = await ctx.api.get("/api/alertas/historial?limit=50"); } catch { hist = { data: [] }; }
