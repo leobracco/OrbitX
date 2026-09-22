@@ -16,7 +16,7 @@ async function lista(ctx, root) {
     <li><a class="fila" href="#/lotes/${encodeURIComponent(l._id)}" style="text-decoration:none">
       <span class="dot ${l.fecha_fin ? "" : "ok"}"></span>
       <span class="txt"><b>${esc(l.nombre || l._id)}</b><span>${esc(l.cultivo || "sin cultivo")}${l.fecha_inicio ? " · " + fechaCorta(l.fecha_inicio) : ""}</span></span>
-      <span class="val">${Array.isArray(l.boundary) ? "▸" : "sin límite"}</span>
+      <span class="val">${Array.isArray(l.boundary) && l.boundary.length > 2 ? "▸" : "sin límite"}</span>
     </a></li>`).join("")}</ul>` : `<div class="vacio">Todavía no hay lotes sincronizados desde PilotX.</div>`;
   return { desmontar() {} };
 }
@@ -32,10 +32,16 @@ async function detalle(ctx, root, id) {
     ${Array.isArray(l.boundary) && l.boundary.length > 2 ? `<div class="mini-mapa" id="mini"></div>` : `<div class="card"><p>Este lote no tiene límite dibujado.</p></div>`}
     <div class="titulo-seccion">Lluvias en este lote</div><ul class="lista" id="lluvias-lote"><li class="vacio">Cargando…</li></ul>`;
   if (root.querySelector("#mini")) {
-    mapa = L.map("mini", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false });
-    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}").addTo(mapa);
-    const poly = L.polygon(l.boundary, { color: "#A4BA3E", weight: 2, fillOpacity: 0.12 }).addTo(mapa);
-    mapa.fitBounds(poly.getBounds(), { padding: [10, 10] });
+    try {
+      mapa = L.map("mini", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false });
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}").addTo(mapa);
+      const poly = L.polygon(l.boundary, { color: "#A4BA3E", weight: 2, fillOpacity: 0.12 }).addTo(mapa);
+      mapa.fitBounds(poly.getBounds(), { padding: [10, 10] });
+    } catch (e) {
+      console.warn("[lotes] no se pudo dibujar el límite:", e.message);
+      mapa?.remove(); mapa = null;
+      root.querySelector("#mini").outerHTML = `<div class="card"><p>No se pudo dibujar el límite de este lote.</p></div>`;
+    }
   }
   try {
     const ll = await ctx.api.get(`/api/lluvias?lote=${encodeURIComponent(l.nombre || "")}`);
