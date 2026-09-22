@@ -55,13 +55,27 @@ $("btn-salir").addEventListener("click", async () => {
 });
 $("btn-org").addEventListener("click", elegirOrg);
 
+// Lista de establecimientos elegibles: el superadmin no tiene membresías,
+// elige entre TODAS las orgs (/api/admin/orgs); el resto, entre sus membresías.
+async function orgsElegibles(u) {
+  if (u?.rol_global === "superadmin") {
+    const { data } = await api.get("/api/admin/orgs");
+    return (data || []).filter(o => o.activa !== false).map(o => ({ slug: o.slug, nombre: o.nombre || o.slug }));
+  }
+  return (u?.memberships || []).map(m => ({ slug: m.orgSlug, nombre: m.orgNombre || m.orgSlug }));
+}
+
 async function elegirOrg() {
-  const u = auth.usuario(); const ms = u?.memberships || [];
-  if (ms.length < 2) return;
-  const opciones = ms.map((m, i) => `${i + 1}) ${m.orgNombre || m.orgSlug}`).join("\n");
-  const r = prompt(`Elegí establecimiento:\n${opciones}`, "1");
-  const m = ms[parseInt(r, 10) - 1]; if (!m) return;
-  try { await auth.cambiarOrg(m.orgSlug); location.reload(); } catch (e) { toast(e.message, "error"); }
+  const u = auth.usuario();
+  let orgs;
+  try { orgs = await orgsElegibles(u); } catch (e) { toast(e.message, "error"); return; }
+  if (orgs.length < 2 && u?.rol_global !== "superadmin") return;
+  if (!orgs.length) { toast("No hay establecimientos para elegir", "error"); return; }
+  const actualIdx = Math.max(0, orgs.findIndex(o => o.slug === u?.org_activa));
+  const opciones = orgs.map((o, i) => `${i + 1}) ${o.nombre}${o.slug === u?.org_activa ? " (actual)" : ""}`).join("\n");
+  const r = prompt(`Elegí establecimiento:\n${opciones}`, String(actualIdx + 1));
+  const o = orgs[parseInt(r, 10) - 1]; if (!o || o.slug === u?.org_activa) return;
+  try { await auth.cambiarOrg(o.slug); location.reload(); } catch (e) { toast(e.message, "error"); }
 }
 
 async function arrancar() {
@@ -73,7 +87,11 @@ async function arrancar() {
   }
   const rol = usuario.rol_efectivo || usuario.rol_global || "viewer";
   $("login").hidden = true; $("topbar").hidden = false; $("pantalla").hidden = false;
-  $("org-nombre").textContent = (usuario.memberships || []).find(m => m.orgSlug === usuario.org_activa)?.orgNombre || usuario.org_activa || "Sin establecimiento";
+  $("org-nombre").textContent = (usuario.memberships || []).find(m => m.orgSlug === usuario.org_activa)?.orgNombre || usuario.org_activa || "Elegir establecimiento ▾";
+  // El nombre lindo de la org lo trae /api/admin/orgs (superadmin) — se completa
+  // sin bloquear el arranque.
+  if (usuario.rol_global === "superadmin" && usuario.org_activa)
+    orgsElegibles(usuario).then(orgs => { const o = orgs.find(x => x.slug === usuario.org_activa); if (o) $("org-nombre").textContent = o.nombre; }).catch(() => {});
 
   nav = crearNav({ pestanas: pestanasPara(rol), onIr: (p) => { location.hash = `#/${p}`; } });
   const socket = conectarSocket({ token: auth.token(), onPosicion: (p) => ctx.onPosicion?.(p), onEstado: (s) => { if (s === "conectado") nav.setOffline(false); } });
