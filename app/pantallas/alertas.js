@@ -25,6 +25,18 @@ async function tarjetaPush() {
 
 export async function montar(ctx, root) {
   root.classList.add("scroll");
+
+  function engancharBotonPush() {
+    root.querySelector("#btn-push")?.addEventListener("click", async (ev) => {
+      ev.target.disabled = true;
+      try {
+        if (await suscripcionActual()) { await desuscribirPush(ctx.api); ctx.toast("Notificaciones desactivadas", "ok"); }
+        else { const r = await suscribirPush(ctx.api); ctx.toast(r.ok ? "Notificaciones activadas" : r.motivo, r.ok ? "ok" : "error"); }
+      } catch (e) { ctx.toast(e.message, "error"); }
+      cargar();
+    });
+  }
+
   async function cargar() {
     let act, hist;
     try { act = await ctx.api.get("/api/alertas"); } catch (e) {
@@ -39,19 +51,15 @@ export async function montar(ctx, root) {
     ctx.nav.setBadge("alertas", act.data.length);
     const activasIds = new Set(act.data.map(a => a._id));
     const pasadas = hist.data.filter(a => !activasIds.has(a._id));
-    root.innerHTML = `${await tarjetaPush()}
+    root.innerHTML = `<div id="slot-push"></div>
       <div class="titulo-seccion">Activas · ${act.data.length}</div>
       <ul class="lista">${act.data.length ? act.data.map(fila).join("") : `<li class="vacio">Sin alertas activas. 👌</li>`}</ul>
       <div class="titulo-seccion">Historial</div>
       <ul class="lista">${pasadas.length ? pasadas.map(fila).join("") : `<li class="vacio">Sin historial.</li>`}</ul>`;
-    root.querySelector("#btn-push")?.addEventListener("click", async (ev) => {
-      ev.target.disabled = true;
-      try {
-        if (await suscripcionActual()) { await desuscribirPush(ctx.api); ctx.toast("Notificaciones desactivadas", "ok"); }
-        else { const r = await suscribirPush(ctx.api); ctx.toast(r.ok ? "Notificaciones activadas" : r.motivo, r.ok ? "ok" : "error"); }
-      } catch (e) { ctx.toast(e.message, "error"); }
-      cargar();
-    });
+    tarjetaPush().then((html) => {
+      const slot = root.querySelector("#slot-push");
+      if (slot) { slot.outerHTML = html; engancharBotonPush(); }
+    }).catch((e) => console.warn("[alertas] tarjeta push:", e.message));
   }
   await cargar();
   const timer = setInterval(cargar, 60000);
