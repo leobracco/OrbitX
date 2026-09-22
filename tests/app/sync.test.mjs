@@ -70,3 +70,43 @@ test("los items en estado error no se reintentan solos", async () => {
   await sync.drenar();
   assert.equal(llamadas, 0);
 });
+
+test("si colaQuitar falla tras un post exitoso, NO se reenvía: el item pasa a error", async () => {
+  let posts = 0;
+  const { store, sync } = arma(async () => { posts++; return { _id: "real" }; });
+  const it = await store.colaAgregar({ metodo: "POST", ruta: "/api/lluvias", body: { mm: 4 } });
+  const quitarOriginal = store.colaQuitar;
+  store.colaQuitar = async () => { throw new Error("IndexedDB roto"); };
+  const r1 = await sync.drenar();
+  assert.equal(posts, 1);
+  assert.equal(r1.enviados, 1);
+  const [q] = await store.colaListar();
+  assert.equal(q.id, it.id);
+  assert.equal(q.estado, "error");
+  assert.match(q.error, /no se pudo limpiar/i);
+  store.colaQuitar = quitarOriginal;
+  await sync.drenar();
+  assert.equal(posts, 1, "no debe reenviar un item ya procesado por el server");
+});
+
+test("un onEvento que lanza no interrumpe el drenado ni confunde el resultado", async () => {
+  const store = crearStore(memBackend());
+  const sync = crearSync({ store, api: { post: async () => ({}) }, onEvento: () => { throw new Error("bug en la UI"); } });
+  await store.colaAgregar({ metodo: "POST", ruta: "/a", body: {} });
+  await store.colaAgregar({ metodo: "POST", ruta: "/b", body: {} });
+  const r = await sync.drenar();
+  assert.equal(r.enviados, 2);
+  assert.equal(r.detenido, false);
+  assert.deepEqual(await store.colaListar(), []);
+});
+
+test("reintentar vuelve un item en error a pendiente y lo drena", async () => {
+  let posts = 0;
+  const { store, sync } = arma(async () => { posts++; return {}; });
+  const it = await store.colaAgregar({ metodo: "POST", ruta: "/x", body: {} });
+  await store.colaActualizar(it.id, { estado: "error", intentos: 3, error: "algo" });
+  const r = await sync.reintentar(it.id);
+  assert.equal(posts, 1);
+  assert.equal(r.enviados, 1);
+  assert.deepEqual(await store.colaListar(), []);
+});
