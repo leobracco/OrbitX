@@ -292,8 +292,11 @@ Criterios de aceptación).
 5. El mapa muestra las máquinas moviéndose en vivo vía socket.io.
 6. Una alerta nueva llega como notificación push en Android, y en iPhone con la app
    instalada en la pantalla de inicio.
-7. Un usuario con rol `viewer` no ve la pestaña Equipos, y un `operador` solo ve su propio
-   dispositivo y su lote activo.
+7. Un usuario con rol `viewer` no ve la pestaña Equipos. (Decisión 2026-09-22: en Fase 1
+   el `operador` y el `contratista` ven el establecimiento completo, igual que en el panel
+   de escritorio — el server no filtra `/api/devices` ni `/api/lotes` por fila y no existe
+   todavía un vínculo operador→máquina en los datos. El filtrado por máquina/lote queda
+   para Fase 2 y se resuelve del lado del server, no de la app.)
 8. La pestaña Equipos marca online a los equipos cuyo `ultimo_visto` tiene menos de 2
    minutos, igual que el panel de escritorio.
 
@@ -323,3 +326,5 @@ Quedan para fases siguientes, sobre esta misma base:
 | Sin mapa base offline | Se muestran lotes y recorridos vectoriales; se comunica la limitación al usuario |
 | Sin bundler, muchos módulos = muchos requests | Se sirven con HTTP/2 y se cachean en el service worker tras la primera carga |
 | El repo tiene 30 archivos modificados sin commitear | El trabajo de la app va en `app/`, carpeta nueva, sin tocar lo existente salvo el endpoint de push |
+| JWT de 30 días guardado en `localStorage` (riesgo asumido, revisión final 2026-09-22) | `/app` comparte origen con el panel EJS; un XSS del origen leería el token. Mitigado por el escape HTML sistemático (`esc()`) y `connect-src`/allowlist del lado del server. Mejora posible en Fase 2: TTL más corto para tokens emitidos desde la app |
+| La versión del shell vive en dos lugares (`app/version.json` y la constante `VERSION` de `sw.js`) | `npm run app:version` los bumpea juntos y un test falla si no coinciden. Si se desincronizan, el service worker no detecta el deploy |
