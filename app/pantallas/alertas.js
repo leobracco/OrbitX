@@ -16,7 +16,13 @@ export async function montar(ctx, root) {
   root.classList.add("scroll");
   async function cargar() {
     let act, hist;
-    try { act = await ctx.api.get("/api/alertas"); } catch (e) { root.innerHTML = `<div class="vacio">${esc(e.message)}</div>`; return; }
+    try { act = await ctx.api.get("/api/alertas"); } catch (e) {
+      root.innerHTML = `<div class="vacio">${esc(e.message)}</div>`;
+      // Sin datos ni cache: que la franja lo diga y el badge no mienta.
+      ctx.nav.setOffline(true, null);
+      ctx.nav.setBadge("alertas", 0);
+      return;
+    }
     try { hist = await ctx.api.get("/api/alertas/historial?limit=50"); } catch { hist = { data: [] }; }
     ctx.nav.setOffline(act.desdeCache, act.ts);
     ctx.nav.setBadge("alertas", act.data.length);

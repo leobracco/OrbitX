@@ -18,3 +18,10 @@ test("fechaCorta usa TZ Argentina", () => {
 test("fechaISOHoy devuelve YYYY-MM-DD", () => {
   assert.match(fechaISOHoy(), /^\d{4}-\d{2}-\d{2}$/);
 });
+
+test("fechaCorta y haceCuanto no explotan con un timestamp inválido", () => {
+  assert.equal(fechaCorta(undefined), "—");
+  assert.equal(fechaCorta("no es fecha"), "—");
+  assert.equal(haceCuanto(undefined), "—");
+  assert.equal(haceCuanto(NaN, 1000), "—");
+});
