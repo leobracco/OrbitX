@@ -88,3 +88,10 @@ test("si me() falla al cambiar de org, se restaura el token anterior y el usuari
   assert.equal(auth.token(), "T1");
   assert.equal(auth.usuario().org_activa, "campo1");
 });
+
+test("login que no responde corta por timeout", async () => {
+  const cuelga = (_u, { signal }) => new Promise((_, rej) => signal.addEventListener("abort", () => rej(new DOMException("abort", "AbortError"))));
+  const auth = crearAuth({ storage: memStorage(), fetchFn: cuelga, timeoutMs: 30 });
+  await assert.rejects(() => auth.login("a@b.c", "x"), /Sin respuesta/);
+  assert.equal(auth.token(), null);
+});

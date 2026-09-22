@@ -9,6 +9,8 @@ import { pestanasPara } from "./core/permisos.js";
 import { conectarSocket } from "./core/socket.js";
 import { crearNav } from "./ui/nav.js";
 import { toast } from "./ui/toast.js";
+import { esc } from "./ui/html.js";
+import { desuscribirPush } from "./core/push.js";
 
 const $ = (id) => document.getElementById(id);
 const store = crearStore(idbBackend());
@@ -41,7 +43,16 @@ $("form-login").addEventListener("submit", async (ev) => {
   catch (e) { $("login-error").hidden = false; $("login-error").textContent = e.message; }
   finally { btn.disabled = false; }
 });
-$("btn-salir").addEventListener("click", () => { if (confirm("¿Cerrar sesión?")) { ctx?.socket?.disconnect(); auth.logout(); mostrarLogin(); } });
+$("btn-salir").addEventListener("click", async () => {
+  if (!confirm("¿Cerrar sesión?")) return;
+  actual?.desmontar?.(); actual = null;
+  ctx?.socket?.disconnect();
+  // Sin sesión no deben seguir llegando alertas de esta org a este teléfono.
+  try { await desuscribirPush(api); } catch (e) { console.warn("[push] baja al salir:", e.message); }
+  ctx = null;
+  auth.logout();
+  mostrarLogin();
+});
 $("btn-org").addEventListener("click", elegirOrg);
 
 async function elegirOrg() {
@@ -73,7 +84,9 @@ async function arrancar() {
   await enrutar();
 }
 
+let generacion = 0;
 async function enrutar() {
+  const mia = ++generacion;
   const partes  = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   const pestana = partes[0] || "mapa";
   const param   = partes[1] ? decodeURIComponent(partes[1]) : undefined;
@@ -85,10 +98,12 @@ async function enrutar() {
   nav.pestanaActiva(destino);
   try {
     const mod = await import(`./pantallas/${destino}.js`);
-    actual = await mod.montar(ctx, root, param);
+    const pantalla = await mod.montar(ctx, root, param);
+    if (mia !== generacion) { pantalla?.desmontar?.(); return; } // llegó otro hash mientras montaba
+    actual = pantalla;
   } catch (e) {
     console.error(e);
-    root.innerHTML = `<div class="vacio">No se pudo abrir esta pantalla.<br><small>${e.message}</small></div>`;
+    root.innerHTML = `<div class="vacio">No se pudo abrir esta pantalla.<br><small>${esc(e.message)}</small></div>`;
   }
 }
 
@@ -103,7 +118,8 @@ if ("serviceWorker" in navigator) {
     });
     document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update(); });
   });
-  navigator.serviceWorker.addEventListener("controllerchange", () => location.reload());
+  let recargando = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (recargando) return; recargando = true; location.reload(); });
   $("btn-actualizar").addEventListener("click", () => navigator.serviceWorker.getRegistration().then(r => r?.waiting?.postMessage("SKIP_WAITING")));
 }
 

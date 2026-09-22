@@ -4,12 +4,20 @@
 const K_TOKEN = "orbitx.token";
 const K_USER  = "orbitx.usuario";
 
-export function crearAuth({ storage = globalThis.localStorage, fetchFn = globalThis.fetch, base = "" }) {
+export function crearAuth({ storage = globalThis.localStorage, fetchFn = globalThis.fetch, base = "", timeoutMs = 4000 }) {
   async function llamar(ruta, body, conToken = true) {
     const headers = { "Content-Type": "application/json", Accept: "application/json" };
     const t = token();
     if (conToken && t) headers.Authorization = `Bearer ${t}`;
-    const res = await fetchFn(base + ruta, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetchFn(base + ruta, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+    } catch (e) {
+      if (e.name === "AbortError") { const err = new Error("Sin respuesta del servidor"); err.status = 0; throw err; }
+      throw e;
+    } finally { clearTimeout(timer); }
     let data = null;
     try { data = await res.json(); } catch { data = null; }
     if (!res.ok) { const e = new Error(data?.error || `HTTP ${res.status}`); e.status = res.status; throw e; }

@@ -5,13 +5,12 @@ import { pestanasPara, puedeVer, PESTANAS } from "../../app/core/permisos.js";
 const TODAS = ["mapa", "lotes", "lluvias", "alertas", "equipos"];
 
 test("roles con dispositivos ven las cinco pestañas", () => {
-  for (const rol of ["superadmin", "owner", "admin_org", "agronomo", "contratista", "operador"])
+  for (const rol of ["superadmin", "owner", "admin_org", "agronomo", "contratista", "operador", "member"])
     assert.deepEqual(pestanasPara(rol), TODAS, rol);
 });
 
-test("viewer y member no ven Equipos (dispositivos: [])", () => {
+test("viewer no ve Equipos (dispositivos: [])", () => {
   assert.deepEqual(pestanasPara("viewer"), ["mapa", "lotes", "lluvias", "alertas"]);
-  assert.deepEqual(pestanasPara("member"), ["mapa", "lotes", "lluvias", "alertas"]);
 });
 
 test("rol desconocido o vacío cae al mínimo de viewer", () => {

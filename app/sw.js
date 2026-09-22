@@ -1,9 +1,12 @@
 // sw.js — Service worker: cachea el shell (HTML, CSS, JS, íconos, Leaflet)
-// para que la app abra sin señal, y compara version.json para detectar una
-// versión nueva. Los datos NO se cachean acá: eso lo hace api.js en IndexedDB.
-// Las llamadas a /api/ y /socket.io/ pasan de largo siempre.
-const VERSION_URL = "/app/version.json";
-let CACHE = "orbitx-app-desconocida";
+// para que la app abra sin señal. Los datos NO se cachean acá: eso lo hace
+// api.js en IndexedDB. Las llamadas a /api/ y /socket.io/ pasan de largo siempre.
+// La versión va como literal acá: cada deploy la bumpea (junto con
+// app/version.json, un test verifica que coincidan). Así el nombre del cache
+// es constante aunque el navegador recicle el SW, y cambiar la versión cambia
+// los bytes de sw.js → el navegador detecta la actualización.
+const VERSION = "20260922-01";
+const CACHE   = `orbitx-app-${VERSION}`;
 
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.css", "/app/main.js", "/app/manifest.webmanifest",
@@ -16,15 +19,8 @@ const SHELL = [
   "/css/variables.css", "/css/leaflet.min.css", "/js/leaflet.min.js", "/socket.io/socket.io.js",
 ];
 
-async function versionActual() {
-  try { const r = await fetch(VERSION_URL, { cache: "no-store" }); return (await r.json()).version; }
-  catch { return null; }
-}
-
 self.addEventListener("install", (ev) => {
   ev.waitUntil((async () => {
-    const v = await versionActual();
-    CACHE = `orbitx-app-${v || "sin-version"}`;
     const c = await caches.open(CACHE);
     await Promise.all(SHELL.map(u => c.add(u).catch(e => console.warn("[sw] no cacheó", u, e.message))));
   })());
@@ -32,8 +28,6 @@ self.addEventListener("install", (ev) => {
 
 self.addEventListener("activate", (ev) => {
   ev.waitUntil((async () => {
-    const v = await versionActual();
-    CACHE = `orbitx-app-${v || "sin-version"}`;
     for (const k of await caches.keys()) if (k.startsWith("orbitx-app-") && k !== CACHE) await caches.delete(k);
     await self.clients.claim();
   })());
@@ -47,7 +41,7 @@ self.addEventListener("fetch", (ev) => {
   // /socket.io/ son conexiones (websocket/polling) y no se interceptan; el
   // script cliente /socket.io/socket.io.js sí es parte del shell y se cachea.
   const esScriptSocket = url.pathname === "/socket.io/socket.io.js";
-  if (url.pathname.startsWith("/api/") || (url.pathname.startsWith("/socket.io/") && !esScriptSocket) || url.pathname === VERSION_URL) return;
+  if (url.pathname.startsWith("/api/") || (url.pathname.startsWith("/socket.io/") && !esScriptSocket) || url.pathname === "/app/version.json") return;
   if (url.origin !== location.origin) return; // tiles del mapa: nunca se cachean acá
   ev.respondWith((async () => {
     const c = await caches.open(CACHE);
