@@ -343,9 +343,9 @@ cron.schedule(
 // marca caido_notificado_ts en el device y no se repite hasta que vuelva a
 // reportar y se caiga de nuevo.
 cron.schedule("*/5 * * * *", async () => {
-  const push = require("./lib/push");
-  if (!push.configurado()) return;
   try {
+    const push = require("./lib/push");
+    if (!push.configurado()) return;
     const globalDB = db.getDB("global");
     const r = await globalDB.find({ selector: { tipo: "device", estab_slug: { $gt: null } }, limit: 500 });
     const ahora = Date.now();
