@@ -334,7 +334,15 @@ async function getDensidadesPorLote(slug, loteId, limit=2000) {
 // ── Alertas ──────────────────────────────────────────────────
 async function insertAlerta(slug, data) {
   const id = `alert_${Date.now()}_${data.bajada_id||0}`;
-  return upsert(getDB(slug), id, { ...data, tipo:"alerta", synced_at:Date.now() });
+  const r  = await upsert(getDB(slug), id, { ...data, tipo:"alerta", synced_at:Date.now() });
+  // Push a la app móvil, best-effort: nunca bloquea ni falla el sync.
+  try {
+    const push = require("../lib/push");
+    if (push.configurado() && !data.resuelta)
+      push.notificarOrg(slug, { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta en el campo", url: "/app/#/alertas" })
+          .catch(e => console.warn("[push/alerta]", e.message));
+  } catch (e) { console.warn("[push/alerta]", e.message); }
+  return r;
 }
 
 async function getAlertasActivas(slug) {
