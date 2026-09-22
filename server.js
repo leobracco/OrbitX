@@ -171,6 +171,16 @@ app.use("/flash", (req, res, next) => {
     return res.redirect("/login");
   }
 }, express.static(path.join(__dirname, "flash-app")));
+// ── App móvil (PWA) ───────────────────────────────────────
+// Se sirve como estático puro: sin build, el service worker maneja la
+// actualización. index.html y sw.js con no-cache para que la versión nueva
+// llegue apenas se despliega; el resto lo cachea el SW.
+app.use("/app", express.static(path.join(__dirname, "app"), {
+  setHeaders(res, filePath) {
+    if (/(index\.html|sw\.js|version\.json)$/.test(filePath))
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  },
+}));
 app.use(express.static(path.join(__dirname, "public")));
 app.use((req, _, next) => {
   req.io = io;
