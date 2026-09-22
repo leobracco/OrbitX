@@ -238,6 +238,10 @@ router.get("/", noDevices, async (req, res) => {
       docs = all.rows.map(r => r.doc).filter(d => d.tipo === "device");
     }
 
+    // ?estab=<slug> (app móvil): un superadmin ve solo esa org. Sin el
+    // parámetro sigue viendo todas, que es lo que espera el panel.
+    const filtroEstab = typeof req.query.estab === "string" && req.query.estab ? req.query.estab : null;
+    if (esSA && filtroEstab) docs = docs.filter(d => d.estab_slug === filtroEstab);
     if (!esSA) {
       // Sin org activa, no devolver nada.
       if (!miSlug) return res.json([]);
