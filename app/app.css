@@ -69,3 +69,8 @@ button, input { font: inherit; }
 
 .marcador-maquina { width: 16px; height: 16px; border-radius: 50%; background: var(--ap-green); border: 2px solid var(--ap-bg-deep); box-shadow: 0 0 0 4px var(--ap-green-glow); }
 .marcador-maquina.viejo { background: var(--ap-yellow); box-shadow: 0 0 0 4px var(--ap-yellow-dim); }
+
+/* Selector en panel inferior (reemplaza al prompt nativo) */
+.selector-capa { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; }
+.selector-capa .sheet.selector { position: relative; width: 100%; max-height: 80dvh; padding-bottom: env(safe-area-inset-bottom); }
+.selector-capa .fila { cursor: pointer; }

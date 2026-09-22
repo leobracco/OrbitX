@@ -50,7 +50,16 @@ export async function montar(ctx, root) {
   }
   async function cargar() {
     try {
-      const [live, lotes] = await Promise.all([ctx.api.get("/api/tracking/live"), ctx.api.get("/api/lotes")]);
+      // Los límites salen de los archivos de PilotX (/api/aog/mapa), igual que
+      // en el panel: /api/lotes solo tiene los lotes sincronizados como doc
+      // "lote", que en muchas orgs es cero. Siempre con ?estab= (un superadmin
+      // sin filtro recibiría TODAS las orgs) y ?lite=1 (sin pasadas: 67 MB → KB).
+      const org = ctx.usuario?.org_activa;
+      const urlLotes = org ? `/api/aog/mapa?estab=${encodeURIComponent(org)}&lite=1` : null;
+      const [live, lotes] = await Promise.all([
+        ctx.api.get("/api/tracking/live"),
+        urlLotes ? ctx.api.get(urlLotes).catch(e => { console.warn("[mapa] lotes:", e.message); return { data: [] }; }) : { data: [] },
+      ]);
       ctx.nav.setOffline(live.desdeCache, live.ts);
       for (const d of live.data) upsertMaquina(d);
       capaLotes.clearLayers();

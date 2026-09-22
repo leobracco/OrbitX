@@ -9,6 +9,7 @@ import { pestanasPara } from "./core/permisos.js";
 import { conectarSocket } from "./core/socket.js";
 import { crearNav } from "./ui/nav.js";
 import { toast } from "./ui/toast.js";
+import { elegirDeLista } from "./ui/selector.js";
 import { esc } from "./ui/html.js";
 import { desuscribirPush } from "./core/push.js";
 
@@ -71,11 +72,12 @@ async function elegirOrg() {
   try { orgs = await orgsElegibles(u); } catch (e) { toast(e.message, "error"); return; }
   if (orgs.length < 2 && u?.rol_global !== "superadmin") return;
   if (!orgs.length) { toast("No hay establecimientos para elegir", "error"); return; }
-  const actualIdx = Math.max(0, orgs.findIndex(o => o.slug === u?.org_activa));
-  const opciones = orgs.map((o, i) => `${i + 1}) ${o.nombre}${o.slug === u?.org_activa ? " (actual)" : ""}`).join("\n");
-  const r = prompt(`Elegí establecimiento:\n${opciones}`, String(actualIdx + 1));
-  const o = orgs[parseInt(r, 10) - 1]; if (!o || o.slug === u?.org_activa) return;
-  try { await auth.cambiarOrg(o.slug); location.reload(); } catch (e) { toast(e.message, "error"); }
+  const o = await elegirDeLista({
+    titulo: "Elegí establecimiento",
+    opciones: orgs.map(x => ({ valor: x.slug, etiqueta: x.nombre, actual: x.slug === u?.org_activa })),
+  });
+  if (!o || o.valor === u?.org_activa) return;
+  try { await auth.cambiarOrg(o.valor); location.reload(); } catch (e) { toast(e.message, "error"); }
 }
 
 async function arrancar() {
