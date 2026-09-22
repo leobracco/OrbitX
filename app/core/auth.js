@@ -16,7 +16,11 @@ export function crearAuth({ storage = globalThis.localStorage, fetchFn = globalT
     return data;
   }
   function token() { return storage.getItem(K_TOKEN); }
-  function usuario() { const raw = storage.getItem(K_USER); return raw ? JSON.parse(raw) : null; }
+  function usuario() {
+    const raw = storage.getItem(K_USER);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { storage.removeItem(K_USER); return null; }
+  }
   async function me() {
     const u = await llamar("/api/auth/me");
     storage.setItem(K_USER, JSON.stringify(u));
@@ -25,7 +29,8 @@ export function crearAuth({ storage = globalThis.localStorage, fetchFn = globalT
   async function login(email, password) {
     const r = await llamar("/api/auth/login", { email, password }, false);
     storage.setItem(K_TOKEN, r.token);
-    return me();
+    try { return await me(); }
+    catch (e) { logout(); throw e; }
   }
   async function cambiarOrg(orgSlug) {
     const r = await llamar("/api/auth/cambiar-org", { orgSlug });

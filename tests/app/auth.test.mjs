@@ -47,3 +47,31 @@ test("logout limpia token y usuario", async () => {
   assert.equal(auth.token(), null);
   assert.equal(auth.usuario(), null);
 });
+
+test("usuario() devuelve null si el storage tiene JSON corrupto", () => {
+  const st = memStorage(); st.setItem("orbitx.usuario", "{esto no es json");
+  const auth = crearAuth({ storage: st, fetchFn: async () => json({}) });
+  assert.equal(auth.usuario(), null);
+});
+
+test("si me() falla después del login, no queda sesión a medias", async () => {
+  const st = memStorage();
+  const auth = crearAuth({ storage: st, fetchFn: async (u) => {
+    if (u.endsWith("/login")) return json({ token: "T1", user: {} });
+    if (u.endsWith("/me"))    return json({ error: "Servidor caído" }, 503);
+  }});
+  await assert.rejects(() => auth.login("a@b.c", "x"), /Servidor caído/);
+  assert.equal(auth.token(), null);
+  assert.equal(auth.usuario(), null);
+});
+
+test("login va sin Authorization y el me() posterior va con el Bearer nuevo", async () => {
+  const headersVistos = {};
+  const auth = crearAuth({ storage: memStorage(), fetchFn: async (u, o) => {
+    if (u.endsWith("/login")) { headersVistos.login = o.headers; return json({ token: "T9", user: {} }); }
+    if (u.endsWith("/me"))    { headersVistos.me = o.headers; return json({ rol_efectivo: "owner", org_activa: "c", memberships: [] }); }
+  }});
+  await auth.login("a@b.c", "x");
+  assert.equal(headersVistos.login.Authorization, undefined);
+  assert.equal(headersVistos.me.Authorization, "Bearer T9");
+});
