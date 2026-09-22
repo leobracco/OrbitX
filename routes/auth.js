@@ -109,6 +109,11 @@ router.post("/push-subscribe", required, async (req, res) => {
     const sub = req.body?.subscription;
     if (!sub || typeof sub.endpoint !== "string" || !sub.keys?.p256dh || !sub.keys?.auth)
       return res.status(400).json({ error: "subscription inválida" });
+    const { endpointValido } = require("../lib/push");
+    if (!endpointValido(sub.endpoint))
+      return res.status(400).json({ error: "endpoint de push no permitido" });
+    if (!(typeof sub.keys.p256dh === "string" && sub.keys.p256dh.length <= 256 && typeof sub.keys.auth === "string" && sub.keys.auth.length <= 64))
+      return res.status(400).json({ error: "subscription inválida" });
     const db   = req.app.locals.globalDB;
     const user = await db.get(`usr_${req.user.uid}`);
     const previas = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== sub.endpoint);
@@ -120,6 +125,8 @@ router.post("/push-subscribe", required, async (req, res) => {
 router.post("/push-unsubscribe", required, async (req, res) => {
   try {
     const endpoint = req.body?.endpoint;
+    if (typeof endpoint !== "string")
+      return res.status(400).json({ error: "endpoint requerido" });
     const db   = req.app.locals.globalDB;
     const user = await db.get(`usr_${req.user.uid}`);
     const push_subs = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== endpoint);

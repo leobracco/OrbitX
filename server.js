@@ -350,9 +350,11 @@ cron.schedule("*/5 * * * *", async () => {
     const r = await globalDB.find({ selector: { tipo: "device", estab_slug: { $gt: null } }, limit: 500 });
     const ahora = Date.now();
     for (const d of push.seleccionarCaidos(r.docs, ahora)) {
-      const min = Math.round((ahora - d.ultimo_visto) / 60000);
-      await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
-      await globalDB.insert({ ...d, caido_notificado_ts: ahora });
+      try {
+        const min = Math.round((ahora - d.ultimo_visto) / 60000);
+        await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
+        await globalDB.insert({ ...d, caido_notificado_ts: ahora });
+      } catch (e) { console.warn("[CRON/caidos]", d.device_id, e.message); }
     }
   } catch (e) { console.error("[CRON/caidos]", e.message); }
 }, { timezone: "America/Argentina/Cordoba" });
