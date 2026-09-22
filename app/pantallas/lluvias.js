@@ -22,7 +22,7 @@ export async function montar(ctx, root) {
     root.innerHTML = `
       ${pend.length ? `<div class="titulo-seccion">Pendientes de enviar · ${pend.length}</div><ul class="lista">${pend.map(p => {
         const yaEnviado = /^Enviado/.test(p.error || "");
-        return `<li class="fila"><span class="dot ${p.estado === "error" ? "err" : "warn"}"></span>
+        return `<li class="fila"><span class="dot ${p.estado === "error" ? (yaEnviado ? "info" : "err") : "warn"}"></span>
           <span class="txt"><b>${esc(p.body.mm)} mm</b><span>${esc(p.body.fecha)}${p.body.lote ? " · " + esc(p.body.lote) : ""}${p.estado === "error" ? " · " + esc(p.error || "error") : " · esperando conexión"}</span></span>
           ${p.estado === "error" && !yaEnviado ? `<button class="btn secundario" data-reintentar="${esc(p.id)}" style="padding:6px 10px;font-size:12px">Reintentar</button>` : ""}
         </li>`;
@@ -49,17 +49,23 @@ export async function montar(ctx, root) {
     sheet.querySelector("#cancelar").addEventListener("click", () => sheet.remove());
     sheet.querySelector("#f").addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      const f = new FormData(ev.target);
-      const body = { fecha: f.get("fecha"), mm: Number(f.get("mm")), lote: f.get("lote") || undefined, nota: f.get("nota") || undefined };
+      const btn = ev.target.querySelector('button[type="submit"]');
+      btn.disabled = true;
       try {
-        await ctx.api.post("/api/lluvias", body);
-        ctx.toast("Lluvia registrada", "ok");
-      } catch (e) {
-        if (e instanceof ErrorHttp) { ctx.toast(e.message, "error"); return; } // el server la rechazó: no encolar
-        await ctx.store.colaAgregar({ metodo: "POST", ruta: "/api/lluvias", body });
-        ctx.toast("Sin conexión: quedó pendiente y se envía sola", "ok");
+        const f = new FormData(ev.target);
+        const body = { fecha: f.get("fecha"), mm: Number(f.get("mm")), lote: f.get("lote") || undefined, nota: f.get("nota") || undefined };
+        try {
+          await ctx.api.post("/api/lluvias", body);
+          ctx.toast("Lluvia registrada", "ok");
+        } catch (e) {
+          if (e instanceof ErrorHttp) { ctx.toast(e.message, "error"); return; } // el server la rechazó: no encolar
+          await ctx.store.colaAgregar({ metodo: "POST", ruta: "/api/lluvias", body });
+          ctx.toast("Sin conexión: quedó pendiente y se envía sola", "ok");
+        }
+        sheet.remove(); cargar();
+      } finally {
+        btn.disabled = false;
       }
-      sheet.remove(); cargar();
     });
   }
 
