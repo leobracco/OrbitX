@@ -75,3 +75,6 @@ coverage/
 # producto se administran a mano en el server, como firmwares/.
 flash-app/*/
 !flash-app/esp-web-tools/
+
+# ── Brainstorming (mockups de diseño) ──────────────────
+.superpowers/
