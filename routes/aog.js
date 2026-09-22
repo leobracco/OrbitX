@@ -637,6 +637,12 @@ function mapaCacheGet(k) {
 }
 function mapaCacheSet(k, data) { _mapaCache.set(k, { data, ts: Date.now() }); }
 
+// ?lite=1 (app móvil): la misma respuesta sin las pasadas de siembra
+// (`sections`), que para una org entera pueden pesar decenas de MB.
+function mapaLite(lotes, req) {
+  return req.query.lite ? lotes.map(({ sections, ...l }) => l) : lotes;
+}
+
 router.get("/mapa", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
@@ -650,7 +656,7 @@ router.get("/mapa", async (req, res) => {
     const cached = mapaCacheGet(cacheKey);
     if (cached) {
       res.set("X-Cache", "HIT");
-      return res.json(cached);
+      return res.json(mapaLite(cached, req));
     }
 
     // Armar lista de slugs
@@ -731,7 +737,7 @@ router.get("/mapa", async (req, res) => {
 
     mapaCacheSet(cacheKey, lotesParsed);
     res.set("X-Cache", "MISS");
-    res.json(lotesParsed);
+    res.json(mapaLite(lotesParsed, req));
   } catch(e) {
     console.error("[AOG/mapa]", e.message);
     res.status(500).json({ error: e.message });
