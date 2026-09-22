@@ -65,7 +65,12 @@ export async function montar(ctx, root) {
       capaLotes.clearLayers();
       const bounds = [];
       for (const l of lotes.data) if (Array.isArray(l.boundary) && l.boundary.length > 2) {
-        L.polygon(l.boundary, { color: "#A4BA3E", weight: 1.5, fillOpacity: 0.08 }).bindTooltip(esc(l.nombre), { permanent: false }).addTo(capaLotes);
+        // Tocar un lote abre su detalle, que trae la cobertura de PilotX (acá
+        // no se dibuja: son 200–300 KB por lote, ~10 MB para toda la org).
+        L.polygon(l.boundary, { color: "#A4BA3E", weight: 1.5, fillOpacity: 0.08 })
+          .bindTooltip(esc(l.nombre), { permanent: false })
+          .on("click", () => { location.hash = `#/lotes/${encodeURIComponent(l.nombre)}`; })
+          .addTo(capaLotes);
         bounds.push(...l.boundary);
       }
       for (const m of marcadores.values()) bounds.push(m.marker.getLatLng());

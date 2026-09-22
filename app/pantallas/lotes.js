@@ -36,32 +36,43 @@ async function detalle(ctx, root, nombre) {
   const enc = encodeURIComponent(nombre);
   // Contexto (cultivo, ha, capas) y límite se piden en paralelo; cada uno
   // falla por separado sin tumbar la pantalla.
+  // Para UN lote sí se pide completo (sin lite): trae la cobertura de las
+  // pasadas (`sections`, 200–300 KB por lote) además del límite.
   const [rCtx, rMapa] = await Promise.all([
     ctx.api.get(`/api/lotes-maestro/${enc}/contexto`).catch(e => ({ data: null, error: e.message })),
-    org ? ctx.api.get(`/api/aog/mapa?estab=${encodeURIComponent(org)}&lote=${enc}&lite=1`).catch(() => ({ data: [] })) : { data: [] },
+    org ? ctx.api.get(`/api/aog/mapa?estab=${encodeURIComponent(org)}&lote=${enc}`).catch(() => ({ data: [] })) : { data: [] },
   ]);
   const c = rCtx.data || {};
-  const boundary = (rMapa.data || []).find(x => x.nombre === nombre)?.boundary || (rMapa.data || [])[0]?.boundary || null;
-  const aog = c.capas?.aog || null;
+  const lote = (rMapa.data || []).find(x => x.nombre === nombre) || (rMapa.data || [])[0] || {};
+  const boundary = lote.boundary || null;
+  const sections = Array.isArray(lote.sections) ? lote.sections : [];
+  const st = lote.stats || c.capas?.aog || {};
   if (rCtx.ts) ctx.nav.setOffline(rCtx.desdeCache, rCtx.ts);
 
+  const ha = (v) => (v == null ? null : Number(v).toFixed(1));
   const datos = [
     c.cultivo ? esc(c.cultivo) : "sin cultivo",
     c.temporada ? esc(c.temporada) : null,
-    c.ha_estimadas ? esc(c.ha_estimadas) + " ha" : (aog?.contorno_ha ? Number(aog.contorno_ha).toFixed(1) + " ha (contorno)" : null),
-    aog?.trabajado_ha ? Number(aog.trabajado_ha).toFixed(1) + " ha trabajadas" : null,
+    c.ha_estimadas ? esc(c.ha_estimadas) + " ha" : (st.contorno_ha != null ? ha(st.contorno_ha) + " ha (contorno)" : null),
   ].filter(Boolean).join(" · ");
+  const cobertura = sections.length ? `
+    <div class="card"><h3>Cobertura de PilotX</h3>
+      <p><b>${ha(st.trabajado_ha) ?? "—"} ha trabajadas</b> · ${ha(st.neto_ha) ?? "—"} ha netas · repintado ${ha(st.repintado_ha) ?? "—"} ha (${st.repintado_pct ?? "—"} %)</p>
+      <p>${sections.length} bloques${st.resolucion_m ? " · resolución " + esc(st.resolucion_m) + " m" : ""}</p></div>` : "";
 
   root.innerHTML = `
     <div class="card"><a href="#/lotes" style="color:var(--ap-muted);font-size:13px;text-decoration:none">‹ Lotes</a>
       <h3>${esc(nombre)}</h3><p>${datos}${rCtx.error ? ` · <span style="color:var(--ap-yellow)">${esc(rCtx.error)}</span>` : ""}</p></div>
-    ${Array.isArray(boundary) && boundary.length > 2 ? `<div class="mini-mapa" id="mini"></div>` : `<div class="card"><p>Este lote no tiene límite dibujado${org ? "" : " (elegí un establecimiento)"}.</p></div>`}
+    ${Array.isArray(boundary) && boundary.length > 2 ? `<div class="mini-mapa" id="mini" style="height:260px"></div>` : `<div class="card"><p>Este lote no tiene límite dibujado${org ? "" : " (elegí un establecimiento)"}.</p></div>`}
+    ${cobertura}
     <div class="titulo-seccion">Lluvias en este lote</div><ul class="lista" id="lluvias-lote"><li class="vacio">Cargando…</li></ul>`;
   if (root.querySelector("#mini")) {
     try {
-      mapa = L.map("mini", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false });
-      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}").addTo(mapa);
-      const poly = L.polygon(boundary, { color: "#A4BA3E", weight: 2, fillOpacity: 0.12 }).addTo(mapa);
+      mapa = L.map("mini", { zoomControl: false, attributionControl: false, dragging: true, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: true, boxZoom: false, keyboard: false });
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 18 }).addTo(mapa);
+      // Cobertura debajo del límite: bloques de pasadas en verde traslúcido.
+      if (sections.length) L.polygon(sections, { color: "#25CC71", weight: 0, fillOpacity: 0.45, interactive: false }).addTo(mapa);
+      const poly = L.polygon(boundary, { color: "#A4BA3E", weight: 2, fillOpacity: 0.05 }).addTo(mapa);
       mapa.fitBounds(poly.getBounds(), { padding: [10, 10] });
     } catch (e) {
       console.warn("[lotes] no se pudo dibujar el límite:", e.message);
