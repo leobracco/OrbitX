@@ -223,20 +223,24 @@ agraria, audit_log, facturacion, config_server`:
 | `agronomo` | read | read | read | Mapa, Lotes, Lluvias, Alertas, Equipos (solo lectura) |
 | `contratista` | read (asignados) | read/write | read (los suyos) | Mapa, Lotes, Lluvias, Alertas, Equipos |
 | `operador` | read (lote activo) | read/write | read (el suyo) | Mapa, Lotes, Lluvias, Alertas, Equipos |
-| `viewer` | read | read | **ninguno** | Mapa, Lotes, Lluvias, Alertas |
+| `viewer` | read | read | **ninguno** | Mapa, Lotes, Lluvias (sin cargar), Alertas |
 
 El caso a no pasar por alto es `viewer`, que tiene `dispositivos: []`: **no debe ver la
 pestaña Equipos**.
 
-### Las lluvias no tienen recurso en `PERMS`
+### Las lluvias usan su propio control de permisos
 
-`/api/lluvias` está montado solo con `auth.required`, sin `requirePermiso`, así que hoy
-cualquier usuario autenticado puede leer y cargar lluvias. La Fase 1 **mantiene ese
-comportamiento** —la pestaña Lluvias se muestra a todos los roles— para no cambiar reglas
-de acceso del server como efecto secundario de construir la app.
+`/api/lluvias` no pasa por `requirePermiso` ni tiene recurso en `PERMS`: lleva su propia
+regla en `routes/lluvias.js:10`, `SOLO_LECTURA = ["viewer"]`. Es decir, **todos los roles
+pueden cargar lluvias salvo `viewer`**, que solo lee. El comentario del código explica el
+criterio: es data del propio campo y la suele cargar el operador o el contratista.
 
-Si más adelante se decide restringirlo, corresponde agregar un recurso `lluvias` a `PERMS`
-y aplicar `requirePermiso` en la ruta; es una decisión de producto, no de esta app.
+Además, `GET /api/lluvias` devuelve `{ registros, puede_editar }` —no un array pelado— así
+que la app **usa ese `puede_editar`** para mostrar u ocultar el botón de carga, en vez de
+recalcular la regla por su cuenta. Así, si el server cambia el criterio, la app lo sigue
+sin tocar código.
+
+La Fase 1 no modifica esta regla.
 
 El filtrado del frontend es de conveniencia, no de seguridad: el backend ya valida cada
 request con `requirePermiso`. La app solo evita mostrar lo que igual sería rechazado.
@@ -251,7 +255,7 @@ disponible.
 | Situación | Comportamiento |
 |---|---|
 | Sin conexión | Franja "Sin conexión · datos de hace X"; la app sigue navegable con cache |
-| Token vencido | `auth.js` renueva con el refresh; si falla, va al login conservando la cola pendiente |
+| Token vencido (401) | No hay endpoint de refresh: el JWT dura 30 días (`auth_service.js:80`). Ante un 401, `auth.js` borra la sesión y muestra el login **conservando la cola pendiente** en IndexedDB |
 | 403 sin permiso | La pantalla no debería ser alcanzable; si igual ocurre, mensaje claro y vuelta al mapa |
 | Cache vacío y sin red | Estado vacío explicando que hace falta conexión la primera vez |
 | Falla al enviar de la cola | El registro queda marcado con el error; se ofrece reintentar o descartar |
@@ -261,7 +265,12 @@ disponible.
 
 ## Tests
 
-Se prueba con Jest la lógica que no necesita navegador:
+Se usa el runner **nativo de Node** (`node:test` con `node --test`), no Jest. OrbitX hoy no
+tiene tests ni una sola `devDependency`, y el server corre en un droplet de 1 GB: el runner
+nativo evita sumar Jest y su árbol de dependencias por cuatro archivos de test. Node 22.15
+ya lo soporta completo.
+
+Se prueba la lógica que no necesita navegador:
 
 - `core/store.js` — encolar, drenar en orden, deduplicar, marcar fallidos.
 - `core/permisos.js` — cada rol produce la navegación correcta.
