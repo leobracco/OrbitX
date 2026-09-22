@@ -75,3 +75,16 @@ test("login va sin Authorization y el me() posterior va con el Bearer nuevo", as
   assert.equal(headersVistos.login.Authorization, undefined);
   assert.equal(headersVistos.me.Authorization, "Bearer T9");
 });
+
+test("si me() falla al cambiar de org, se restaura el token anterior y el usuario no cambia", async () => {
+  const st = memStorage();
+  st.setItem("orbitx.token", "T1");
+  st.setItem("orbitx.usuario", JSON.stringify({ org_activa: "campo1" }));
+  const auth = crearAuth({ storage: st, fetchFn: async (u) => {
+    if (u.endsWith("/cambiar-org")) return json({ token: "T2", orgSlug: "campo2" });
+    if (u.endsWith("/me"))          return json({ error: "Servidor caído" }, 503);
+  }});
+  await assert.rejects(() => auth.cambiarOrg("campo2"), /Servidor caído/);
+  assert.equal(auth.token(), "T1");
+  assert.equal(auth.usuario().org_activa, "campo1");
+});

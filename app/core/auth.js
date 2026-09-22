@@ -34,8 +34,14 @@ export function crearAuth({ storage = globalThis.localStorage, fetchFn = globalT
   }
   async function cambiarOrg(orgSlug) {
     const r = await llamar("/api/auth/cambiar-org", { orgSlug });
+    const tokenAnterior = token();
     storage.setItem(K_TOKEN, r.token);
-    await me();
+    try { await me(); }
+    catch (e) {
+      // Sin el usuario de la org nueva no hay cambio válido: volver al estado previo.
+      if (tokenAnterior) storage.setItem(K_TOKEN, tokenAnterior); else storage.removeItem(K_TOKEN);
+      throw e;
+    }
   }
   function logout() { storage.removeItem(K_TOKEN); storage.removeItem(K_USER); }
   return { token, usuario, login, me, cambiarOrg, logout };
