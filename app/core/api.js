@@ -1,7 +1,8 @@
 // api.js — Único punto de acceso HTTP de la app. GET: intenta red con
-// timeout; si responde, cachea y devuelve; si falla o expira, devuelve el
-// cache con su antigüedad. POST/DELETE: red directa, sin cache (la cola
-// offline vive en sync.js, no acá). 401 → onNoAuth (sesión vencida).
+// timeout; si responde, devuelve los datos frescos; fallo en guardar a cache
+// no altera el resultado. Si la red falla, devuelve cache con antigüedad.
+// POST/DELETE: red directa, sin cache (la cola offline vive en sync.js, no acá).
+// 401 → onNoAuth (sesión vencida).
 
 export class ErrorSinDatos extends Error {
   constructor(ruta) { super(`Sin conexión y sin datos guardados para ${ruta}`); this.name = "ErrorSinDatos"; }
@@ -37,16 +38,22 @@ export function crearApi({ fetchFn = globalThis.fetch, store, getToken, onNoAuth
   return {
     async get(ruta) {
       const clave = `GET ${ruta}`;
+      let data;
       try {
-        const data = await pedir("GET", ruta);
-        await store.cacheSet(clave, data);
-        return { data, desdeCache: false, ts: Date.now() };
+        data = await pedir("GET", ruta);
       } catch (e) {
         if (e instanceof ErrorHttp) throw e; // el server respondió: no es un problema de red
         const c = await store.cacheGet(clave);
         if (!c) throw new ErrorSinDatos(ruta);
         return { data: c.data, desdeCache: true, ts: c.ts };
       }
+      // Guardar en cache; si falla, igual devolvemos los datos frescos
+      try {
+        await store.cacheSet(clave, data);
+      } catch (e) {
+        console.warn("[api] no se pudo cachear", ruta, e.message);
+      }
+      return { data, desdeCache: false, ts: Date.now() };
     },
     post(ruta, body) { return pedir("POST", ruta, body ?? {}); },
     del(ruta)        { return pedir("DELETE", ruta); },

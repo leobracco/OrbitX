@@ -63,3 +63,12 @@ test("post no usa cache y devuelve el body; error trae status y body", async () 
   const { api: api2 } = arma(status(400, { error: "mm inválidos" }));
   await assert.rejects(() => api2.post("/api/lluvias", {}), (e) => e.status === 400 && e.body.error === "mm inválidos");
 });
+
+test("si guardar en cache falla, get devuelve igual los datos frescos", async () => {
+  const store = crearStore(memBackend());
+  store.cacheSet = async () => { throw new Error("IndexedDB lleno"); };
+  const api = crearApi({ fetchFn: ok([3]), store, getToken: () => "tok", timeoutMs: 50 });
+  const r = await api.get("/api/lotes");
+  assert.deepEqual(r.data, [3]);
+  assert.equal(r.desdeCache, false);
+});
