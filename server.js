@@ -338,6 +338,25 @@ cron.schedule(
   { timezone: "America/Argentina/Cordoba" },
 );
 
+// Equipos caídos → push a la org, cada 5 min. Umbral 15 min (no 2: un bache
+// de señal en el campo no merece notificación). Una vez por episodio: se
+// marca caido_notificado_ts en el device y no se repite hasta que vuelva a
+// reportar y se caiga de nuevo.
+cron.schedule("*/5 * * * *", async () => {
+  const push = require("./lib/push");
+  if (!push.configurado()) return;
+  try {
+    const globalDB = db.getDB("global");
+    const r = await globalDB.find({ selector: { tipo: "device", estab_slug: { $gt: null } }, limit: 500 });
+    const ahora = Date.now();
+    for (const d of push.seleccionarCaidos(r.docs, ahora)) {
+      const min = Math.round((ahora - d.ultimo_visto) / 60000);
+      await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
+      await globalDB.insert({ ...d, caido_notificado_ts: ahora });
+    }
+  } catch (e) { console.error("[CRON/caidos]", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+
 // Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
 const { runBackup } = require("./scripts/backup-couchdb");
 cron.schedule(

@@ -97,6 +97,37 @@ router.post("/push-token", required, async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
+// ── Web Push (app móvil) ────────────────────────────────
+// Guarda la suscripción completa {endpoint, keys} que necesita web-push.
+// Distinto de /push-token (strings de FCM/Expo), que se deja como está.
+router.get("/push-public-key", (req, res) => {
+  const { VAPID_PUBLIC_KEY, configurado } = require("../lib/push");
+  res.json({ key: configurado() ? VAPID_PUBLIC_KEY : null });
+});
+router.post("/push-subscribe", required, async (req, res) => {
+  try {
+    const sub = req.body?.subscription;
+    if (!sub || typeof sub.endpoint !== "string" || !sub.keys?.p256dh || !sub.keys?.auth)
+      return res.status(400).json({ error: "subscription inválida" });
+    const db   = req.app.locals.globalDB;
+    const user = await db.get(`usr_${req.user.uid}`);
+    const previas = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== sub.endpoint);
+    const push_subs = [...previas, { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, ua: String(req.headers["user-agent"] || "").slice(0, 120), ts: Date.now() }].slice(-5);
+    await db.insert({ ...user, notificaciones: { ...user.notificaciones, push_subs }, updated_at: Date.now() });
+    res.json({ ok: true, total: push_subs.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/push-unsubscribe", required, async (req, res) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    const db   = req.app.locals.globalDB;
+    const user = await db.get(`usr_${req.user.uid}`);
+    const push_subs = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== endpoint);
+    await db.insert({ ...user, notificaciones: { ...user.notificaciones, push_subs }, updated_at: Date.now() });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Password reset ────────────────────────────────────────────
 router.post("/reset-password", limReset, async (req, res) => {
   try { await svc.solicitarReset(req.body.email); } catch {}
