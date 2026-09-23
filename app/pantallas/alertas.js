@@ -13,6 +13,15 @@ function fila(a) {
     <span class="val">${a.resuelta ? "resuelta" : haceCuanto(a.ts_inicio)}</span></li>`;
 }
 
+const COLOR_AVISO = { critico: "err", info: "info", ok: "ok" };
+
+function filaAviso(n) {
+  const c = COLOR_AVISO[n.nivel] || "info";
+  return `<li class="fila"><span class="dot ${c}"></span>
+    <span class="txt"><b>${esc(n.titulo || "Aviso")}</b><span>${esc((n.cuerpo || "").slice(0, 90))}</span></span>
+    <span class="val">${haceCuanto(n.ts)}</span></li>`;
+}
+
 async function tarjetaPush() {
   const st = estadoPush();
   const sub = st.soportado ? await suscripcionActual() : null;
@@ -47,15 +56,23 @@ export async function montar(ctx, root) {
       return;
     }
     try { hist = await ctx.api.get("/api/alertas/historial?limit=50"); } catch { hist = { data: [] }; }
+    // Avisos: el historial de notify-org. No es una pestaña nueva — las 6 de
+    // app/core/permisos.js ya están justas — sino una sección más acá.
+    let avisos;
+    try { avisos = await ctx.api.get("/api/notif-org/historial?limit=20"); } catch { avisos = { data: { items: [] } }; }
+    const listaAvisos = avisos?.data?.items || [];
+    const noLeidas = listaAvisos.filter(n => !n.leida).length;
     ctx.nav.setOffline(act.desdeCache, act.ts);
-    ctx.nav.setBadge("alertas", act.data.length);
+    ctx.nav.setBadge("alertas", act.data.length + noLeidas);
     const activasIds = new Set(act.data.map(a => a._id));
     const pasadas = hist.data.filter(a => !activasIds.has(a._id));
     root.innerHTML = `<div id="slot-push"></div>
       <div class="titulo-seccion">Activas · ${act.data.length}</div>
       <ul class="lista">${act.data.length ? act.data.map(fila).join("") : `<li class="vacio">Sin alertas activas. 👌</li>`}</ul>
       <div class="titulo-seccion">Historial</div>
-      <ul class="lista">${pasadas.length ? pasadas.map(fila).join("") : `<li class="vacio">Sin historial.</li>`}</ul>`;
+      <ul class="lista">${pasadas.length ? pasadas.map(fila).join("") : `<li class="vacio">Sin historial.</li>`}</ul>
+      <div class="titulo-seccion">Avisos</div>
+      <ul class="lista">${listaAvisos.length ? listaAvisos.map(filaAviso).join("") : `<li class="vacio">Sin avisos.</li>`}</ul>`;
     tarjetaPush().then((html) => {
       const slot = root.querySelector("#slot-push");
       if (slot) { slot.outerHTML = html; engancharBotonPush(); }
