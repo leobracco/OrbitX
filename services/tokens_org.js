@@ -36,7 +36,6 @@ const RUTAS_PROHIBIDAS = [
   /^\/api\/grupos(\/|$)/,
   /^\/api\/ota(\/|$)/,
   /^\/api\/soporte(\/|$)/,
-  /^\/api\/tokens-org(\/|$)/,
   /^\/api\/crm(\/|$)/,
 ];
 
