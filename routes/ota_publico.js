@@ -78,7 +78,7 @@ router.get("/", async (req, res) => {
   try {
     const productos = await cargarCatalogo();
     res.json({ productos });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { { console.error("[ota_publico]", e.message); res.status(500).json({ error: "Error interno" }); }; }
 });
 
 // ══════════════════════════════════════════════════════════
