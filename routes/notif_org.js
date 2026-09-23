@@ -49,4 +49,61 @@ router.post("/test", async (req, res) => {
   }
 });
 
+// ── Historial de avisos (Sprint 2) ──────────────────────────
+const notis = require("../lib/notificaciones");
+
+function orgDe(req) {
+  const slug = req.user?.estabSlug;
+  if (!slug) { const e = new Error("Sin org activa"); e.status = 400; throw e; }
+  return slug;
+}
+
+// GET /api/notif-org/historial?limit=50&antes_de=<ts>
+// Paginación por cursor sobre ts descendente (nunca skip).
+router.get("/historial", async (req, res) => {
+  try {
+    const orgSlug = orgDe(req);
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const items = await notis.listar(orgSlug, { limit: limit + 1, antesDe: req.query.antes_de || null });
+    const hayMas = items.length > limit;
+    const pagina = hayMas ? items.slice(0, limit) : items;
+    const lectura = await notis.getLectura(orgSlug, req.user.uid);
+    res.json({
+      ok: true,
+      items: pagina.map(n => ({ ...n, leida: notis.estaLeida(n, lectura) })),
+      hay_mas: hayMas,
+      cursor: pagina.length ? pagina[pagina.length - 1].ts : null,
+      no_leidas: notis.contarNoLeidas(pagina, lectura),
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// GET /api/notif-org/no-leidas — barato, para el badge de la campanita.
+router.get("/no-leidas", async (req, res) => {
+  try {
+    const orgSlug = orgDe(req);
+    const [items, lectura] = await Promise.all([
+      notis.listar(orgSlug, { limit: 100 }),
+      notis.getLectura(orgSlug, req.user.uid),
+    ]);
+    res.json({ ok: true, n: notis.contarNoLeidas(items, lectura) });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// POST /api/notif-org/:id/leida
+router.post("/:id/leida", async (req, res) => {
+  try {
+    await notis.marcarUna(orgDe(req), req.user.uid, req.params.id, req.body?.ts);
+    res.json({ ok: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// POST /api/notif-org/leidas — marca todo lo anterior a `ts` (default: ahora).
+router.post("/leidas", async (req, res) => {
+  try {
+    await notis.marcarTodas(orgDe(req), req.user.uid, req.body?.ts);
+    res.json({ ok: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 module.exports = router;
