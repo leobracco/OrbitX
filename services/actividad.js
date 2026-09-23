@@ -4,7 +4,7 @@
 // alertas de la org, y arma un objeto liviano. Parsear coberturas es caro:
 // cache en memoria 5 min por org+temporada.
 const db = require("./couchdb");
-const { calcularStats, statsVigentes, parseKML, contornoM2 } = require("./aog_parser");
+const { calcularStatsAsync, statsVigentes, parseKML, contornoM2 } = require("./aog_parser");
 const { temporadaActual, rangoTemporada, esTemporadaValida } = require("./temporada");
 const TZ = "America/Argentina/Buenos_Aires";
 const CACHE_MS = 5 * 60 * 1000, ONLINE_MS = 2 * 60 * 1000;
@@ -58,7 +58,8 @@ function armarResumen({ temporada, rango, coberturas = [], devices = [], lluvias
 // tope, una org sin migrar reproduce el problema original (22,8 MB y ~2 s de
 // CPU por request); con tope, el Inicio nunca queda en blanco y el resto se
 // completa solo en la cola.
-const MAX_FALLBACK = 10;
+// Tope chico: cada doc son segundos de CPU (troceados con setImmediate, no bloquean, pero alargan el request).
+const MAX_FALLBACK = 3;
 
 // Pura: divide los docs entre los que tienen stats confiables y los que no.
 function separarPorStats(docs) {
@@ -110,7 +111,7 @@ async function cargarCoberturas(estabDB, slug = null) {
   for (const d of faltan.slice(0, MAX_FALLBACK)) {
     try {
       const full = await estabDB.get(d._id);
-      const st = calcularStats(full.contenido || "", null);
+      const st = await calcularStatsAsync(full.contenido || "", null); // troceado: no bloquea el event loop
       if (st) out.push({ lote_nombre: full.lote_nombre, ts: full.ts || 0, stats: conContorno(full.lote_nombre, st) });
     } catch (e) {
       console.warn("[actividad] fallback stats:", d._id, e.message);
