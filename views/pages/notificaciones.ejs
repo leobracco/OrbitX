@@ -36,6 +36,10 @@ const TZ_AVISOS = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", 
 const COLOR_AVISO = { critico: "#E74C3E", info: "#9AA3AD", ok: "#A4BA3E" };
 const cabAvisos = () => ({ "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` });
 let _cursor = null;
+// Vista global del superadmin (sin org activa): el endpoint contesta 400
+// "Sin org activa". Es un estado normal de la pantalla, no un error crudo.
+const SIN_ORG_AVISOS = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgAvisos = (status, msg) => status === 400 && SIN_ORG_AVISOS.test(String(msg || ""));
 
 function filaAviso(n) {
   return `<li style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);${n.leida ? "opacity:0.55" : ""}">
@@ -58,6 +62,11 @@ async function cargar(reset) {
     const qs = _cursor ? `?limit=50&antes_de=${_cursor}` : "?limit=50";
     const r = await fetch(`/api/notif-org/historial${qs}`, { headers: cabAvisos() });
     const j = await r.json();
+    if (esSinOrgAvisos(r.status, j.error)) {
+      ul.innerHTML = `<li style="padding:16px;color:var(--muted2);font-size:12px">Elegí una organización para ver esto</li>`;
+      document.getElementById("notif-mas").style.display = "none";
+      return;
+    }
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const html = (j.items || []).map(filaAviso).join("");
     if (!html && !_cursor) ul.innerHTML = `<li style="padding:16px;color:var(--muted2);font-size:12px">Todavía no hay avisos.</li>`;

@@ -365,11 +365,21 @@ function esc(s) {
 
 let _tokens = [];   // cache en memoria: revocarToken busca el nombre acá, nunca lo interpola en el onclick
 
+// El superadmin en vista global no tiene org activa y la API contesta 400
+// "Sin organización activa". No es un error a mostrar en crudo: es un estado
+// normal de la pantalla (los tokens son siempre de UNA organización).
+const SIN_ORG_INT = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgInt = (status, msg) => status === 400 && SIN_ORG_INT.test(String(msg || ""));
+
 async function cargarTokens() {
   const tb = document.getElementById("tok-lista");
   try {
     const r = await fetch("/api/tokens-org", { headers: auth() });
     const j = await r.json();
+    if (esSinOrgInt(r.status, j.error)) {
+      tb.innerHTML = `<tr><td colspan="5" class="td-dim">Elegí una organización para ver esto</td></tr>`;
+      return;
+    }
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     _tokens = j.tokens || [];
     const filas = _tokens.map(t => `
@@ -382,7 +392,7 @@ async function cargarTokens() {
       </tr>`).join("");
     tb.innerHTML = filas || `<tr><td colspan="5" class="td-dim">Todavía no creaste ningún token.</td></tr>`;
   } catch (e) {
-    tb.innerHTML = `<tr><td colspan="5" class="td-dim">Error: ${e.message}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="5" class="td-dim">Error: ${esc(e.message)}</td></tr>`;
   }
 }
 

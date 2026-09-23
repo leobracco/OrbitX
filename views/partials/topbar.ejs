@@ -48,6 +48,11 @@
   let _orgActiva = "";
   let _esSA = false;
 
+  // El nombre, el slug y el rol de una org son texto libre cargado por un
+  // humano: volcarlos crudos en innerHTML es XSS almacenado (cualquiera que
+  // pueda renombrar una org le inyecta script al topbar de todo el panel).
+  function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
   async function cargarOrgs() {
     try {
       const r = await fetch("/api/auth/me", {
@@ -87,23 +92,29 @@
     const items = _esSA
       ? [{ slug: "", sub: "todas las orgs", label: "Vista global" }, ..._opciones]
       : _opciones;
+    // data-slug + listener en vez de onclick="cambiarOrg('…')": escapar para
+    // HTML no alcanza adentro de un atributo de evento, que es contexto de
+    // JavaScript (un slug con una comilla ya ejecutaba código).
     dd.innerHTML = items.map(m => {
       const activa = m.slug === _orgActiva;
       return `
-        <div onclick="cambiarOrg('${m.slug.replace(/'/g, "\\'")}')"
+        <div data-slug="${esc(m.slug)}"
           style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--ap-border-soft);transition:background .1s;${activa ? 'background:var(--ap-green-dim)' : ''}"
           onmouseover="this.style.background='${activa ? 'var(--ap-green-dim)' : 'var(--ap-bg)'}'"
           onmouseout="this.style.background='${activa ? 'var(--ap-green-dim)' : 'transparent'}'">
           <div style="display:flex;align-items:center;gap:8px">
             ${activa ? '<span style="color:var(--ap-green);font-size:14px">●</span>' : '<span style="width:14px"></span>'}
             <div style="flex:1;min-width:0">
-              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${m.label || m.slug}</div>
-              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${m.sub || ""}</div>
+              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${esc(m.label || m.slug)}</div>
+              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${esc(m.sub || "")}</div>
             </div>
           </div>
         </div>
       `;
     }).join("");
+    dd.querySelectorAll("div[data-slug]").forEach(el => {
+      el.addEventListener("click", () => cambiarOrg(el.dataset.slug || ""));
+    });
   }
 
   window.toggleOrgDropdown = function (e) {
@@ -186,6 +197,12 @@
     } catch {}
   }
 
+  // El superadmin en vista global no tiene org activa: el endpoint contesta
+  // 400 "Sin org activa". Eso no es un error a mostrar en crudo, es un estado
+  // normal de la pantalla.
+  const SIN_ORG = /sin organizaci[oó]n activa|sin org activa/i;
+  function esSinOrg(status, msg) { return status === 400 && SIN_ORG.test(String(msg || "")); }
+
   async function pintarLista() {
     const dd = document.getElementById("notif-dropdown");
     if (!dd) return;
@@ -193,6 +210,10 @@
     try {
       const r = await fetch("/api/notif-org/historial?limit=20", { headers: cab() });
       const j = await r.json();
+      if (esSinOrg(r.status, j.error)) {
+        dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Elegí una organización para ver esto</div>`;
+        return;
+      }
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       const filas = (j.items || []).map(n => `
         <a href="${esc(urlSeg(n.url) || "/notificaciones")}" style="display:block;padding:10px 12px;border-bottom:1px solid var(--ap-border);

@@ -432,6 +432,26 @@ const PALETA = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#06B6D4','#84
 
 const UNIT_LBL = { sem_m:'sem/m', sem_ha:'sem/ha', sem_10m:'sem/10m', kg_ha:'kg/ha', l_ha:'l/ha', g_m:'g/m' };
 
+// Escapa cualquier texto antes de volcarlo en innerHTML. Vive acá arriba y no
+// al lado de su primer uso: lo usan tanto la parte vieja (localStorage) como
+// la nueva (nube), y todo el <script> es un solo bloque.
+function escHTML(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Vista global del superadmin: sin org activa la API contesta 400 y mostrar
+// el error crudo asusta. Es un estado normal de la pantalla.
+const SIN_ORG_PRESC = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgPresc = (status, msg) => status === 400 && SIN_ORG_PRESC.test(String(msg || ""));
+
+// PALETA es un array finito: si `zona` viene 0, null o no numérica, el índice
+// da -1 o NaN y el color salía `undefined` (celda/polígono sin color).
+function colorZona(zona) {
+  const n = Number(zona);
+  const i = Number.isFinite(n) && n >= 1 ? (n - 1) % PALETA.length : 0;
+  return PALETA[i] || PALETA[0];
+}
+
 // ── Init mapa ─────────────────────────────────────────────
 function initMapa() {
   if (mapaL) return;
@@ -777,15 +797,22 @@ function abrirGuardadas() {
 function renderGuardadas() {
   const lista = JSON.parse(localStorage.getItem('orbitx_presc')||'[]');
   const div   = document.getElementById('lista-guardadas');
-  if (!lista.length) {
+  // Lo que ya migró a la nube se lista en "Guardadas en la nube": mostrarlo
+  // también acá era el mismo ítem dos veces. Se filtra por `local_id` (el `id`
+  // del localStorage) pero se conserva el índice original: cargar/enviar/
+  // borrar/exportar reabren el array completo por índice.
+  const visibles = lista
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => !_localIdsNube.has(String(p.id)));
+  if (!visibles.length) {
     div.innerHTML='<div class="empty-state" style="padding:30px"><span class="icon">📋</span><p>Sin prescripciones guardadas</p></div>';
     return;
   }
-  div.innerHTML = lista.map((p,i) => `
+  div.innerHTML = visibles.map(({ p, i }) => `
     <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)">
       <div style="flex:1">
-        <div class="td-main">${p.nombre}</div>
-        <div class="td-dim">${p.fecha} · ${p.zonas} zonas</div>
+        <div class="td-main">${escHTML(p.nombre)}</div>
+        <div class="td-dim">${escHTML(p.fecha)} · ${escHTML(p.zonas)} zonas</div>
       </div>
       <button class="btn btn-sm btn-lime-outline" onclick="cargarGuardada(${i})">Cargar</button>
       <button class="btn btn-sm btn-lime-outline" onclick="abrirEnviar(${i})" title="Enviar a tractor">📡</button>
@@ -1416,11 +1443,13 @@ async function abrirEnviar(i) {
       sel.innerHTML = '<option value="">No hay tractores registrados</option>';
       return;
     }
+    // El nombre del tractor lo carga el usuario: sin escapar, un "<" ahí
+    // rompía el <select> y con un poco más de mala fe inyectaba HTML.
     sel.innerHTML = tractores.map(t =>
-      `<option value="${t.device_id}">${t.nombre} ${t.online ? '🟢' : '⚫'}</option>`
+      `<option value="${escHTML(t.device_id)}">${escHTML(t.nombre)} ${t.online ? '🟢' : '⚫'}</option>`
     ).join('');
   } catch (e) {
-    sel.innerHTML = '<option value="">Error: ' + e.message + '</option>';
+    sel.innerHTML = '<option value="">Error: ' + escHTML(e.message) + '</option>';
   }
 }
 
@@ -1545,6 +1574,8 @@ async function generarDesdeNDVI(guardar) {
       method: "POST", headers: AUTH_H(), body: JSON.stringify(body),
     });
     const j = await r.json();
+    // Superadmin en vista global: no hay org donde generar ni guardar.
+    if (esSinOrgPresc(r.status, j.error)) { est.textContent = "Elegí una organización para ver esto"; return; }
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     _genFC = j.geojson;
     _genLote = lote;
@@ -1566,7 +1597,7 @@ function pintarTablaZonas(fc, lote) {
   // cada zona son texto libre (llegan de una prescripción importada o editada).
   body.innerHTML = fc.features.map(f => `
     <tr>
-      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${PALETA[(f.properties.zona - 1) % PALETA.length]};margin-right:6px"></span>${escHTML(f.properties.nombre)}</td>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorZona(f.properties.zona)};margin-right:6px"></span>${escHTML(f.properties.nombre)}</td>
       <td>${escHTML(f.properties.ndvi_medio ?? "–")}</td>
       <td>${escHTML(f.properties.ha)}</td>
       <td><input type="number" step="0.1" value="${escHTML(f.properties.dosis ?? "")}" data-zona="${escHTML(f.properties.zona)}"
@@ -1597,6 +1628,7 @@ async function guardarZonasEditadas() {
       }),
     });
     const j = await r.json();
+    if (esSinOrgPresc(r.status, j.error)) { est.textContent = "Elegí una organización para ver esto"; return; }
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     est.textContent = "✓ Guardada con las dosis editadas";
     cargarPrescServidor();
@@ -1608,7 +1640,7 @@ function pintarZonasGeneradas(fc) {
   _genLayers.forEach(l => mapaL.removeLayer(l));
   _genLayers = [];
   const capa = L.geoJSON(fc, {
-    style: (f) => ({ color: PALETA[(f.properties.zona - 1) % PALETA.length], weight: 2, fillOpacity: 0.45 }),
+    style: (f) => ({ color: colorZona(f.properties.zona), weight: 2, fillOpacity: 0.45 }),
     // bindPopup con string interpola HTML: sin escHTML, el nombre de una zona
     // importada puede meter script en el popup de Leaflet.
     onEachFeature: (f, l) => l.bindPopup(
@@ -1620,20 +1652,27 @@ function pintarZonasGeneradas(fc) {
 
 // ── Prescripciones guardadas en la nube + migración única ──
 let _tractoresNube = [];
-
-function escHTML(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
+// local_id de todo lo que ya vive en la nube: la lista local de "guardadas"
+// no vuelve a mostrar lo migrado (si no, el usuario ve todo duplicado).
+let _localIdsNube = new Set();
 
 async function cargarPrescServidor() {
   try {
     const r = await fetch("/api/prescripciones/docs", { headers: AUTH_H() });
-    if (!r.ok) return;
-    const j = await r.json();
-    const items = j.items || [];
+    const j = await r.json().catch(() => ({}));
     const cont = document.getElementById("gen-nube");
     const lista = document.getElementById("gen-nube-lista");
     if (!cont || !lista) return;
+    if (esSinOrgPresc(r.status, j.error)) {
+      lista.innerHTML = `<div style="font-size:12px;color:var(--muted2)">Elegí una organización para ver esto</div>`;
+      cont.style.display = "block";
+      return;
+    }
+    if (!r.ok) return;
+    const items = j.items || [];
+    // Se recuerda SIEMPRE, aunque la lista venga vacía: es lo que evita que
+    // renderGuardadas() vuelva a mostrar lo que ya está en la nube.
+    _localIdsNube = new Set(items.map(d => String(d.local_id)).filter(v => v && v !== "null" && v !== "undefined"));
     if (!items.length) { cont.style.display = "none"; return; }
 
     if (!_tractoresNube.length) {
@@ -1684,16 +1723,31 @@ async function enviarPrescNube(id, selEl) {
   } catch (e) { est.textContent = "✗ " + e.message; }
 }
 
+// La migración es ÚNICA: se corría en cada carga de la pantalla y, aunque el
+// server es idempotente por `local_id`, el viaje entero (con el GeoJSON de
+// cada prescripción adentro) se repetía siempre y la lista local seguía
+// mostrando duplicado lo que ya estaba en la nube. El flag guarda el timestamp
+// de la migración exitosa.
+const FLAG_MIGRADO = "orbitx_presc_migrado";
+
 async function migrarPrescLocales() {
+  if (localStorage.getItem(FLAG_MIGRADO)) return;
   let locales = [];
   try { locales = JSON.parse(localStorage.getItem("orbitx_presc") || "[]"); } catch { return; }
-  if (!locales.length) return;
+  if (!locales.length) {
+    // Nada que subir: se marca igual, para no reintentar en cada carga.
+    try { localStorage.setItem(FLAG_MIGRADO, String(Date.now())); } catch {}
+    return;
+  }
   try {
     const r = await fetch("/api/prescripciones/migrar", {
       method: "POST", headers: AUTH_H(), body: JSON.stringify({ locales }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    // Solo se marca si el server confirmó: un 400 por "sin org activa" o un
+    // 500 no pueden dejar las prescripciones locales sin subir para siempre.
+    try { localStorage.setItem(FLAG_MIGRADO, String(Date.now())); } catch {}
     if (j.creados) toast("✓ Prescripciones subidas", `${j.creados} pasaron a la nube`, "lime");
   } catch (e) { console.warn("[presc] migrar:", e.message); }
 }
