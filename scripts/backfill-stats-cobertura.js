@@ -30,6 +30,10 @@ function arg(nombre, def = null, argv = process.argv) {
 // usa el índice ["tipo","subtipo","es_lote"]; `aog_historial` (--historial)
 // usa ["tipo","subtipo"] — ambos ya existen en ESTAB_INDEX_FIELDS
 // (services/couchdb.js), así que ninguna de las dos queries hace table scan.
+// Campos que baja el find (sin "contenido"). "stats" es obligatorio: statsVigentes()
+// la exige para saltear los docs ya migrados; sin ella el script recalcularía todo en cada corrida.
+const CAMPOS_META = ["_id", "lote_nombre", "hash_md5", "stats_ver", "stats_hash", "ts", "stats"];
+
 function selectorPara(tipo) {
   return tipo === "aog_archivo"
     ? { tipo, es_lote: true, subtipo: "sections_coverage" }
@@ -68,7 +72,7 @@ async function main() {
   for (const tipo of tipos) {
     const r = await estabDB.find({
       selector: selectorPara(tipo),
-      fields: ["_id", "lote_nombre", "hash_md5", "stats_ver", "stats_hash", "ts"],
+      fields: CAMPOS_META,
       limit: limite,
     });
     const docs = r.docs || [];
@@ -121,4 +125,4 @@ if (require.main === module) {
   main().catch(e => { console.error("[backfill]", e); process.exit(1); });
 }
 
-module.exports = { arg, selectorPara, decidirAccion, formatResumen };
+module.exports = { arg, selectorPara, decidirAccion, formatResumen, CAMPOS_META };

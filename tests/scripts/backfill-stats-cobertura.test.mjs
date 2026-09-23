@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import backfill from "../../scripts/backfill-stats-cobertura.js";
 
-const { arg, selectorPara, decidirAccion, formatResumen } = backfill;
+const { arg, selectorPara, decidirAccion, formatResumen, CAMPOS_META } = backfill;
 
 test("arg: lee --nombre valor, default y flags booleanos", () => {
   const argv = ["node", "script.js", "--org", "la_flora", "--dry-run", "--limite", "10"];
@@ -41,4 +41,9 @@ test("formatResumen: cuenta total/migrados/salteados/fallidos y marca dry-run", 
 
   const dry = formatResumen("la_flora", { ...base, dry: true });
   assert.match(dry, /\(DRY RUN, no se escribió nada\)$/);
+});
+
+test("CAMPOS_META incluye stats (sin ella statsVigentes nunca da vigente y el backfill no es idempotente)", () => {
+  assert.ok(CAMPOS_META.includes("stats"));
+  assert.ok(!CAMPOS_META.includes("contenido"), "contenido se baja de a uno con get()");
 });
