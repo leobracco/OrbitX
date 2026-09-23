@@ -12,6 +12,9 @@
       🛰 NDVI
     </button>
     <button class="btn btn-ghost" onclick="limpiarMapa()">✕ Limpiar</button>
+<%# Sprint 2: comparador %>
+    <button class="btn btn-ghost" onclick="OrbitComparar.abrir()">⇄ Comparar</button>
+<%# fin Sprint 2: comparador %>
   </div>
 </div>
 
@@ -759,6 +762,12 @@ async function toggleCapa(capaId, nombreEnc, idx) {
     toggle.classList.remove("off");
     mostrarLoading("Cargando capa…");
     try {
+      // Sprint 2: estab en los toggles de capa
+      // Sin ?estab=, un superadmin mirando otra org traía el contexto
+      // equivocado. Con dos paneles que pueden apuntar a orgs distintas, el
+      // bug pasaba de latente a garantizado.
+      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto${typeof _estabQS === "function" ? _estabQS() : ""}`);
+      // fin Sprint 2: estab en los toggles de capa
       const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
       const externas = ctx.capas?.externas || {};
       const todasCapas = Object.entries(externas).flatMap(([sub, cs]) =>
@@ -1205,3 +1214,29 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 </script>
+<%# Sprint 2: comparador · overlay %>
+<div id="cmp-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(5,8,16,0.97);padding:12px;overflow:auto">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+    <h3 style="margin:0;font-size:15px">Comparar dos capas</h3>
+    <span style="font-size:11px;color:var(--muted2)">Los dos paneles se mueven juntos</span>
+    <button class="btn btn-ghost" style="margin-left:auto" onclick="OrbitComparar.cerrar()">✕ Cerrar</button>
+  </div>
+  <div id="cmp-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div id="cmp-panel-A" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
+    <div id="cmp-panel-B" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
+  </div>
+</div>
+<style>
+/* En notebooks angostas los dos paneles quedan inusables: se apilan. */
+@media (max-width: 1100px) { #cmp-grid { grid-template-columns: 1fr; } }
+#cmp-overlay select { background:rgba(0,0,0,0.4);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:11px }
+/* El panel de NDVI nace position:fixed abajo a la derecha: con dos instancias
+   se pisarian. Adentro del comparador va en flujo, dentro de su panel. */
+#cmpA-panel, #cmpB-panel {
+  position:static !important; width:auto !important; right:auto !important; bottom:auto !important;
+  border:none !important; border-top:1px solid var(--border) !important; border-radius:0 !important;
+  box-shadow:none !important; backdrop-filter:none !important; background:rgba(0,0,0,0.25) !important;
+}
+</style>
+<script src="/js/mapa-comparar.js"></script>
+<%# fin Sprint 2: comparador · overlay %>
