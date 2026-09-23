@@ -7,7 +7,7 @@
 // 30-50 MB de pico, y el droplet tiene 1 GB con ~25 apps. Una por vez.
 const db = require("./couchdb");
 const { rasterDeLote } = require("./ndvi_raster");
-const { zonificar } = require("../lib/zonificar");
+const { zonificarAsync } = require("../lib/zonificar");
 const { normalizarColeccion, asignarDosis, desdeLocalStorage } = require("../lib/prescripcion_schema");
 
 const ESTADOS = ["borrador", "lista", "enviada"];
@@ -75,7 +75,10 @@ async function generar({ slug, lote, fecha, indice = "ndvi", n = 3, areaMinHa = 
   const areaMin = Number.isFinite(minHa) ? Math.min(Math.max(minHa, 0.1), 5) : 0.5;
   return enCola(async () => {
     const r = await rasterDeLote({ slug, lote, fecha, indice });
-    const fc = zonificar({
+    // Versión async: cede el event loop entre zona y zona. La sincrónica
+    // bloqueaba el proceso entero varios segundos (y con eso, el timeout de
+    // esta misma cola nunca podía dispararse).
+    const fc = await zonificarAsync({
       datos: r.datos, ancho: r.ancho, alto: r.alto, bbox: r.bbox,
       zona: r.zona, sur: r.sur, n: zonas,
       areaMinHa: areaMin,

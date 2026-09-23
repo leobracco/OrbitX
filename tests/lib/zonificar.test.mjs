@@ -4,8 +4,8 @@ import z from "../../lib/zonificar.js";
 
 const {
   zonaUtmPorLon, latLonAUtm, utmALatLon,
-  clasificarCuantiles, filtroMayoria, fundirChicas,
-  marchingSquares, douglasPeucker, puntoEnAnillo, zonificar,
+  clasificarCuantiles, filtroMayoria, fundirChicas, limpiarNodataChico,
+  marchingSquares, douglasPeucker, puntoEnAnillo, zonificar, zonificarAsync,
   marcarJunctions, simplificarAnilloCompartido, areaFirmada, puntoInterior,
 } = z;
 
@@ -79,7 +79,12 @@ function featureContiene(feature, p) {
 // una sola vez los cruces de TODOS sus anillos con esa línea y se recorren las
 // columnas con la regla par-impar. Los huecos salen gratis (van en la misma
 // lista de cruces, que es justamente lo que hace par-impar).
-function coberturaPorPixel(fc, bbox, ancho, alto, zona) {
+//
+// `valido` (opcional) es la grilla de clases FINAL: los píxeles que ahí quedaron
+// en 255 son nodata y no tienen por qué estar cubiertos por ninguna zona; se
+// cuentan aparte en `nodataCubierto`, que con `tolPx > 0` no es cero (el
+// contorno contra el nodata se simplifica y puede correrse hasta ~1 px).
+function coberturaPorPixel(fc, bbox, ancho, alto, zona, valido = null) {
   const dx = (bbox.maxX - bbox.minX) / ancho, dy = (bbox.maxY - bbox.minY) / alto;
   const aPixel = ([lon, lat]) => {
     const u = latLonAUtm(lat, lon, zona);
@@ -119,12 +124,50 @@ function coberturaPorPixel(fc, bbox, ancho, alto, zona) {
       }
     }
   }
-  let sinCobertura = 0, solapados = 0;
+  let muestras = 0, sinCobertura = 0, solapados = 0, nodataCubierto = 0;
   for (let i = 0; i < cuenta.length; i++) {
+    if (valido && valido[i] === 255) { if (cuenta[i] > 0) nodataCubierto++; continue; }
+    muestras++;
     if (cuenta[i] === 0) sinCobertura++;
     else if (cuenta[i] > 1) solapados++;
   }
-  return { muestras: cuenta.length, sinCobertura, solapados };
+  return { muestras, sinCobertura, solapados, nodataCubierto };
+}
+
+// La grilla de clases que `zonificar` termina vectorizando, rearmada con las
+// mismas funciones públicas y en el mismo orden. Sirve para saber qué píxeles
+// son "válidos" (todo lo que no quedó en 255) al chequear la partición.
+function grillaFinal(datos, ancho, alto, n, areaMinHa, resolucion) {
+  const minPx = Math.max(1, Math.round((areaMinHa * 10000) / (resolucion * resolucion)));
+  const { clases } = clasificarCuantiles(datos, n, 0);
+  const g = filtroMayoria(clases, ancho, alto, n);
+  return fundirChicas(limpiarNodataChico(g, ancho, alto, minPx), ancho, alto, minPx);
+}
+
+// Raster con gradiente + ruido + `pctNube` de píxeles a nodata (DN 0), que es
+// como sale de `services/ndvi_raster.js` cuando la máscara de Sentinel Hub
+// marca nubes sueltas. Todo determinista.
+function rasterConNube(ancho, alto, semilla, pctNube, { circular = false } = {}) {
+  const rand = lcg(semilla);
+  const datos = new Uint8Array(ancho * alto);
+  const cx = (ancho - 1) / 2, cy = (alto - 1) / 2, r = Math.min(ancho, alto) * 0.45;
+  for (let y = 0; y < alto; y++) {
+    for (let x = 0; x < ancho; x++) {
+      const base = ((x + y) / (ancho + alto - 2)) * 220 + 15;
+      const ruido = (rand() - 0.5) * 60;
+      let v = Math.round(base + ruido);
+      if (v < 1) v = 1; if (v > 254) v = 254;
+      const fueraDelLote = circular && Math.hypot(x - cx, y - cy) > r;
+      datos[y * ancho + x] = (fueraDelLote || rand() < pctNube) ? 0 : v;
+    }
+  }
+  return datos;
+}
+
+function contarAnillos(fc) {
+  let n = 0;
+  for (const f of fc.features) for (const poly of f.geometry.coordinates) n += poly.length;
+  return n;
 }
 
 // Vectoriza una grilla de CLASES igual que `zonificar`, pero quedándose en
@@ -139,10 +182,17 @@ function vectorizarClases(g, ancho, alto, nClases, tol = 1) {
       .filter(Boolean);
     const conArea = anillos.map(a => ({ a, area: areaFirmada(a) }));
     const polys = conArea.filter(o => o.area > 0).sort((p, q) => p.area - q.area)
-      .map(e => ({ ext: e.a, huecos: [] }));
+      .map(e => ({ ext: e.a, area: e.area, huecos: [] }));
     for (const h of conArea.filter(o => o.area < 0)) {
       const p = puntoInterior(h.a) || h.a[0];
-      const dueno = polys.find(q => puntoEnAnillo(p, q.ext));
+      // Misma regla que `zonificar`: un exterior que cabe DENTRO del hueco no
+      // puede ser su dueño. Sin esto, con islas anidadas de la misma clase el
+      // hueco se le asigna a la isla interior (más chica, se prueba primero).
+      let dueno = null;
+      for (const q of polys) {
+        if (q.area <= Math.abs(h.area)) continue;
+        if (puntoEnAnillo(p, q.ext)) { dueno = q; break; }
+      }
       if (dueno) dueno.huecos.push(h.a);
     }
     porClase.push(polys);
@@ -209,8 +259,7 @@ test("filtroMayoria: se come el píxel suelto", () => {
   g[2 * ancho + 2] = 1;                          // un píxel clase 1 en el medio
   const out = filtroMayoria(g, ancho, alto, 2);
   assert.equal(out[2 * ancho + 2], 0);
-  assert.equal(out.filter ? 0 : 0, 0);           // Uint8Array no tiene filter: se cuenta a mano
-  let unos = 0;
+  let unos = 0;                                  // Uint8Array no tiene filter: se cuenta a mano
   for (const v of out) if (v === 1) unos++;
   assert.equal(unos, 0);
 });
@@ -609,4 +658,139 @@ test("puntoInterior: no cae sobre una arista cuando el vértice de yMin tiene ve
   const p = puntoInterior(a);
   assert.ok(p, "tiene que encontrar un punto interior");
   assert.ok(puntoEnAnillo(p, a), `el punto ${JSON.stringify(p)} cayó sobre el borde, no adentro`);
+});
+
+// ── Revisión final de la Pieza 1 ────────────────────────────
+
+test("limpiarNodataChico: tapa el moteado de nubes y respeta el nodata grande y el del borde", () => {
+  // 20x20 de clase 0 con: un píxel suelto de nodata en el medio (nube), un
+  // bloque grande de nodata (nube de verdad) y una franja de nodata pegada al
+  // borde izquierdo (lo que queda fuera del contorno del lote).
+  const ancho = 20, alto = 20, minPixeles = 10;
+  const g = new Uint8Array(ancho * alto);                      // todo clase 0
+  g[10 * ancho + 10] = 255;                                    // nube de 1 px
+  for (let y = 3; y <= 7; y++) for (let x = 12; x <= 17; x++) g[y * ancho + x] = 255;   // 30 px
+  for (let y = 0; y < alto; y++) g[y * ancho] = 255;           // franja contra el borde
+
+  const out = limpiarNodataChico(g, ancho, alto, minPixeles);
+  assert.equal(out[10 * ancho + 10], 0, "el píxel suelto de nube se rellena con la clase vecina");
+  assert.equal(out[5 * ancho + 14], 255, "el nodata grande se conserva");
+  assert.equal(out[5 * ancho], 255, "el nodata que toca el borde se conserva");
+
+  // Con dos clases alrededor, gana la que comparte más borde con el hueco.
+  const h = new Uint8Array(ancho * alto);
+  for (let y = 0; y < alto; y++) for (let x = 0; x < ancho; x++) h[y * ancho + x] = x < 10 ? 0 : 1;
+  h[10 * ancho + 12] = 255;                                    // hueco rodeado de clase 1
+  assert.equal(limpiarNodataChico(h, ancho, alto, minPixeles)[10 * ancho + 12], 1);
+});
+
+test("zonificar: 512x512 con 5 % de nube no explota en anillos ni en tamaño", () => {
+  // C3. `services/ndvi_raster.js` manda a nodata cada píxel que la máscara de
+  // Sentinel Hub da por nublado, y las nubes vienen moteadas: cada píxel suelto
+  // era un agujero de 1 px con su propio anillo. Medido sobre este mismo raster
+  // con el código anterior: 8.721 anillos, 2,52 MB de GeoJSON y 1.346 ms (y el
+  // mismo raster a 1024x1024 daba 34.365 anillos, 10,2 MB y 12,9 s de CPU
+  // sincrónica, con el event loop bloqueado todo ese rato).
+  const ancho = 512, alto = 512, resolucion = 10, n = 5, areaMinHa = 0.5;
+  const datos = rasterConNube(ancho, alto, 20260925, 0.05);
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
+
+  const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa });
+  const anillos = contarAnillos(fc);
+  const mb = JSON.stringify(fc).length / 1048576;
+  assert.ok(anillos < 2000, `quedaron ${anillos} anillos`);
+  assert.ok(mb < 1.5, `el GeoJSON pesa ${mb.toFixed(2)} MB`);
+
+  // Y sobre los píxeles VÁLIDOS (los que no quedaron en nodata) la partición
+  // sigue siendo exacta: ni uno sin cubrir, ni uno en dos zonas.
+  const g = grillaFinal(datos, ancho, alto, n, areaMinHa, resolucion);
+  const { muestras, sinCobertura, solapados } = coberturaPorPixel(fc, bbox, ancho, alto, 20, g);
+  assert.ok(muestras > 250000, `muestras válidas insuficientes (${muestras})`);
+  assert.equal(sinCobertura, 0, `${sinCobertura}/${muestras} píxeles válidos sin cobertura`);
+  assert.equal(solapados, 0, `${solapados}/${muestras} píxeles válidos en más de una zona`);
+});
+
+test("zonificar: partición exacta con máscara circular del lote + nubes", () => {
+  // El caso real: fuera del contorno del lote todo es nodata (y toca el borde
+  // del raster, así que se conserva) más nubes moteadas adentro. Se chequea con
+  // tolPx = 0 porque contra el nodata NO hay zona vecina que comparta la cadena:
+  // con tolPx = 1 el contorno se simplifica y puede correrse hasta ~1 px (es lo
+  // que documenta la cabecera del módulo). Los solapes, en cambio, no se
+  // perdonan con ningún tolPx.
+  const ancho = 128, alto = 128, resolucion = 10, n = 4, areaMinHa = 0.2;
+  const datos = rasterConNube(ancho, alto, 20260926, 0.05, { circular: true });
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
+  const g = grillaFinal(datos, ancho, alto, n, areaMinHa, resolucion);
+
+  const exacta = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa, tolPx: 0 });
+  const r0 = coberturaPorPixel(exacta, bbox, ancho, alto, 20, g);
+  assert.ok(r0.muestras > 9000, `muestras válidas insuficientes (${r0.muestras})`);
+  assert.equal(r0.sinCobertura, 0, `${r0.sinCobertura}/${r0.muestras} píxeles válidos sin cobertura`);
+  assert.equal(r0.solapados, 0, `${r0.solapados}/${r0.muestras} píxeles válidos en más de una zona`);
+  assert.equal(r0.nodataCubierto, 0, "con tolPx 0 ninguna zona puede pisar el nodata");
+
+  const suave = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa });
+  const r1 = coberturaPorPixel(suave, bbox, ancho, alto, 20, g);
+  assert.equal(r1.solapados, 0, `${r1.solapados}/${r1.muestras} píxeles en más de una zona con tolPx 1`);
+  assert.ok(r1.sinCobertura / r1.muestras < 0.01, `tolPx 1 corrió el contorno demasiado: ${r1.sinCobertura}/${r1.muestras}`);
+});
+
+test("asignación de huecos: islas anidadas de la misma clase — el hueco va al exterior que lo contiene", () => {
+  // I13. Anillos concéntricos: clase 0 de fondo, anillo de clase 1, e isla de
+  // clase 0 de vuelta adentro. El hueco de la clase 0 (el que dibuja el borde
+  // exterior del anillo) mide 13x13 = 169 px² y su punto interior es el centro
+  // (10,5 ; 10,5), que cae DENTRO de la isla interior de 7x7 = 49 px². Como los
+  // exteriores se prueban de menor a mayor área, la isla se probaba primero y se
+  // quedaba con el hueco: la isla se vaciaba entera (su exterior de 49 con un
+  // hueco de 169 encima) y el exterior grande se quedaba sin hueco, pisando todo
+  // el anillo de la clase 1. Medido con el código anterior: 120 de 441 centros
+  // de píxel mal cubiertos (los 120 del anillo, en dos zonas a la vez).
+  const ancho = 21, alto = 21;
+  const g = new Uint8Array(ancho * alto);                                             // fondo clase 0
+  for (let y = 4; y <= 16; y++) for (let x = 4; x <= 16; x++) g[y * ancho + x] = 1;   // anillo clase 1
+  for (let y = 7; y <= 13; y++) for (let x = 7; x <= 13; x++) g[y * ancho + x] = 0;   // isla clase 0
+
+  const porClase = vectorizarClases(g, ancho, alto, 2);
+  const malos = [];
+  for (let y = 0; y < alto; y++) {
+    for (let x = 0; x < ancho; x++) {
+      const dentro = [];
+      for (let c = 0; c < 2; c++) if (polysContienen(porClase[c], [x + 0.5, y + 0.5])) dentro.push(c);
+      if (dentro.length !== 1 || dentro[0] !== g[y * ancho + x]) malos.push(`(${x},${y}) esperaba ${g[y * ancho + x]} y dio [${dentro}]`);
+    }
+  }
+  assert.deepEqual(malos, [], `${malos.length} píxeles mal cubiertos: ${malos.slice(0, 5).join("; ")}`);
+
+  // Y el hueco quedó colgado del exterior grande, no de la isla.
+  const [isla, marco] = porClase[0];
+  assert.equal(isla.huecos.length, 0, "la isla interior no tiene que tener huecos");
+  assert.equal(marco.huecos.length, 1, "el hueco es del exterior que lo contiene");
+});
+
+test("zonificar: valida que datos y bbox sean coherentes con la grilla", () => {
+  const bbox = { minX: 0, minY: 0, maxX: 40, maxY: 40 };
+  assert.throws(() => zonificar({ datos: new Uint8Array(15), ancho: 4, alto: 4, bbox, zona: 20, n: 2 }), /15 píxeles/);
+  assert.throws(() => zonificar({ datos: null, ancho: 4, alto: 4, bbox, zona: 20, n: 2 }), /datos/);
+  assert.throws(() => zonificar({ datos: new Uint8Array(16), ancho: 0, alto: 4, bbox, zona: 20, n: 2 }), /enteros positivos/);
+  assert.throws(() => zonificar({ datos: new Uint8Array(16), ancho: 4, alto: 4, bbox: { minX: 0, minY: 0, maxX: 0, maxY: 40 }, zona: 20, n: 2 }), /bbox/);
+  assert.throws(() => zonificar({ datos: new Uint8Array(16), ancho: 4, alto: 4, bbox: { minX: 0, minY: 40, maxX: 40, maxY: 0 }, zona: 20, n: 2 }), /bbox/);
+  assert.doesNotThrow(() => zonificar({ datos: new Uint8Array(16), ancho: 4, alto: 4, bbox, zona: 20, n: 2 }));
+});
+
+test("zonificarAsync: mismo resultado que la sincrónica, cediendo el event loop", async () => {
+  const ancho = 64, alto = 64, resolucion = 10;
+  const datos = rasterConNube(ancho, alto, 20260927, 0.03);
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
+  const args = { datos, ancho, alto, bbox, zona: 20, n: 4, areaMinHa: 0.2 };
+
+  // Un `setImmediate` encolado ANTES de arrancar tiene que haber corrido cuando
+  // la zonificación termina. Si el trabajo fuera sincrónico (o si el `await`
+  // fuera sólo un microtask), la promesa resolvería antes que la fase de check
+  // y esta bandera seguiría en false.
+  let cedio = false;
+  setImmediate(() => { cedio = true; });
+  const salida = await zonificarAsync(args);
+
+  assert.ok(cedio, "zonificarAsync tiene que soltar el event loop mientras trabaja");
+  assert.deepEqual(salida, zonificar(args));
 });
