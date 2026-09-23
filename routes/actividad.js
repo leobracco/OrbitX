@@ -11,6 +11,6 @@ router.get("/resumen", async (req, res) => {
     const slug = (esSA && typeof req.query.estab === "string" && req.query.estab) ? req.query.estab : req.user?.estabSlug;
     if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
     res.json(await resumenActividad(slug, { temporada: req.query.temporada }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error("[actividad]", e.message); res.status(500).json({ error: "Error interno" }); }
 });
 module.exports = router;

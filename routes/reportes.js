@@ -28,7 +28,7 @@ router.get("/temporada", async (req, res) => {
     const slug = resolverSlug(req);
     if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
     res.json(await reporteTemporada(slug, req.query.temporada));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error("[reportes]", e.message); res.status(500).json({ error: "Error interno" }); }
 });
 
 // GET /reportes/temporada/vista?temporada=AAAA/AA[&estab=slug] — vista HTML
@@ -43,7 +43,7 @@ router.get("/temporada/vista", async (req, res) => {
     const temporadas = [temp, anterior, anteanterior];
     const r = await reporteTemporada(slug, temp);
     res.render("reporte-temporada", { r, org: await nombreOrg(slug), temporadas, emitido: new Date() });
-  } catch (e) { res.status(500).type("text/plain").send(e.message); }
+  } catch (e) { console.error("[reportes]", e.message); res.status(500).type("text/plain").send("Error interno"); }
 });
 
 module.exports = router;
