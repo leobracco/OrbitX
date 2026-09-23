@@ -240,6 +240,14 @@ app.use("/api/agraria",        auth.required, routeAgraria);
 // Grupos: JWT + guard superadmin interno (router.use(soloAdmin) en grupos.js).
 app.use("/api/grupos",         auth.required, routeGrupos);
 app.use("/api/lluvias",        auth.required, routeLluvias);
+// ── Sprint 1: actividad / reportes / releases ─────────────
+app.use("/api/actividad", auth.required, require("./routes/actividad"));
+app.use("/api/reportes", auth.required, require("./routes/reportes"));
+app.use("/reportes", auth.required, require("./routes/reportes"));
+app.use("/api/ota/publico", require("./routes/ota_publico")); // sin auth: catálogo curado + descargas con límite por IP
+app.get("/releases", (req, res) => res.redirect("/api/ota/publico/pagina"));
+for (const p of ["flowx", "quantix", "quantix7", "vistax"]) app.use(`/flash-publico/${p}`, express.static(path.join(__dirname, "flash-app", p)));
+// ── fin Sprint 1 ──────────────────────────────────────────
 app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
 app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.
@@ -325,6 +333,9 @@ cron.schedule(
         const res = await db.getResumenDiario(e.slug);
         if (!res) continue;
         const analisis = await agraria.analizarDia(res);
+// Sprint 1: notify-org (tras: const analisis = await agraria.analizarDia(res);)
+        require("./lib/notify-org").notify(e.slug, "reporte_diario", { titulo: `Resumen diario · ${e.nombre || e.slug}`, cuerpo: (typeof analisis === "string" ? analisis : JSON.stringify(analisis)).slice(0, 1500) }).catch(err => console.warn("[notify/diario]", err.message));
+        // fin Sprint 1: notify-org
         io.to(`estab:${e.slug}`).emit("agraria:resumen_diario", {
           estab: e.nombre,
           analisis,
@@ -353,6 +364,9 @@ cron.schedule("*/5 * * * *", async () => {
       try {
         const min = Math.round((ahora - d.ultimo_visto) / 60000);
         await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
+// Sprint 1: notify-org (tras: await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });)
+        await require("./lib/notify-org").notify(d.estab_slug, "nodo_caido", { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min` }).catch(e => console.warn("[notify/caido]", e.message));
+        // fin Sprint 1: notify-org
         await globalDB.insert({ ...d, caido_notificado_ts: ahora });
       } catch (e) { console.warn("[CRON/caidos]", d.device_id, e.message); }
     }
