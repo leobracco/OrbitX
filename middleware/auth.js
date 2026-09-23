@@ -212,15 +212,17 @@ function soloSuperadmin(req, res, next) {
   next();
 }
 
+// Sprint 2: recurso "prescripciones" — el agrónomo genera y edita prescripciones
+// (antes el router exigía lotes:write, que el agrónomo no tiene).
 const PERMS = {
-  superadmin: { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w","d"], dispositivos:["r","w","d"], audit_log:["r"] },
-  owner:      { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"] },
-  admin_org:  { usuarios:["r","w","i"],     lotes:["r","w"],     alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"] },
-  agronomo:   { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[] },
-  contratista:{ usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
-  operador:   { usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
-  member:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[] },
-  viewer:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:[],            audit_log:[] },
+  superadmin: { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w","d"], dispositivos:["r","w","d"], audit_log:["r"], prescripciones:["r","w","d"] },
+  owner:      { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"], prescripciones:["r","w","d"] },
+  admin_org:  { usuarios:["r","w","i"],     lotes:["r","w"],     alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"], prescripciones:["r","w","d"] },
+  agronomo:   { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[],    prescripciones:["r","w"] },
+  contratista:{ usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  operador:   { usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  member:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  viewer:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:[],            audit_log:[],    prescripciones:["r"] },
 };
 const AM = { read:"r", write:"w", delete:"d", invite:"i" };
 

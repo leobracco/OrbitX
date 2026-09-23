@@ -23,7 +23,7 @@ const guard = [auth.required, noDevices];
 // un tractor (superadmin, owner, admin_org). Si algún día se agrega la clave
 // `prescripciones` a PERMS, cambiar acá y nada más.
 // requirePermiso ya rechaza devices y deja los tokens `orbx_` en solo lectura.
-const guardW = [auth.required, noDevices, auth.requirePermiso("lotes", "write")];
+const guardW = [auth.required, noDevices, auth.requirePermiso("prescripciones", "write")];
 
 function orgDe(req) {
   const slug = req.query.estab || req.user?.estabSlug;
