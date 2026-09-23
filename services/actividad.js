@@ -23,7 +23,7 @@ function limpiarCache() {
 function mesAR(ts) { return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(new Date(ts)); }
 const r1 = (n) => Math.round(n * 10) / 10;
 
-function armarResumen({ temporada, rango, coberturas = [], maestros = [], devices = [], lluvias = [], alertas = [], ahora = Date.now() }) {
+function armarResumen({ temporada, rango, coberturas = [], devices = [], lluvias = [], alertas = [], ahora = Date.now() }) {
   const enRango = coberturas.filter(c => c.ts >= rango.desdeMs && c.ts <= rango.hastaMs && c.stats);
   const porLote = new Map();
   for (const c of enRango) { const prev = porLote.get(c.lote_nombre); if (!prev || c.ts > prev.ts) porLote.set(c.lote_nombre, c); }
@@ -66,14 +66,13 @@ async function resumenActividad(slug, { temporada } = {}) {
   const hit = _cache.get(key);
   if (hit && Date.now() - hit.ts < CACHE_MS) return { ...hit.data, cache: true };
   const estabDB = db.getDB(slug), globalDB = db.getDB("global");
-  const [coberturas, maestros, devs, lluv, alertas] = await Promise.all([
+  const [coberturas, devs, lluv, alertas] = await Promise.all([
     cargarCoberturas(estabDB),
-    estabDB.find({ selector: { tipo: "lote_maestro" }, fields: ["nombre", "cultivo", "temporada"], limit: 2000 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
     globalDB.find({ selector: { tipo: "device", estab_slug: slug }, fields: ["device_id", "hostname", "ultimo_visto"], limit: 500 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
     estabDB.find({ selector: { tipo: "lluvia_registro" }, fields: ["fecha", "mm", "lote"], limit: 2000 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
     db.getAlertasActivas(slug).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
   ]);
-  const data = armarResumen({ temporada: temp, rango: rangoTemporada(temp), coberturas, maestros, devices: devs, lluvias: lluv, alertas });
+  const data = armarResumen({ temporada: temp, rango: rangoTemporada(temp), coberturas, devices: devs, lluvias: lluv, alertas });
   _cache.set(key, { ts: Date.now(), data });
   limpiarCache();
   return data;
