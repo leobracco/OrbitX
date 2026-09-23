@@ -232,6 +232,9 @@ app.use("/api/prescripciones", (req, res, next) => {
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
+// Sprint 2: tokens de org
+app.use("/api/tokens-org", auth.required, auth.adminOnly, require("./routes/tokens_org"));
+// fin Sprint 2: tokens de org
 // Puente CRM (solo lectura, token de servicio propio — ver routes/crm.js).
 app.use("/api/crm", require("./routes/crm"));
 // AgrarIA local (PC del usuario): estado de solo lectura con deviceAuth, sin JWT.
@@ -336,7 +339,7 @@ cron.schedule(
         const res = await db.getResumenDiario(e.slug);
         if (!res) continue;
         const analisis = await agraria.analizarDia(res);
-// Sprint 1: notify-org (tras: const analisis = await agraria.analizarDia(res);)
+        // Sprint 1: notify-org (tras: const analisis = await agraria.analizarDia(res);)
         if (!analisis) continue; // sin análisis (agrarIA caída o sin clave) no se manda nada
         require("./lib/notify-org").notify(e.slug, "reporte_diario", { titulo: `Resumen diario · ${e.nombre || e.slug}`, cuerpo: (typeof analisis === "string" ? analisis : JSON.stringify(analisis)).slice(0, 1500) }).catch(err => console.warn("[notify/diario]", err.message));
         // fin Sprint 1: notify-org
@@ -368,7 +371,7 @@ cron.schedule("*/5 * * * *", async () => {
       try {
         const min = Math.round((ahora - d.ultimo_visto) / 60000);
         await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
-// Sprint 1: notify-org (tras: await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });)
+        // Sprint 1: notify-org (tras: await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });)
         await require("./lib/notify-org").notify(d.estab_slug, "nodo_caido", { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min` }).catch(e => console.warn("[notify/caido]", e.message));
         // fin Sprint 1: notify-org
         await globalDB.insert({ ...d, caido_notificado_ts: ahora });

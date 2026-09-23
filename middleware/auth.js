@@ -77,6 +77,52 @@ async function required(req, res, next) {
     ? header.slice(7)
     : (req.cookies?.orbitx_token || req.query?.token || null);
 
+  // Sprint 2: tokens de org
+  // Va ANTES de la rama de device para que un orbx_ nunca caiga en el camino
+  // del master token. Se acepta SOLO por el header Authorization: por ?token=
+  // la credencial queda en los logs de nginx, en el historial del browser y en
+  // el Referer, y un token de org es de larga vida y sin token_version.
+  const bearerRaw = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (bearerRaw.startsWith("orbx_")) {
+    const tokSrv = require("../services/tokens_org");
+    if (!tokSrv.esSoloLectura(req.method))
+      return res.status(403).json({ error: "Los tokens de organización son de solo lectura" });
+    if (tokSrv.rutaProhibida(req.originalUrl))
+      return res.status(403).json({ error: "Ese endpoint no está disponible para tokens de organización" });
+
+    let docTok;
+    try { docTok = await tokSrv.buscarPorToken(bearerRaw); }
+    catch (e) {
+      // Fail-CLOSED, al revés que el chequeo de revocación de JWT: si no
+      // podemos verificar, no pasa.
+      console.error("[auth.required/token-org]", e.message);
+      return res.status(503).json({ error: "No se pudo validar el token, probá de nuevo en un momento" });
+    }
+
+    const ev = tokSrv.evaluarToken(docTok, Date.now());
+    if (!ev.valido) {
+      if (ev.motivo === "revocado") return res.status(403).json({ error: "Token revocado" });
+      if (ev.motivo === "vencido")  return res.status(401).json({ error: "Token vencido" });
+      return res.status(401).json({ error: "Token de organización inválido" });
+    }
+
+    tokSrv.registrarUso(docTok, req.ip);
+    req.user = {
+      uid:         `tok_${docTok._id}`,
+      rol:         "viewer",
+      rol_global:  "viewer",
+      estabSlug:   docTok.org_slug,
+      memberships: [{ orgSlug: docTok.org_slug, rol: "viewer" }],
+      isDevice:    false,
+      isToken:     true,
+      scopes:      docTok.scopes || ["lectura"],
+    };
+    return next();
+  }
+  if (token && String(token).startsWith("orbx_"))
+    return res.status(401).json({ error: "El token de organización solo se acepta por el header Authorization" });
+  // fin Sprint 2: tokens de org
+
   if (!token && req.headers["x-device-id"]) {
     const deviceId = req.headers["x-device-id"];
     const sentTok  = req.headers["x-auth-token"];
@@ -180,6 +226,14 @@ const AM = { read:"r", write:"w", delete:"d", invite:"i" };
 
 function requirePermiso(recurso, accion) {
   return (req, res, next) => {
+    // Sprint 2: tokens de org · requirePermiso
+    // Un token de organización solo lee. El guard va acá además del chequeo de
+    // método en `required` porque requirePermiso es el único punto por donde
+    // pasan los endpoints con permisos finos.
+    if (req.user?.isToken && accion !== "read" && accion !== "r") {
+      return res.status(403).json({ error: "Sin permiso", detalle: "los tokens de organización son de solo lectura" });
+    }
+    // fin Sprint 2: tokens de org · requirePermiso
     // O3 — Devices NUNCA pueden cruzar requirePermiso. Antes había un
     // bypass `if (isDevice) return next()` que daba a cualquier device
     // token acceso a /api/auth/invitar, /api/auth/equipo (CRUD usuarios)
