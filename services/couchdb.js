@@ -194,6 +194,8 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","lote_ref"], // capas por lote: {tipo:"lote_capa", lote_ref:{$in:…}}
   ["tipo","updated_at"], // lote_maestro ordenado/paginado por fecha
   ["tipo","fecha"], // lluvia_registro ordenado por fecha
+  ["tipo","ts_inicio"], // alertas: historial ordenado sin filtrar resuelta (Sprint 1)
+  ["tipo","temporada"], // lote_maestro por temporada: reportes y actividad (Sprint 1)
   ["tipo","subtipo"],
   ["tipo","subtipo","es_lote"],
   ["tipo","entregado"],
