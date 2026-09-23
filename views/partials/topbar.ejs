@@ -21,6 +21,20 @@
       </div>
     </div>
 
+<%# Sprint 2: badge notificaciones %>
+    <div id="notif-selector" style="position:relative;display:flex;align-items:center;cursor:pointer;user-select:none;padding:4px 6px"
+      onclick="toggleNotifDropdown(event)" title="Avisos">
+      <span style="font-size:16px;line-height:1">🔔</span>
+      <span id="notif-badge" style="display:none;position:absolute;top:0;right:0;min-width:15px;height:15px;
+            border-radius:8px;background:var(--ap-red,#E74C3E);color:#fff;font-size:9px;line-height:15px;
+            text-align:center;padding:0 3px;font-weight:600">0</span>
+      <div id="notif-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:340px;max-height:60vh;overflow:auto;
+               background:var(--ap-card);border:1px solid var(--ap-border);border-radius:8px;
+               box-shadow:0 12px 32px rgba(0,0,0,0.5);z-index:120;text-align:left">
+      </div>
+    </div>
+<%# fin Sprint 2: badge notificaciones %>
     <span class="topbar-time" id="topbar-time"></span>
     <% if (typeof topbarActions !== 'undefined') { %>
       <%- topbarActions %>
@@ -133,3 +147,101 @@
   document.addEventListener("DOMContentLoaded", cargarOrgs);
 })();
 </script>
+
+<%# Sprint 2: badge notificaciones · script %>
+<script>
+(function () {
+  // Ojo: este partial se renderiza en TODAS las páginas del panel. Todo va
+  // envuelto en try/catch y con optional chaining: un error acá rompe el panel
+  // entero.
+  const TZ = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+  const tok = () => localStorage.getItem("orbitx_token") || "";
+  const cab = () => ({ "Authorization": `Bearer ${tok()}` });
+  const COLOR = { critico: "#E74C3E", info: "#9AA3AD", ok: "#A4BA3E" };
+  let _abierto = false;
+  // Escapar texto que viene de la DB antes de pintarlo (título/cuerpo del aviso).
+  function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+  async function refrescarBadge() {
+    try {
+      const r = await fetch("/api/notif-org/no-leidas", { headers: cab() });
+      if (!r.ok) return;
+      const j = await r.json();
+      const b = document.getElementById("notif-badge");
+      if (!b) return;
+      // Ojo: el endpoint real devuelve { ok, no_leidas, hay_mas } (no { n }
+      // como asumía el brief original) — ver routes/notif_org.js.
+      const n = j.no_leidas || 0;
+      b.textContent = n > 99 ? "99+" : String(n);
+      b.style.display = n > 0 ? "block" : "none";
+    } catch {}
+  }
+
+  async function pintarLista() {
+    const dd = document.getElementById("notif-dropdown");
+    if (!dd) return;
+    dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Cargando…</div>`;
+    try {
+      const r = await fetch("/api/notif-org/historial?limit=20", { headers: cab() });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const filas = (j.items || []).map(n => `
+        <a href="${esc(n.url || "/notificaciones")}" style="display:block;padding:10px 12px;border-bottom:1px solid var(--ap-border);
+           text-decoration:none;color:inherit;${n.leida ? "opacity:0.55" : ""}">
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <span style="width:7px;height:7px;border-radius:50%;background:${COLOR[n.nivel] || COLOR.info};margin-top:5px;flex-shrink:0"></span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600;color:var(--ap-text)">${esc(n.titulo)}</div>
+              <div style="font-size:11px;color:var(--ap-muted);line-height:1.5;white-space:pre-wrap">${esc((n.cuerpo || "").slice(0, 160))}</div>
+              <div style="font-size:10px;color:var(--ap-muted);margin-top:3px">${new Date(n.ts).toLocaleString("es-AR", TZ)}</div>
+            </div>
+          </div>
+        </a>`).join("");
+      dd.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--ap-border)">
+          <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ap-muted);flex:1">Avisos</span>
+          <button id="notif-marcar" style="background:none;border:none;color:var(--ap-green,#A4BA3E);cursor:pointer;font-size:11px">Marcar leídas</button>
+        </div>
+        ${filas || `<div style="padding:16px;color:var(--ap-muted);font-size:11px;text-align:center">Sin avisos todavía.</div>`}
+        <a href="/notificaciones" style="display:block;padding:10px;text-align:center;font-size:11px;color:var(--ap-muted);text-decoration:none">Ver todos</a>`;
+      dd.querySelector("#notif-marcar")?.addEventListener("click", async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        try {
+          await fetch("/api/notif-org/leidas", {
+            method: "POST",
+            headers: Object.assign(cab(), { "Content-Type": "application/json" }),
+            body: JSON.stringify({ ts: Date.now() }),
+          });
+          await refrescarBadge();
+          await pintarLista();
+        } catch {}
+      });
+    } catch (e) {
+      dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">No se pudieron cargar los avisos.</div>`;
+    }
+  }
+
+  window.toggleNotifDropdown = function (ev) {
+    ev?.stopPropagation();
+    const dd = document.getElementById("notif-dropdown");
+    if (!dd) return;
+    _abierto = !_abierto;
+    dd.style.display = _abierto ? "block" : "none";
+    if (_abierto) pintarLista();
+  };
+
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#notif-selector")) {
+      const dd = document.getElementById("notif-dropdown");
+      if (dd) dd.style.display = "none";
+      _abierto = false;
+    }
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    refrescarBadge();
+    setInterval(refrescarBadge, 60000);
+  });
+})();
+</script>
+<%# fin Sprint 2: badge notificaciones · script %>

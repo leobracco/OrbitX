@@ -754,6 +754,14 @@ router.get("/lluvias", requireAuth, async (req, res) => {
   res.render("layout", { ...base(req, { regBadge }), title: "Lluvias", page: "lluvias" });
 });
 
+// Sprint 2: pagina de avisos
+router.get("/notificaciones", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Avisos", page: "notificaciones", activeNav: "/notificaciones" });
+});
+// fin Sprint 2: pagina de avisos
+
 // ─────────────────────────────────────────────────────────
 // SOPORTE — chat con las pantallas PilotX (datos vía /api/soporte/chat)
 // ─────────────────────────────────────────────────────────
