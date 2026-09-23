@@ -55,6 +55,8 @@ function navGroup(id, titulo, itemsHtml) {
 <% if (locals.isAdmin || locals.isSA) { %>
 <%
 let _adminItems =
+  navItem('/equipo',    '🤝', 'Equipo',    _nav) +
+  navItem('/soporte-chat', '💬', 'Soporte', _nav) +
   navItem('/registros', '📬', 'Registros', _nav, locals.regBadge || 0) +
   navItem('/usuarios',  '👤', 'Usuarios',  _nav) +
   navItem('/roles',     '🔑', 'Roles',     _nav) +
