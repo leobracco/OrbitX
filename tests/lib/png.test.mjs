@@ -165,3 +165,41 @@ test("PNG con el IDAT partido en varios chunks se decodifica igual", () => {
   const r = decodificarPNG(buf);
   assert.deepEqual(Array.from(r.datos), Array.from(pixeles));
 });
+
+// El inflate está topeado a alto * (1 + ancho * canales), que es el tamaño
+// exacto de un PNG no entrelazado de 8 bits. Sin ese tope, un IDAT chico que
+// infla a cientos de MB se descomprime entero antes de que el decoder pueda
+// darse cuenta (en un droplet de 1 GB con ~25 apps eso es un OOM).
+test("un IDAT que infla más de lo que el IHDR declara se corta", () => {
+  const ancho = 8, alto = 8, canales = 1;
+  const paso = ancho * canales;
+  // Declaramos 8x8 (72 bytes inflados) pero mandamos un stream de 1 MB de ceros.
+  const inflado = Buffer.alloc(1024 * 1024, 0);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(ancho, 0);
+  ihdr.writeUInt32BE(alto, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+
+  const buf = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(inflado)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+
+  assert.ok(inflado.length > alto * (1 + paso), "la fixture tiene que exceder el tope");
+  assert.throws(() => decodificarPNG(buf));
+});
+
+// El PNG legítimo, que infla exactamente al tamaño declarado, tiene que pasar:
+// un tope mal calculado (off-by-one en el byte de filtro por fila) rompería
+// todos los rasters de Copernicus.
+test("un PNG del tamaño exacto declarado no lo corta el tope del inflate", () => {
+  const ancho = 37, alto = 19, canales = 2;   // impares a propósito
+  const pixeles = new Uint8Array(ancho * alto * canales);
+  for (let i = 0; i < pixeles.length; i++) pixeles[i] = (i * 13) % 256;
+  const r = decodificarPNG(armarPNG({ ancho, alto, colorType: 4, canales, pixeles, filtros: [0, 1, 2, 3, 4] }));
+  assert.equal(r.ancho, ancho);
+  assert.equal(r.alto, alto);
+  assert.deepEqual(Array.from(r.datos), Array.from(pixeles));
+});
