@@ -217,6 +217,11 @@ app.use("/api/lotes-maestro", auth.required, (req, res, next) => {
     return auth.requirePermiso("lotes", "delete")(req, res, next);
   return auth.requirePermiso("lotes", "write")(req, res, next);
 }, routeLotesMaestro);
+// Sprint 2: prescripciones en CouchDB
+// Va ANTES del montaje viejo de /api/prescripciones: las rutas de acá (/docs,
+// /generar, /migrar) no chocan con /pendientes, que sigue con auth de device.
+app.use("/api/prescripciones", require("./routes/prescripciones"));
+// fin Sprint 2: prescripciones en CouchDB
 app.use("/api/integraciones", auth.required, routeIntegraciones);
 if (routeNDVI) app.use("/api/ndvi", auth.required, routeNDVI);
 // Tracking: POST position sin JWT (device auth), GET live/history con JWT.
