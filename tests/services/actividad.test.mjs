@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { armarResumen } from "../../services/actividad.js";
+import { armarResumen, firmaContornos, contornosCacheGet, contornosCacheSet, CONTORNOS_MS } from "../../services/actividad.js";
 import { rangoTemporada } from "../../services/temporada.js";
 
 const rango = rangoTemporada("2025/26");
@@ -97,4 +97,41 @@ test("armarResumen: ultimos viene ordenado desc por ts, máximo 12, con los 4 ti
   const muchasLluvias = Array.from({ length: 20 }, (_, i) => ({ fecha: `2026-01-${String(i + 1).padStart(2, "0")}`, mm: 1 }));
   const r2 = armarResumen({ temporada: "2025/26", rango, coberturas: [], lluvias: muchasLluvias, ahora });
   assert.equal(r2.ultimos.length, 12);
+});
+
+// ── Cache de contornos (I11) — lógica pura, sin CouchDB ──────
+test("firmaContornos: cantidad + ts máximo, y es estable ante el orden", () => {
+  const docs = [{ _id: "a", ts: 10 }, { _id: "b", ts: 50 }, { _id: "c", ts: 30 }];
+  assert.equal(firmaContornos(docs), "3:50");
+  assert.equal(firmaContornos([...docs].reverse()), "3:50");
+  assert.equal(firmaContornos([]), "0:0");
+  assert.equal(firmaContornos(null), "0:0");
+  // ts faltante o basura cuenta como 0, pero el doc igual suma a la cantidad.
+  assert.equal(firmaContornos([{ _id: "a" }, { _id: "b", ts: "x" }]), "2:0");
+});
+
+test("firmaContornos: un alta o una edición cambian la firma", () => {
+  const base = [{ _id: "a", ts: 10 }, { _id: "b", ts: 20 }];
+  assert.notEqual(firmaContornos([...base, { _id: "c", ts: 5 }]), firmaContornos(base));   // alta
+  assert.notEqual(firmaContornos([{ _id: "a", ts: 10 }, { _id: "b", ts: 99 }]), firmaContornos(base)); // edición
+  assert.notEqual(firmaContornos([{ _id: "a", ts: 10 }]), firmaContornos(base));           // baja
+});
+
+test("cache de contornos: devuelve el mapa con la misma firma y lo descarta si cambió", () => {
+  const ahora = 1_700_000_000_000;
+  const mapa = new Map([["Lote 1", 12.5]]);
+  contornosCacheSet("org-test-1", "2:100", mapa, ahora);
+  assert.equal(contornosCacheGet("org-test-1", "2:100", ahora), mapa);
+  // Firma distinta (alguien dibujó o editó un boundary) → hay que reparsear.
+  assert.equal(contornosCacheGet("org-test-1", "3:100", ahora), null);
+  // Otra org no ve el cache de la primera.
+  assert.equal(contornosCacheGet("org-test-2", "2:100", ahora), null);
+});
+
+test("cache de contornos: vence a los 30 min", () => {
+  const ahora = 1_700_000_000_000;
+  const mapa = new Map([["Lote 1", 1]]);
+  contornosCacheSet("org-test-ttl", "1:1", mapa, ahora);
+  assert.equal(contornosCacheGet("org-test-ttl", "1:1", ahora + CONTORNOS_MS - 1), mapa);
+  assert.equal(contornosCacheGet("org-test-ttl", "1:1", ahora + CONTORNOS_MS), null);
 });

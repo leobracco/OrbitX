@@ -72,9 +72,60 @@ function separarPorStats(docs) {
 // aparte y solo el KML (WGS84 directo, no necesita el origen del lote). Son
 // unos pocos KB por lote. Antes se pasaba boundary=null y contorno_ha era
 // siempre 0 en el Inicio y en el Reporte de temporada.
-async function cargarContornos(estabDB) {
+// Los boundary KML casi nunca cambian (un lote se dibuja una vez), pero cada
+// request del Inicio y del Reporte se bajaba los 2.000 y los reparseaba. Cache
+// por org, 30 min, con tope de entradas como el resto. La firma la da un find
+// barato de solo _id/ts: si no cambió ni la cantidad ni el `ts` más nuevo, el
+// contenido tampoco cambió y no se baja un byte de KML.
+const CONTORNOS_MS = 30 * 60 * 1000;
+const CONTORNOS_MAX = 200;
+const _contornos = new Map();   // slug -> { ts, firma, mapa }
+
+// Pura: "<cantidad>:<ts máximo>". Un alta, una baja o una edición mueven al
+// menos uno de los dos. Sirve para invalidar sin releer los contenidos.
+function firmaContornos(docs) {
+  let max = 0;
+  for (const d of docs || []) { const t = Number(d?.ts) || 0; if (t > max) max = t; }
+  return `${(docs || []).length}:${max}`;
+}
+
+function limpiarCacheContornos(ahora = Date.now()) {
+  if (_contornos.size <= CONTORNOS_MAX) return;
+  for (const [k, v] of _contornos) if (ahora - v.ts >= CONTORNOS_MS) _contornos.delete(k);
+  while (_contornos.size > CONTORNOS_MAX) _contornos.delete(_contornos.keys().next().value);
+}
+
+// Devuelve el mapa cacheado si la entrada está fresca Y la firma coincide.
+function contornosCacheGet(slug, firma, ahora = Date.now()) {
+  const hit = _contornos.get(slug);
+  if (!hit) return null;
+  if (ahora - hit.ts >= CONTORNOS_MS) { _contornos.delete(slug); return null; }
+  if (hit.firma !== firma) return null;
+  return hit.mapa;
+}
+
+function contornosCacheSet(slug, firma, mapa, ahora = Date.now()) {
+  _contornos.set(slug, { ts: ahora, firma, mapa });
+  limpiarCacheContornos(ahora);
+}
+
+async function cargarContornos(estabDB, slug = null) {
   const porLote = new Map();
   try {
+    // Sin slug (llamada suelta) no hay clave de cache: se hace derecho el
+    // camino largo, como antes.
+    let firma = null;
+    if (slug) {
+      const meta = await estabDB.find({
+        selector: { tipo: "aog_archivo", es_lote: true, subtipo: "boundary_kml" },
+        fields: ["_id", "ts"],
+        limit: 2000,
+      });
+      firma = firmaContornos(meta.docs || []);
+      const cacheado = contornosCacheGet(slug, firma);
+      if (cacheado) return cacheado;
+    }
+
     const r = await estabDB.find({
       selector: { tipo: "aog_archivo", es_lote: true, subtipo: "boundary_kml" },
       fields: ["lote_nombre", "contenido"],
@@ -84,6 +135,7 @@ async function cargarContornos(estabDB) {
       const ring = parseKML(d.contenido);
       if (ring && d.lote_nombre) porLote.set(d.lote_nombre, Math.round(contornoM2(ring) / 100) / 100);
     }
+    if (slug && firma !== null) contornosCacheSet(slug, firma, porLote);
   } catch (e) {
     console.warn("[actividad] contornos:", e.message);
   }
@@ -98,7 +150,7 @@ async function cargarCoberturas(estabDB, slug = null) {
     limit: 2000,
   });
   const { listos, faltan } = separarPorStats(r.docs || []);
-  const contornos = await cargarContornos(estabDB);
+  const contornos = await cargarContornos(estabDB, slug);
   const conContorno = (nombre, stats) => ({ ...stats, contorno_ha: contornos.get(nombre) ?? 0 });
 
   const out = listos.map(d => ({
@@ -146,4 +198,8 @@ async function resumenActividad(slug, { temporada } = {}) {
   return data;
 }
 
-module.exports = { armarResumen, resumenActividad, cargarCoberturas, separarPorStats, ONLINE_MS };
+module.exports = {
+  armarResumen, resumenActividad, cargarCoberturas, separarPorStats, ONLINE_MS,
+  // Expuestas para los tests puros del cache de contornos (sin CouchDB).
+  firmaContornos, contornosCacheGet, contornosCacheSet, CONTORNOS_MS, CONTORNOS_MAX,
+};
