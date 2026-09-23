@@ -19,9 +19,17 @@ function temporadaDe(fecha) {
   return clave(mes >= 9 ? anio : anio - 1);
 }
 
+// AAAA acotado entre 2015 (no hay datos de antes) y la temporada actual + 1
+// (para no aceptar cualquier año disparatado a mano en la URL/query).
+const ANIO_MIN = 2015;
+
 function esTemporadaValida(s) {
   const m = /^(\d{4})\/(\d{2})$/.exec(String(s || ""));
-  return !!m && Number(m[2]) === (Number(m[1]) + 1) % 100;
+  if (!m) return false;
+  const anio = Number(m[1]);
+  if (Number(m[2]) !== (anio + 1) % 100) return false;
+  const anioMax = Number(temporadaActual().slice(0, 4)) + 1;
+  return anio >= ANIO_MIN && anio <= anioMax;
 }
 
 function rangoTemporada(s) {

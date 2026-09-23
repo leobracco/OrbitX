@@ -8,7 +8,17 @@ const { calcularStats } = require("./aog_parser");
 const { temporadaActual, rangoTemporada, esTemporadaValida } = require("./temporada");
 const TZ = "America/Argentina/Buenos_Aires";
 const CACHE_MS = 5 * 60 * 1000, ONLINE_MS = 2 * 60 * 1000;
+const CACHE_MAX = 200;
 const _cache = new Map();
+
+// Tope 200 entradas: al superarlo se borran primero las vencidas y, si sigue
+// lleno, la más vieja.
+function limpiarCache() {
+  if (_cache.size <= CACHE_MAX) return;
+  const ahora = Date.now();
+  for (const [k, v] of _cache) if (ahora - v.ts >= CACHE_MS) _cache.delete(k);
+  while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
+}
 
 function mesAR(ts) { return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(new Date(ts)); }
 const r1 = (n) => Math.round(n * 10) / 10;
@@ -65,6 +75,7 @@ async function resumenActividad(slug, { temporada } = {}) {
   ]);
   const data = armarResumen({ temporada: temp, rango: rangoTemporada(temp), coberturas, maestros, devices: devs, lluvias: lluv, alertas });
   _cache.set(key, { ts: Date.now(), data });
+  limpiarCache();
   return data;
 }
 
