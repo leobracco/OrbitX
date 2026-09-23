@@ -146,9 +146,17 @@
     const capa = document.getElementById(`cmp-capa-${id}`).value;
     aplicarVisibilidad(id, capa);
     if (!sel || !sel.nombre) return;
+    // Cada refresco se queda con un número de turno. Si mientras esperaba una
+    // respuesta entró otro refresco (el usuario cambió de lote/fecha), o se
+    // cerró el overlay, o el panel se recreó, este turno ya no manda: cortar
+    // sin dibujar. Sin esto, la respuesta lenta de un lote viejo pisaba al
+    // nuevo y `dibujar()` tocaba un mapa ya destruido por `cerrar()`.
+    const mio = ++pan.seq;
+    const vigente = () => pan.seq === mio && _abierto && paneles[id] === pan;
     try {
       const temporada = capa === "cobertura" ? (document.getElementById(`cmp-temp-${id}`).value || "") : "";
       const datos = await cargarLote(sel.nombre, sel.estab, temporada);
+      if (!vigente()) return;
       dibujar(pan, datos, capa === "cobertura");
       pan.boundary = datos?.boundary || null;
       if (capa === "ndvi") {
@@ -161,6 +169,7 @@
           fecha:    document.getElementById(`cmp-fecha-${id}`).value,
           activar:  true,
         });
+        if (!vigente()) return;
       } else {
         // Primero apagar y después guardar el boundary: al revés, un NDVI
         // activo re-pedía la imagen justo antes de destruirla.
@@ -168,7 +177,9 @@
         pan.ndvi.setTodo({ boundary: pan.boundary, nombre: sel.nombre });
       }
       await poblarSelectores(id, sel, pan.boundary);
+      if (!vigente()) return;
     } catch (e) {
+      if (!vigente()) return;   // el error es de un pedido que ya no interesa
       toast("Comparar", e.message, "red");
     }
   }
@@ -212,8 +223,20 @@
       <div id="cmp-info-${id}" style="padding:6px 8px;font-size:11px;color:#9AA3AD"></div>`;
   }
 
+  // Todo el armado va dentro de un try: si falla a mitad de camino (el listado
+  // de lotes no responde, crearNDVI tira, falta un contenedor) el overlay
+  // quedaba abierto con medio panel armado y sin forma de cerrarlo.
   async function abrir() {
     if (_abierto) return cerrar();
+    try {
+      await armar();
+    } catch (e) {
+      toast("Comparar", "No se pudo abrir el comparador: " + (e?.message || e), "red");
+      cerrar();
+    }
+  }
+
+  async function armar() {
     const cont = document.getElementById("cmp-overlay");
     if (!cont) return;
     cont.style.display = "block";
@@ -232,6 +255,8 @@
       const mapa = crearMapa(`cmp-mapa-${id}`);
       paneles[id] = {
         id, mapa, capas: [], boundary: null,
+        // Turno del último refresco pedido para este panel (ver refrescar()).
+        seq: 0,
         ndvi: global.crearNDVI({ prefijo: `cmp${id}`, mapa }),
       };
       await paneles[id].ndvi.init(`cmp-controls-${id}`);
