@@ -136,3 +136,49 @@ test("desdeLocalStorage: objeto basura devuelve null", () => {
   assert.equal(desdeLocalStorage(null), null);
   assert.equal(desdeLocalStorage({ nombre: "x" }), null);
 });
+
+// ── Revisión final de la Pieza 1 ─────────────────────────────
+
+// I14. La dosis se indexa por NÚMERO DE ZONA, no por posición en el array.
+// `zonificar` puede saltear una clase (cuantiles con una moda gigante, o una
+// zona que quedó entera por debajo del área mínima) y entonces la zona 3
+// terminaba con la dosis pensada para la 2 — o sea, el tractor aplicando la
+// dosis equivocada en media hectárea.
+const FC_CON_HUECO = () => ({
+  type: "FeatureCollection",
+  properties: { n_zonas: 3 },
+  features: [
+    { type: "Feature", geometry: null, properties: { zona: 1, ndvi_medio: 0.2, ha: 8 } },
+    { type: "Feature", geometry: null, properties: { zona: 3, ndvi_medio: 0.8, ha: 6 } },
+  ],
+});
+
+test("normalizarColeccion: conserva n_zonas cuando viene", () => {
+  assert.equal(normalizarColeccion(FC_CON_HUECO(), {}).properties.n_zonas, 3);
+  assert.equal(normalizarColeccion(FC(), {}).properties.n_zonas, undefined);
+});
+
+test("asignarDosis: con una zona salteada, la lista se indexa por zona", () => {
+  const fc = asignarDosis(normalizarColeccion(FC_CON_HUECO(), {}), { dosis: [10, 20, 30], unidad: "kg_ha" });
+  assert.equal(fc.features[0].properties.zona, 1);
+  assert.equal(fc.features[0].properties.dosis, 10);
+  assert.equal(fc.features[1].properties.zona, 3);
+  assert.equal(fc.features[1].properties.dosis, 30, "la zona 3 tiene que llevarse la tercera dosis, no la segunda");
+});
+
+test("asignarDosis: con una zona salteada, la interpolación usa n_zonas", () => {
+  const fc = asignarDosis(normalizarColeccion(FC_CON_HUECO(), {}), { dosis: { min: 60, max: 120 }, sentido: "mas_donde_mas" });
+  assert.equal(fc.features[0].properties.dosis, 60);    // zona 1 → t = 0
+  assert.equal(fc.features[1].properties.dosis, 120);   // zona 3 → t = (3-1)/(3-1) = 1
+
+  const inverso = asignarDosis(normalizarColeccion(FC_CON_HUECO(), {}), { dosis: { min: 60, max: 120 }, sentido: "mas_donde_menos" });
+  assert.equal(inverso.features[0].properties.dosis, 120);
+  assert.equal(inverso.features[1].properties.dosis, 60);
+});
+
+test("asignarDosis: sin n_zonas, la cantidad sale del número de zona más alto", () => {
+  const crudo = { type: "FeatureCollection", features: FC_CON_HUECO().features };
+  const fc = asignarDosis(normalizarColeccion(crudo, {}), { dosis: { min: 60, max: 120 }, sentido: "mas_donde_mas" });
+  assert.equal(fc.features[0].properties.dosis, 60);
+  assert.equal(fc.features[1].properties.dosis, 120);
+});
