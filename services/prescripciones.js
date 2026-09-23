@@ -50,11 +50,19 @@ function conTimeout(promesa, ms = TIMEOUT_TRABAJO_MS) {
 // saca el trabajo del tick del request — zonificar un raster grande es ~0,7 s
 // de CPU sincrónica y no queremos que caiga en el medio de responder.
 function enCola(fn) {
-  const correr = () => conTimeout(new Promise((resolver, rechazar) => {
-    setImmediate(() => { Promise.resolve().then(fn).then(resolver, rechazar); });
-  }));
+  let interna = null;
+  const correr = () => {
+    interna = new Promise((resolver, rechazar) => {
+      setImmediate(() => { Promise.resolve().then(fn).then(resolver, rechazar); });
+    });
+    return conTimeout(interna);
+  };
   const siguiente = _cadena.then(correr, correr);
-  _cadena = siguiente.catch(() => {});
+  // El que llama recibe el race (504 si expira), pero la cola avanza recién
+  // cuando termina el trabajo REAL: un trabajo que expiró sigue ocupando
+  // memoria (PNG + raster) y no queremos dos de esos a la vez en 1 GB.
+  const esperarReal = () => (interna || Promise.resolve()).catch(() => {});
+  _cadena = siguiente.then(esperarReal, esperarReal);
   return siguiente;
 }
 

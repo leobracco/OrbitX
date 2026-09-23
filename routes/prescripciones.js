@@ -16,21 +16,33 @@ const { conExtraLegacy } = require("../lib/prescripcion_schema");
 const guard = [auth.required, noDevices];
 
 // Escritura (crear / editar / borrar / generar / enviar al tractor): hace falta
-// permiso de escritura. PERMS (middleware/auth.js) no tiene una clave propia
-// `prescripciones`, así que usamos `lotes`/`write`, que es el recurso más
-// cercano: una prescripción es un plan de aplicación sobre un lote, y quien
-// puede escribir lotes es exactamente quien debería poder mandarle una dosis a
-// un tractor (superadmin, owner, admin_org). Si algún día se agrega la clave
-// `prescripciones` a PERMS, cambiar acá y nada más.
-// requirePermiso ya rechaza devices y deja los tokens `orbx_` en solo lectura.
-const guardW = [auth.required, noDevices, auth.requirePermiso("prescripciones", "write")];
+// el permiso `prescripciones:write` de PERMS (middleware/auth.js): superadmin,
+// owner, admin_org y agrónomo. requirePermiso evalúa el rol en la org ACTIVA del
+// JWT y ya rechaza devices y tokens `orbx_`; como estas rutas aceptan ?estab=,
+// permisoEnOrg vuelve a evaluar el permiso contra la org efectiva (un owner de
+// la org A que es viewer en la B no puede escribir en la B).
+const guardW = [auth.required, noDevices, auth.requirePermiso("prescripciones", "write"), permisoEnOrg("write")];
+
+// Rol del usuario en la org pedida (superadmin en todas; el resto por membresía).
+function rolEn(req, slug) {
+  if (req.user?.rol_global === "superadmin") return "superadmin";
+  return (req.user?.memberships || []).find(m => m.orgSlug === slug)?.rol || null;
+}
+
+function permisoEnOrg(accion) {
+  return (req, res, next) => {
+    let slug;
+    try { slug = orgDe(req); } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+    if (!auth.tienePermiso(rolEn(req, slug), "prescripciones", accion))
+      return res.status(403).json({ error: "Sin permiso", detalle: `tu rol en ${slug} no puede escribir prescripciones` });
+    next();
+  };
+}
 
 function orgDe(req) {
   const slug = req.query.estab || req.user?.estabSlug;
   if (!slug) { const e = new Error("Sin organización activa"); e.status = 400; throw e; }
-  if (req.query.estab && req.query.estab !== req.user?.estabSlug &&
-      req.user?.rol_global !== "superadmin" &&
-      !(req.user?.memberships || []).some(m => m.orgSlug === req.query.estab)) {
+  if (req.query.estab && req.query.estab !== req.user?.estabSlug && !rolEn(req, req.query.estab)) {
     const e = new Error("Sin acceso a esa organización"); e.status = 403; throw e;
   }
   return slug;

@@ -263,4 +263,11 @@ function socketMiddleware(socket, next) {
   } catch { next(new Error("Token inválido")); }
 }
 
-module.exports = { required, adminOnly, soloSuperadmin, requirePermiso, socketMiddleware, signToken };
+// Sprint 2: tienePermiso — para rutas que aceptan ?estab= y tienen que evaluar
+// el rol del usuario en ESA org (req.user.rol mira solo la org activa del JWT).
+function tienePermiso(rol, recurso, accion) {
+  if (rol === "superadmin") return true;
+  const acc = AM[accion] || accion;
+  return (PERMS[rol]?.[recurso] || []).includes(acc);
+}
+module.exports = { required, adminOnly, soloSuperadmin, requirePermiso, socketMiddleware, signToken, tienePermiso };
