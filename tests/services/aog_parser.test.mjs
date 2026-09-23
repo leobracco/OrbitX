@@ -76,10 +76,23 @@ test("calcularStatsAsync da exactamente el mismo objeto que calcularStats", asyn
 
 test("netoRasterAsync cede el event loop entre tandas", async () => {
   const bloques = leerBloques([BLOQUE, BLOQUE, BLOQUE, BLOQUE].join("\r\n"));
-  let tics = 0;
-  const timer = setInterval(() => { tics++; }, 1);
-  await netoRasterAsync(bloques, { cadaN: 1 });
-  clearInterval(timer);
-  // Con cadaN:1 hay 4 setImmediate: el loop de eventos corre entre medio.
-  assert.ok(tics >= 0); // no aserta tiempos: solo que no tira y completa
+  assert.equal(bloques.length, 4);
+
+  // Con cadaN:1 netoRasterAsync hace un `await setImmediate` por bloque. Si
+  // realmente cede, un setImmediate propio encolado DESPUÉS del primer corte
+  // se ejecuta ANTES de que la promesa resuelva. Es la aserción que faltaba:
+  // la anterior (`tics >= 0`) era verdadera hasta con una función sincrónica.
+  let intercalado = false;
+  const p = netoRasterAsync(bloques, { cadaN: 1 });
+  setImmediate(() => { intercalado = true; });
+  await p;
+  assert.equal(intercalado, true, "netoRasterAsync bloqueó el event loop de punta a punta");
+
+  // Contraste: la versión sincrónica NO deja correr nada en el medio.
+  let intercaladoSync = false;
+  setImmediate(() => { intercaladoSync = true; });
+  netoRaster(bloques);
+  assert.equal(intercaladoSync, false, "netoRaster sincrónico no debería ceder");
+  await new Promise(cb => setImmediate(cb));
+  assert.equal(intercaladoSync, true);
 });
