@@ -167,7 +167,7 @@
   function urlSeg(u) {
     if (typeof u !== "string") return null;
     if (!u.length || u.length > 300) return null;
-    if (!u.startsWith("/") || u.startsWith("//")) return null;
+    if (!u.startsWith("/") || u.startsWith("//") || u.includes("\\")) return null;
     return u;
   }
 

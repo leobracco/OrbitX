@@ -96,3 +96,7 @@ test("mergearLecturas: no pierde el marcado local si el remoto no lo tiene", () 
   const merged = mergearLecturas(remota, local);
   assert.deepEqual(new Set(merged.ids_leidas), new Set(["x1", "x2"]));
 });
+
+test("urlSegura rechaza la barra invertida (el navegador la lee como //)", () => {
+  assert.equal(urlSegura("/" + String.fromCharCode(92) + "evil.com"), null);
+});
