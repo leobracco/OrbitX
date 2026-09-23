@@ -409,6 +409,19 @@ router.get("/:nombre/contexto", async (req, res) => {
         });
       });
       contexto.capas.externas = porSubtipo;
+
+      // Sprint 2: contexto solo-metadata
+      // Con dos paneles, mandar contenido_texto + base64 de todas las capas
+      // inline significa bajar todo dos veces. ?meta=1 devuelve la misma
+      // estructura sin el contenido.
+      if (req.query.meta === "1") {
+        for (const sub of Object.keys(contexto.capas.externas)) {
+          contexto.capas.externas[sub] = contexto.capas.externas[sub].map(
+            ({ contenido_texto, base64, ...resto }) => ({ ...resto, tiene_contenido: !!(contenido_texto || base64) })
+          );
+        }
+      }
+      // fin Sprint 2: contexto solo-metadata
     }
 
     // Marcas de ingeniero ("de aca hasta aca se sembro X a Y sem/m"): van

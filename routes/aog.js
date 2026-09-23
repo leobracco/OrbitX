@@ -663,6 +663,97 @@ function mapaLite(lotes, req) {
   return req.query.lite ? lotes.map(({ sections, ...l }) => l) : lotes;
 }
 
+// Sprint 2: comparador por temporada
+// Este handler se registra ANTES del /mapa de siempre y solo actúa cuando se
+// pide una temporada; si no, hace next() y todo sigue igual.
+router.get("/mapa", async (req, res, next) => {
+  if (!req.query.temporada) return next();
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+    const slug    = req.query.estab || miSlug;
+    const lote    = req.query.lote ? decodeURIComponent(req.query.lote) : null;
+    if (!slug) return res.status(400).json({ error: "Sin organización activa" });
+    if (!lote) return res.status(400).json({ error: "Pasá ?lote= junto con ?temporada=" });
+    if (req.query.estab && !isSA && req.query.estab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+
+    const { rangoTemporada, esTemporadaValida } = require("../services/temporada");
+    if (!esTemporadaValida(req.query.temporada))
+      return res.status(400).json({ error: "Temporada inválida (formato AAAA/AA)" });
+    const rango = rangoTemporada(req.query.temporada);
+    const estabDB = getEstabDB(slug);
+
+    // Contorno y origen salen del estado vigente (no cambian por temporada).
+    const base = await _findAll(estabDB, { tipo: "aog_archivo", es_lote: true, lote_nombre: lote }, 50);
+    const parsed = parseLote(base.filter(d => d.subtipo !== "sections_coverage"));
+
+    // El snapshot de cobertura más nuevo dentro de la temporada pedida.
+    const hist = await estabDB.find({
+      selector: { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gte: rango.desdeMs, $lte: rango.hastaMs } },
+      fields: ["_id", "ts", "stats"],
+      sort: [{ ts: "desc" }],
+      limit: 1,
+    }).catch(() => ({ docs: [] }));
+
+    let sections = null, stats = null, ts_ultimo = parsed.ts_ultimo || 0;
+    const meta = hist.docs?.[0];
+    if (meta) {
+      const doc = await estabDB.get(meta._id);
+      const { parseSections } = require("../services/aog_parser");
+      sections = parsed.origen ? parseSections(doc.contenido, parsed.origen) : null;
+      stats = doc.stats || null;
+      ts_ultimo = doc.ts || ts_ultimo;
+    } else {
+      // Sin histórico en esa temporada: puede ser la actual, que vive en el
+      // doc vigente.
+      const vig = base.find(d => d.subtipo === "sections_coverage");
+      if (vig && vig.ts >= rango.desdeMs && vig.ts <= rango.hastaMs) {
+        const { parseSections } = require("../services/aog_parser");
+        sections = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
+        stats = vig.stats || null;
+        ts_ultimo = vig.ts;
+      }
+    }
+
+    res.json(mapaLite([{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }], req));
+  } catch (e) {
+    console.error("[AOG/mapa temporada]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/aog/lotes/:nombre/temporadas — sale de un find con `fields`: gracias
+// a las stats copiadas al historial (Pieza 0) no baja un byte de contenido.
+router.get("/lotes/:nombre/temporadas", async (req, res) => {
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+    const slug    = req.query.estab || miSlug;
+    if (!slug) return res.status(400).json({ error: "Sin organización activa" });
+    if (req.query.estab && !isSA && req.query.estab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+
+    const lote = decodeURIComponent(req.params.nombre);
+    const estabDB = getEstabDB(slug);
+    const campos = ["_id", "ts", "stats"];
+    const [hist, vig] = await Promise.all([
+      estabDB.find({ selector: { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, fields: campos, limit: 500 }).catch(() => ({ docs: [] })),
+      estabDB.find({ selector: { tipo: "aog_archivo",   subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, fields: campos, limit: 5 }).catch(() => ({ docs: [] })),
+    ]);
+    const { derivarTemporadasDeHistorial } = require("../services/temporadas_lote");
+    res.json({ ok: true, lote, temporadas: derivarTemporadasDeHistorial([...(hist.docs || []), ...(vig.docs || [])]) });
+  } catch (e) {
+    console.error("[AOG/temporadas]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+// fin Sprint 2: comparador por temporada
+
 router.get("/mapa", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
