@@ -100,3 +100,22 @@ test("mergearLecturas: no pierde el marcado local si el remoto no lo tiene", () 
 test("urlSegura rechaza la barra invertida (el navegador la lee como //)", () => {
   assert.equal(urlSegura("/" + String.fromCharCode(92) + "evil.com"), null);
 });
+
+// ── clampTs: el ts de "marcar leídas" llega del cliente ──────
+test("clampTs: un ts futuro se recorta a ahora", () => {
+  const ahora = 1_700_000_000_000;
+  assert.equal(notis.clampTs(ahora + 86_400_000, ahora), ahora);
+  assert.equal(notis.clampTs(9_999_999_999_999, ahora), ahora);
+});
+
+test("clampTs: un ts pasado válido se respeta", () => {
+  const ahora = 1_700_000_000_000;
+  assert.equal(notis.clampTs(ahora - 5000, ahora), ahora - 5000);
+});
+
+test("clampTs: basura, cero y negativos caen en ahora", () => {
+  const ahora = 1_700_000_000_000;
+  for (const v of [undefined, null, "", "hola", NaN, 0, -1, {}, []]) {
+    assert.equal(notis.clampTs(v, ahora), ahora, `falló con ${JSON.stringify(v)}`);
+  }
+});

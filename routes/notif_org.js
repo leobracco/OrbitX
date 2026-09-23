@@ -3,6 +3,14 @@
 
 const router = require("express").Router();
 const notif  = require("../lib/notify-org");
+const { noDevices: sinEquipos } = require("./devices");
+
+// Un token de equipo (PilotX en el tractor) entra por auth.required igual que
+// un humano, pero la config de avisos y el historial de la org son pantallas de
+// panel: no tiene por qué leerlas ni tocarlas. El guard va acá adentro y no en
+// el montaje de server.js porque ahí el `app.use` ya existe fuera de los
+// bloques Sprint 2 y colgarle otro middleware después no llegaría a correr.
+router.use(sinEquipos);
 
 // GET /api/notif-org — config actual de la org del usuario.
 router.get("/", async (req, res) => {
@@ -97,9 +105,12 @@ router.post("/:id/leida", async (req, res) => {
 });
 
 // POST /api/notif-org/leidas — marca todo lo anterior a `ts` (default: ahora).
+// El `ts` del body se clampea a "ahora": con un reloj adelantado (o un body
+// armado a mano) ts_hasta se iba al futuro y dejaba leídos de antemano todos
+// los avisos que todavía no existían. `ts_hasta` nunca baja (Math.max adentro).
 router.post("/leidas", async (req, res) => {
   try {
-    await notis.marcarTodas(orgDe(req), req.user.uid, req.body?.ts);
+    await notis.marcarTodas(orgDe(req), req.user.uid, notis.clampTs(req.body?.ts));
     res.json({ ok: true });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
