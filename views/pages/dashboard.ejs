@@ -204,7 +204,7 @@ function actPintar(d) {
   document.getElementById('act-lluvia').textContent = (ll.mes_mm ?? 0).toLocaleString('es-AR') + ' mm';
   const llDelta = document.getElementById('act-lluvia-d');
   if (ll.ultima) {
-    const f = new Date(ll.ultima.fecha + 'T00:00:00');
+    const f = new Date(ll.ultima.fecha + 'T12:00:00-03:00');
     const fFmt = f.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit' });
     llDelta.textContent = 'última: ' + fFmt + ' · ' + Number(ll.ultima.mm).toLocaleString('es-AR') + ' mm';
   } else {
