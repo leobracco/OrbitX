@@ -106,6 +106,9 @@ router.post("/upload", soloSuperadmin, (req, res, next) => {
       // Notif a todas las orgs activas: nuevo firmware disponible (best-effort, no bloquea el upload).
       (async () => {
         try {
+          // Solo productos de cliente: un parche interno (PilotXParche, CoreX-ECU…) no debe avisar a nadie.
+          const PUBLICOS = ["VistaX", "QuantiX", "FlowX", "SectionX", "ToolX", "StormX"];
+          if (!PUBLICOS.includes(producto)) return;
           const notifyOrg = require("../lib/notify-org");
           const r = await couch.getDB("global").find({ selector: { tipo: "org" }, fields: ["slug", "activa"], limit: 500 });
           const orgsActivas = (r.docs || []).filter(o => o.activa !== false);

@@ -246,9 +246,11 @@ async function ensureGlobalIndexes() {
 
 // ── Establecimientos ─────────────────────────────────────────
 async function getEstablecimientos() {
+  // Los establecimientos viven como docs tipo "org" (el tipo "establecimiento"
+  // es legacy y está vacío en producción; el cron diario nunca encontraba nada).
   const db = getDB("global");
-  const r  = await db.find({ selector: { tipo: "establecimiento" } });
-  return r.docs;
+  const r  = await db.find({ selector: { tipo: "org" }, fields: ["_id","slug","nombre","activa"], limit: 500 });
+  return (r.docs || []).filter(o => o.activa !== false);
 }
 
 async function upsertEstablecimiento(data) {
