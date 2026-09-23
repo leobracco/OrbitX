@@ -8,6 +8,20 @@ const { cargarCoberturas } = require("./actividad");
 
 const r1 = (n) => Math.round(n * 10) / 10;
 
+// Cache en memoria 5 min por slug::temporada, mismo patrón que resumenActividad
+// en actividad.js. Tope 200 entradas: al superarlo se borran primero las
+// vencidas y, si sigue lleno, la más vieja.
+const CACHE_MS = 5 * 60 * 1000;
+const CACHE_MAX = 200;
+const _cache = new Map();
+
+function limpiarCache() {
+  if (_cache.size <= CACHE_MAX) return;
+  const ahora = Date.now();
+  for (const [k, v] of _cache) if (ahora - v.ts >= CACHE_MS) _cache.delete(k);
+  while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
+}
+
 // agregarTemporada — pura: no toca CouchDB. Recibe los datos ya cargados y
 // arma el reporte por lote + totales.
 function agregarTemporada({ temporada, rango, maestros = [], coberturas = [], lluvias = [] }) {
@@ -70,6 +84,10 @@ function agregarTemporada({ temporada, rango, maestros = [], coberturas = [], ll
 
 async function reporteTemporada(slug, temporada) {
   const temp = esTemporadaValida(temporada) ? temporada : temporadaActual();
+  const key = `${slug}::${temp}`;
+  const hit = _cache.get(key);
+  if (hit && Date.now() - hit.ts < CACHE_MS) return hit.data;
+
   const rango = rangoTemporada(temp);
   const estabDB = db.getDB(slug);
   const [maestrosAll, coberturas, lluvias] = await Promise.all([
@@ -84,7 +102,10 @@ async function reporteTemporada(slug, temporada) {
       .catch(e => { console.warn("[reportes] consulta lluvia_registro falló:", e.message); return []; }),
   ]);
   const maestros = maestrosAll.filter(m => !m.temporada || m.temporada === temp);
-  return agregarTemporada({ temporada: temp, rango, maestros, coberturas, lluvias });
+  const data = agregarTemporada({ temporada: temp, rango, maestros, coberturas, lluvias });
+  _cache.set(key, { ts: Date.now(), data });
+  limpiarCache();
+  return data;
 }
 
 module.exports = { agregarTemporada, reporteTemporada };
