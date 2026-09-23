@@ -5,8 +5,69 @@ import z from "../../lib/zonificar.js";
 const {
   zonaUtmPorLon, latLonAUtm, utmALatLon,
   clasificarCuantiles, filtroMayoria, fundirChicas,
-  marchingSquares, douglasPeucker, zonificar,
+  marchingSquares, douglasPeucker, puntoEnAnillo, zonificar,
 } = z;
+
+// ── Helpers compartidos ─────────────────────────────────────
+
+// Generador congruencial lineal determinista (semilla fija, sin deps).
+function lcg(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
+
+// Tamaños de las componentes 4-conectadas de una grilla de clases (ignora 255).
+function tamanosComponentes(g, ancho, alto) {
+  const visto = new Uint8Array(g.length);
+  const tamanos = [];
+  const pila = [];
+  for (let i0 = 0; i0 < g.length; i0++) {
+    if (visto[i0] || g[i0] === 255) continue;
+    const clase = g[i0];
+    let cuenta = 0;
+    pila.length = 0; pila.push(i0); visto[i0] = 1;
+    while (pila.length) {
+      const i = pila.pop();
+      cuenta++;
+      const x = i % ancho, y = (i / ancho) | 0;
+      const alrededor = [];
+      if (x > 0) alrededor.push(i - 1);
+      if (x < ancho - 1) alrededor.push(i + 1);
+      if (y > 0) alrededor.push(i - ancho);
+      if (y < alto - 1) alrededor.push(i + ancho);
+      for (const j of alrededor) if (!visto[j] && g[j] === clase) { visto[j] = 1; pila.push(j); }
+    }
+    tamanos.push(cuenta);
+  }
+  return tamanos;
+}
+
+// Raster "realista": gradiente diagonal + ruido determinista, sin nodata.
+function rasterRealista(ancho, alto, semilla) {
+  const rand = lcg(semilla);
+  const datos = new Uint8Array(ancho * alto);
+  for (let y = 0; y < alto; y++) {
+    for (let x = 0; x < ancho; x++) {
+      const base = ((x + y) / (ancho + alto - 2)) * 220 + 15;
+      const ruido = (rand() - 0.5) * 60;
+      let v = Math.round(base + ruido);
+      if (v < 1) v = 1; if (v > 254) v = 254;                   // nunca toca nodata (0) ni 255
+      datos[y * ancho + x] = v;
+    }
+  }
+  return datos;
+}
+
+// ¿El punto [lon, lat] cae dentro de la feature? (respeta los huecos)
+function featureContiene(feature, p) {
+  for (const poly of feature.geometry.coordinates) {
+    if (!puntoEnAnillo(p, poly[0])) continue;
+    let enHueco = false;
+    for (let h = 1; h < poly.length; h++) if (puntoEnAnillo(p, poly[h])) { enHueco = true; break; }
+    if (!enHueco) return true;
+  }
+  return false;
+}
 
 test("zonaUtmPorLon: las zonas de la pampa húmeda", () => {
   assert.equal(zonaUtmPorLon(-60.5), 20);   // zona 20: -66 a -60
@@ -136,8 +197,10 @@ test("zonificar: 6x6 partido en dos mitades da 2 zonas de 0,18 ha dentro del bbo
 
 test("zonificar: el anillo exterior queda en sentido antihorario (GeoJSON RFC 7946)", () => {
   const ancho = 4, alto = 4;
+  // n mínimo permitido = 2; con un raster de un solo valor sólo se puebla la
+  // clase 0, así que igual queda una única feature.
   const datos = new Uint8Array(ancho * alto).fill(120);
-  const fc = zonificar({ datos, ancho, alto, bbox: { minX: 400000, minY: 6200000, maxX: 400040, maxY: 6200040 }, zona: 20, n: 1, areaMinHa: 0 });
+  const fc = zonificar({ datos, ancho, alto, bbox: { minX: 400000, minY: 6200000, maxX: 400040, maxY: 6200040 }, zona: 20, n: 2, areaMinHa: 0 });
   const anillo = fc.features[0].geometry.coordinates[0][0];
   let acc = 0;
   for (let i = 0; i < anillo.length - 1; i++)
@@ -191,10 +254,14 @@ test("clasificarCuantiles: un valor muy repetido no deja cortes duplicados ni cl
   valores[100] = 200;
   const { cortes, clases } = clasificarCuantiles(valores, 3, 0);
   for (let i = 1; i < cortes.length; i++) assert.notEqual(cortes[i], cortes[i - 1], "no puede haber un corte repetido consecutivo");
-  // Ninguna clase queda vacía "por diseño" entre dos cortes iguales: todo
-  // valor asignado corresponde a algún valor real presente en los datos.
-  const presentes = new Set(clases);
-  for (const c of presentes) if (c !== 255) assert.ok(cortes.length + 1 >= c + 1);
+  // Aserción real (la anterior, `cortes.length + 1 >= c + 1`, era tautológica
+  // porque la clasificación nunca puede devolver c > cortes.length): con k
+  // cortes tienen que quedar EXACTAMENTE k+1 clases pobladas, sin ninguna
+  // clase fantasma vacía en el medio.
+  const pobladas = new Set();
+  for (const c of clases) if (c !== 255) pobladas.add(c);
+  assert.equal(pobladas.size, cortes.length + 1, `clases pobladas ${[...pobladas].sort().join(",")} con cortes ${cortes.join(",")}`);
+  for (let c = 0; c <= cortes.length; c++) assert.ok(pobladas.has(c), `la clase ${c} quedó vacía`);
 });
 
 test("zonificar: gradiente diagonal 64x64 con ruido determinista da N zonas válidas y área consistente", () => {
@@ -248,4 +315,108 @@ test("zonificar: gradiente diagonal 64x64 con ruido determinista da N zonas vál
   // La suma de las hectáreas de todas las zonas ≈ área del bbox (± 2 %).
   const diffPct = Math.abs(sumaHa - areaTotalHa) / areaTotalHa * 100;
   assert.ok(diffPct <= 2, `suma de ha ${sumaHa} vs esperado ${areaTotalHa} (${diffPct.toFixed(2)}% de diferencia)`);
+});
+
+// ── Fix post-review ─────────────────────────────────────────
+
+test("zonificar: n fuera de 2..5 (o no entero) es un error explícito", () => {
+  const base = { datos: new Uint8Array(16), ancho: 4, alto: 4, bbox: { minX: 0, minY: 0, maxX: 40, maxY: 40 }, zona: 20 };
+  for (const n of [0, 1, 6, 10, 2.5, "3", null]) {
+    assert.throws(() => zonificar({ ...base, n }), /entre 2 y 5/, `n=${JSON.stringify(n)} tendría que tirar Error`);
+  }
+  // Los del rango no tiran nada.
+  for (const n of [2, 3, 4, 5]) assert.doesNotThrow(() => zonificar({ ...base, n }));
+});
+
+test("douglasPeucker: 15.000 puntos en escalera no desbordan la pila", () => {
+  // Una escalera rectilínea (el borde típico de un raster fragmentado) empata
+  // todas las distancias; con el desempate "gana el primero" la recursión se
+  // parte de a un punto por vez y la versión recursiva reventaba alrededor de
+  // los 7.000 puntos. La versión iterativa tiene que aguantar mucho más.
+  const puntos = [];
+  let x = 0, y = 0;
+  while (puntos.length < 15000) { puntos.push([x, y]); x++; puntos.push([x, y]); y++; }
+  const out = douglasPeucker(puntos.slice(0, 15000), 0.1);
+  assert.equal(out.length, 15000);                        // con tol 0,1 no se tira ningún vértice
+  assert.deepEqual(out[0], puntos[0]);
+  assert.deepEqual(out[out.length - 1], puntos[14999]);
+});
+
+test("fundirChicas: itera hasta punto fijo y no deja componentes huérfanas", () => {
+  // Cadena A → B → fondo. A (columna de 4 px, clase 1) tiene como vecino
+  // mayoritario a B (dos bloques de 9 px, clase 2), y B a su vez es chica y se
+  // funde al fondo. Con una sola pasada, los 4 píxeles de A quedaban pintados
+  // de clase 2 y nadie los volvía a mirar: una mancha de 4 px por debajo del
+  // mínimo de 12. A arranca ANTES que B en orden de barrido (fila 4 vs 5),
+  // que es justo lo que dispara el bug.
+  const ancho = 20, alto = 20, minPixeles = 12;
+  const g = new Uint8Array(ancho * alto);                 // fondo clase 0
+  for (let y = 4; y <= 7; y++) g[y * ancho + 5] = 1;      // A: 4 px
+  for (let y = 5; y <= 7; y++) {
+    for (const x of [2, 3, 4, 6, 7, 8]) g[y * ancho + x] = 2;   // B: 9 px de cada lado
+  }
+
+  const out = fundirChicas(g, ancho, alto, minPixeles);
+  const tamanos = tamanosComponentes(out, ancho, alto);
+  assert.ok(Math.min(...tamanos) >= minPixeles,
+    `quedaron componentes por debajo de ${minPixeles} px: ${tamanos.filter(t => t < minPixeles).join(", ")}`);
+});
+
+test("zonificar: raster 256x256 realista no deja manchas por debajo de areaMinHa", () => {
+  const ancho = 256, alto = 256, resolucion = 10;        // 10 m/píxel → 65,536 ha
+  const datos = rasterRealista(ancho, alto, 20260923);
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
+  const n = 5, areaMinHa = 0.5;
+
+  const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa });
+  for (const f of fc.features)
+    assert.ok(f.properties.ha >= areaMinHa, `zona ${f.properties.zona} con ha=${f.properties.ha}`);
+
+  // Chequeo fuerte, sobre los píxeles: ninguna componente 4-conectada de la
+  // grilla que se vectoriza puede estar por debajo del mínimo (antes del fix
+  // quedaban 10 de 39 por debajo de 50 px, ocho de un solo píxel).
+  const minPx = Math.round((areaMinHa * 10000) / (resolucion * resolucion));   // 50 px
+  const { clases } = clasificarCuantiles(datos, n, 0);
+  const g = fundirChicas(filtroMayoria(clases, ancho, alto, n), ancho, alto, minPx);
+  const chicas = tamanosComponentes(g, ancho, alto).filter(t => t < minPx);
+  assert.deepEqual(chicas, [], `componentes por debajo de ${minPx} px: ${chicas.join(", ")}`);
+});
+
+test("zonificar: las zonas son una partición real del lote (sin solapes ni huecos)", () => {
+  // Simplificar cada zona por separado desalineaba los bordes compartidos
+  // (0,37 % de superficie solapada y 0,38 % sin cobertura). Con las cadenas de
+  // borde compartidas, cada punto del lote tiene que caer en EXACTAMENTE una
+  // feature.
+  const ancho = 256, alto = 256, resolucion = 10;
+  const datos = rasterRealista(ancho, alto, 20260924);
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
+  const n = 5, areaMinHa = 0.5;
+  const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa });
+  assert.ok(fc.features.length >= 2, `hacen falta al menos 2 zonas para que el test signifique algo (hay ${fc.features.length})`);
+
+  const dx = (bbox.maxX - bbox.minX) / ancho, dy = (bbox.maxY - bbox.minY) / alto;
+  const rand = lcg(4242);
+  let muestras = 0, sinCobertura = 0, solapados = 0;
+  for (let y = 0; y < alto; y += 3) {
+    for (let x = 0; x < ancho; x += 3) {
+      // Offset pseudoaleatorio dentro del píxel: evita caer justo sobre un
+      // vértice o sobre un segmento exactamente diagonal.
+      const px = x + 0.2 + rand() * 0.6, py = y + 0.2 + rand() * 0.6;
+      const { lat, lon } = utmALatLon(bbox.minX + px * dx, bbox.maxY - py * dy, 20, true);
+      let dentro = 0;
+      for (const f of fc.features) if (featureContiene(f, [lon, lat])) dentro++;
+      muestras++;
+      if (dentro === 0) sinCobertura++;
+      else if (dentro > 1) solapados++;
+    }
+  }
+  assert.ok(muestras >= 5000, `muestras insuficientes: ${muestras}`);
+  assert.equal(sinCobertura, 0, `${sinCobertura}/${muestras} puntos sin cobertura`);
+  assert.equal(solapados, 0, `${solapados}/${muestras} puntos en más de una zona`);
+
+  // Y la suma de superficies sigue coincidiendo con el bbox.
+  const areaTotalHa = (ancho * resolucion * alto * resolucion) / 10000;
+  const sumaHa = fc.features.reduce((s, f) => s + f.properties.ha, 0);
+  const diffPct = Math.abs(sumaHa - areaTotalHa) / areaTotalHa * 100;
+  assert.ok(diffPct <= 0.5, `suma de ha ${sumaHa} vs ${areaTotalHa} (${diffPct.toFixed(3)} %)`);
 });
