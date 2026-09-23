@@ -356,19 +356,29 @@ async function probarNotif() {
 const TZ_AR = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric" };
 const fechaAR = (ts) => ts ? new Date(ts).toLocaleDateString("es-AR", TZ_AR) : "—";
 
+// Escapa para volcar en innerHTML: t.nombre es texto libre del usuario (XSS
+// almacenado si se inyecta tal cual). t.prefijo es server-generated pero se
+// escapa igual, por las dudas.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+let _tokens = [];   // cache en memoria: revocarToken busca el nombre acá, nunca lo interpola en el onclick
+
 async function cargarTokens() {
   const tb = document.getElementById("tok-lista");
   try {
     const r = await fetch("/api/tokens-org", { headers: auth() });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    const filas = (j.tokens || []).map(t => `
+    _tokens = j.tokens || [];
+    const filas = _tokens.map(t => `
       <tr style="${t.revocado ? "opacity:0.45" : ""}">
-        <td>${t.nombre}</td>
-        <td><code>${t.prefijo}…</code></td>
+        <td>${esc(t.nombre)}</td>
+        <td><code>${esc(t.prefijo)}…</code></td>
         <td>${t.revocado ? "revocado" : fechaAR(t.vence_ts)}</td>
         <td class="td-dim">${fechaAR(t.ultimo_uso_ts)}${t.usos ? ` · ${t.usos} usos` : ""}</td>
-        <td>${t.revocado ? "" : `<button class="btn btn-sm" onclick="revocarToken('${t._id}','${t.nombre.replace(/'/g, "")}')">Revocar</button>`}</td>
+        <td>${t.revocado ? "" : `<button class="btn btn-sm" onclick="revocarToken('${esc(t._id)}')">Revocar</button>`}</td>
       </tr>`).join("");
     tb.innerHTML = filas || `<tr><td colspan="5" class="td-dim">Todavía no creaste ningún token.</td></tr>`;
   } catch (e) {
@@ -395,7 +405,8 @@ async function crearToken() {
   } catch (e) { showAlert("✗ " + e.message, "error"); }
 }
 
-async function revocarToken(id, nombre) {
+async function revocarToken(id) {
+  const nombre = _tokens.find(t => t._id === id)?.nombre || "este token";
   if (!confirm(`¿Revocar "${nombre}"? Lo que lo esté usando deja de andar al toque.`)) return;
   try {
     const r = await fetch(`/api/tokens-org/${id}/revocar`, { method: "POST", headers: auth() });
