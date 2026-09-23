@@ -343,6 +343,9 @@ async function insertAlerta(slug, data) {
     if (push.configurado() && !data.resuelta)
       push.notificarOrg(slug, { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta en el campo", url: "/app/#/alertas" })
           .catch(e => console.warn("[push/alerta]", e.message));
+    if (!data.resuelta)
+      require("../lib/notify-org").notify(slug, "alerta_critica", { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta" })
+          .catch(e => console.warn("[notify/alerta]", e.message));
   } catch (e) { console.warn("[push/alerta]", e.message); }
   return r;
 }

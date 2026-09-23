@@ -103,6 +103,18 @@ router.post("/upload", soloSuperadmin, (req, res, next) => {
         { subido_por_nombre: req.user?.nombre || uid(req) }
       ).catch(() => {});
 
+      // Notif a todas las orgs activas: nuevo firmware disponible (best-effort, no bloquea el upload).
+      (async () => {
+        try {
+          const notifyOrg = require("../lib/notify-org");
+          const r = await couch.getDB("global").find({ selector: { tipo: "org" }, fields: ["slug", "activa"], limit: 500 });
+          const orgsActivas = (r.docs || []).filter(o => o.activa !== false);
+          await Promise.allSettled(orgsActivas.map(o =>
+            notifyOrg.notify(o.slug, "firmware_listo", { titulo: `Nuevo firmware ${producto} ${version}`, cuerpo: changelog || "" })
+          ));
+        } catch (e) { console.warn("[notify/firmware]", e.message); }
+      })();
+
       console.log(`[OTA] Firmware ${producto} ${version} (${(meta.tamano/1024).toFixed(1)} KB)`);
       res.json({ ok: true, producto, version, hash_sha256: meta.sha256, tamano_bytes: meta.tamano });
     } catch (e) {
