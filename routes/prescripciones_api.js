@@ -77,15 +77,22 @@ router.get("/pendientes", async (req, res) => {
     if (!slug) return res.json([]);
 
     const estabDB = db.getDB(slug);
+    // NO filtrar por subtipo: ésta es la ÚNICA ruta que PilotX usa para bajar
+    // todos sus `aog_descarga_pendiente`, no solo las prescripciones. Los lotes
+    // creados en OrbitX se encolan en routes/lotes_maestro.js con subtipo
+    // field_origin / boundary / boundary_kml y ruta_rel `Fields/<lote>/…`, y es
+    // PilotX quien rutea por `ruta_rel` (a Fields/ o a data/prescripciones).
+    // Filtrar por subtipo:"prescripcion" acá rompe la bajada de lotes al tractor.
+    // `fields`: el listado no lleva `contenido` (un GeoJSON de varios cientos de
+    // KB por doc, x50) — el tractor lo pide después por /pendientes/:id/contenido.
+    // Índice ["tipo","device_id","entregado"] (services/couchdb.js).
     const r = await estabDB.find({
       selector: {
         tipo: "aog_descarga_pendiente",
-        // Sin el subtipo, acá también salían los boundaries de lote que encola
-        // routes/lotes_maestro.js y el tractor los pedía como prescripciones.
-        subtipo: "prescripcion",
         device_id: deviceId,
         entregado: false
       },
+      fields: ["_id", "nombre", "ruta_rel", "subtipo", "producto", "ts"],
       limit: 50
     });
 

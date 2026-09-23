@@ -205,6 +205,13 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","subtipo","lote_nombre","ts"],
   // Sprint 2 — Pieza 1: prescripciones guardadas de un lote.
   ["tipo","lote_nombre"],
+  // Sprint 2 — Tarea 9c (fix post-review):
+  // pendientes del tractor: {tipo:"aog_descarga_pendiente", device_id, entregado}.
+  ["tipo","device_id","entregado"],
+  // idempotencia de la migración de prescripciones: {tipo:"prescripcion", local_id}.
+  ["tipo","local_id"],
+  // boundary del lote por nombre: {tipo:"lote_maestro", nombre}.
+  ["tipo","nombre"],
 ];
 
 async function ensureEstabIndexes(slug) {
