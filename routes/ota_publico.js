@@ -39,18 +39,27 @@ const limiteDescargas = crearLimite({ limite: 20, ventanaMs: 60 * 60 * 1000 });
 setInterval(() => limiteDescargas.barrer(), 10 * 60 * 1000).unref();
 
 // ── Catálogo: docs tipo:"firmware" filtrados por lista blanca ─────────────
+// Memoizado 60s: la página pública y el JSON piden lo mismo y no hace falta
+// pegarle a CouchDB en cada request de un endpoint sin auth.
+const MEMO_MS = 60 * 1000;
+let memo = { ts: 0, productos: null };
+
 async function cargarCatalogo() {
+  if (memo.productos && Date.now() - memo.ts < MEMO_MS) return memo.productos;
+
   const db = couch.getDB("global");
   const sel = { tipo: "firmware" };
   const fields = ["producto", "version", "tamano_bytes", "changelog", "ts", "hash_sha256", "created_at"];
 
-  let docs = [];
+  let docs;
   try {
     const r = await db.find({ selector: sel, fields, limit: 500 });
     docs = r.docs;
-  } catch {
-    const all = await db.list({ include_docs: true });
-    docs = all.rows.map((r) => r.doc).filter((d) => d && d.tipo === "firmware");
+  } catch (e) {
+    // Sin fallback a db.list: es un endpoint publico sin auth, listar toda
+    // la base global volcaria todo al heap. Si find() falla, error y listo.
+    console.error("[ota_publico] find catálogo:", e.message);
+    throw e;
   }
 
   const productos = {};
@@ -58,6 +67,7 @@ async function cargarCatalogo() {
 
   for (const d of docs) {
     if (!PRODUCTOS_PUBLICOS.includes(d.producto)) continue;
+    if (!fw.existeBin(d.producto, d.version)) continue; // sin .bin en disco: no ofrecer descarga rota
     productos[d.producto].push({
       version:      d.version,
       tamano_bytes: d.tamano_bytes,
@@ -68,6 +78,7 @@ async function cargarCatalogo() {
   }
   for (const p of PRODUCTOS_PUBLICOS) productos[p].sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
+  memo = { ts: Date.now(), productos };
   return productos;
 }
 
