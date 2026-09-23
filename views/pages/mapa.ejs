@@ -361,14 +361,33 @@ async function seleccionarLote(nombreEnc, estabSlug) {
         lote.boundary.forEach(p => bounds.push(p));
       }
 
+      // (bloque original reemplazado por el Sprint 1)
+      // Sprint 1: popup de cobertura
       if (lote.sections?.length) {
-        lote.sections.forEach(rect => {
-          _layers.push(L.polygon(rect, {
+        const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+        const fmt = v => v == null ? "—" : Number(v).toLocaleString("es-AR", { maximumFractionDigits: 1 });
+        lote.sections.forEach((rect, i) => {
+          const st = lote.stats;
+          let html = `<b>${esc(nombre)}</b><br>Bloque ${i + 1} de ${lote.sections.length}`;
+          if (st) {
+            html += `<br>Trabajadas ${fmt(st.trabajado_ha)} ha · Netas ${fmt(st.neto_ha)} ha`;
+            html += `<br>Repintado ${fmt(st.repintado_ha)} ha (${fmt(st.repintado_pct)} %)`;
+          }
+          if (lote.ts_ultimo) {
+            const fecha = new Date(lote.ts_ultimo).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" });
+            html += `<br><span style="color:#9AA3AD">Actualizado ${fecha}</span>`;
+          }
+          const poligono = L.polygon(rect, {
             color: "#3c9eff", weight: 0.5, opacity: 0.7,
             fillColor: "#3c9eff", fillOpacity: 0.3,
-          }).addTo(_mapa));
+          }).addTo(_mapa);
+          poligono.bindPopup(html);
+          poligono.on("mouseover", e => e.target.setStyle({ weight: 1.5, opacity: 1 }));
+          poligono.on("mouseout", e => e.target.setStyle({ weight: 0.5, opacity: 0.7 }));
+          _layers.push(poligono);
         });
       }
+      // fin Sprint 1: popup de cobertura
 
       if (lote.origen) {
         const m = L.circleMarker([lote.origen.lat, lote.origen.lon], {
