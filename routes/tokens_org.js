@@ -41,9 +41,13 @@ router.post("/", async (req, res) => {
 router.post("/:id/revocar", async (req, res) => {
   try {
     const slug = orgDe(req);
-    const doc = await tokens.revocar(req.params.id, req.user?.uid);
-    if (doc.org_slug !== slug && req.user?.rol_global !== "superadmin")
-      return res.status(403).json({ error: "Ese token no es de tu organización" });
+    // El chequeo de dueño lo hace el servicio ANTES de escribir (ver
+    // services/tokens_org.js:revocar) — acá solo le pasamos el contexto.
+    await tokens.revocar(req.params.id, {
+      orgSlug: slug,
+      uid: req.user?.uid,
+      esSuperadmin: req.user?.rol_global === "superadmin",
+    });
     res.json({ ok: true });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });

@@ -132,10 +132,24 @@ async function listar(orgSlug) {
   return (r.docs || []).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 }
 
-async function revocar(id, uid) {
+// Pura: ¿quien pide la revocación es dueño del token (misma org) o superadmin?
+// Se testea sola porque acá vive la decisión de autorización del IDOR (ver
+// revocar): un token de otro tipo de doc nunca es revocable por esta vía.
+function puedeRevocar(doc, { orgSlug, esSuperadmin } = {}) {
+  if (!doc || doc.tipo !== "token_org") return false;
+  if (esSuperadmin) return true;
+  return doc.org_slug === orgSlug;
+}
+
+async function revocar(id, { orgSlug, uid, esSuperadmin } = {}) {
   const globalDB = db.getDB("global");
   const doc = await globalDB.get(id);
   if (doc.tipo !== "token_org") throw Object.assign(new Error("Ese no es un token de organización"), { status: 404 });
+  // Chequeo de dueño ANTES de mutar nada: sin esto, un admin de otra org podía
+  // revocar un token ajeno con solo conocer el _id (IDOR).
+  if (!puedeRevocar(doc, { orgSlug, esSuperadmin }))
+    throw Object.assign(new Error("Ese token no es de tu organización"), { status: 403 });
+  if (doc.revocado) return doc;   // ya estaba revocado: idempotente, no reescribe
   const out = { ...doc, revocado: true, revocado_ts: Date.now(), revocado_por: uid || "system", updated_at: Date.now() };
   await globalDB.insert(out);
   invalidarCache();
@@ -145,5 +159,5 @@ async function revocar(id, uid) {
 module.exports = {
   PREFIJO, DIAS_DEFAULT, DIAS_MAX,
   generarToken, hashToken, prefijoDe, evaluarToken, esSoloLectura, rutaProhibida,
-  buscarPorToken, invalidarCache, registrarUso, crear, listar, revocar,
+  buscarPorToken, invalidarCache, registrarUso, crear, listar, revocar, puedeRevocar,
 };

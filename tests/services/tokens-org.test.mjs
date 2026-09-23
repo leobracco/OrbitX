@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import tok from "../../services/tokens_org.js";
 
-const { generarToken, hashToken, prefijoDe, evaluarToken, esSoloLectura, rutaProhibida } = tok;
+const { generarToken, hashToken, prefijoDe, evaluarToken, esSoloLectura, rutaProhibida, puedeRevocar } = tok;
 
 test("generarToken: prefijo orbx_ y 40 chars de aleatorio url-safe", () => {
   const t = generarToken();
@@ -46,4 +46,22 @@ test("rutaProhibida: los endpoints que un token nunca toca, ni leyendo", () => {
     assert.equal(rutaProhibida(u), true, u);
   for (const u of ["/api/actividad/resumen", "/api/lotes", "/api/aog/mapa?lote=cid%201", "/api/reportes/temporada", "/api/lluvias"])
     assert.equal(rutaProhibida(u), false, u);
+});
+
+test("puedeRevocar: autorización de dueño ANTES de mutar (fix IDOR)", () => {
+  const docPropio = { tipo: "token_org", org_slug: "org-a" };
+  const docAjeno  = { tipo: "token_org", org_slug: "org-b" };
+  const docOtroTipo = { tipo: "device", org_slug: "org-a" };
+
+  // Org dueña del token → puede revocar.
+  assert.equal(puedeRevocar(docPropio, { orgSlug: "org-a", esSuperadmin: false }), true);
+  // Admin de otra org intentando revocar un token que no es suyo → NO puede
+  // (este es el caso que estaba roto: el 403 debe llegar sin haber escrito nada).
+  assert.equal(puedeRevocar(docAjeno, { orgSlug: "org-a", esSuperadmin: false }), false);
+  // Superadmin puede revocar cualquier token, sea de la org que sea.
+  assert.equal(puedeRevocar(docAjeno, { orgSlug: "org-a", esSuperadmin: true }), true);
+  // Un doc que no es token_org nunca es revocable por esta vía, ni siquiera de la propia org.
+  assert.equal(puedeRevocar(docOtroTipo, { orgSlug: "org-a", esSuperadmin: false }), false);
+  // Doc inexistente (null) tampoco.
+  assert.equal(puedeRevocar(null, { orgSlug: "org-a", esSuperadmin: true }), false);
 });
