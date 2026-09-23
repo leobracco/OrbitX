@@ -1242,5 +1242,27 @@ document.addEventListener("DOMContentLoaded", () => {
   box-shadow:none !important; backdrop-filter:none !important; background:rgba(0,0,0,0.25) !important;
 }
 </style>
+<script>
+// Sprint 2: comparador · estab del lote abierto
+// El dropdown #filtro-estab es un filtro de listado y puede decir "Todos":
+// para pedir el /contexto de un lote lo que vale es el establecimiento de ESE
+// lote. seleccionarLote() vive fuera de los bloques marcados, así que se la
+// envuelve desde acá: es una function declaration del <script> de arriba, o
+// sea window.seleccionarLote, y reasignarla cambia también el identificador
+// que usan los onclick inline y el arranque por ?lote= del DOMContentLoaded.
+window._loteEstab = null;
+(function () {
+  const original = window.seleccionarLote;
+  if (typeof original !== "function") return;
+  window.seleccionarLote = function (nombreEnc, estabSlug) {
+    window._loteEstab = estabSlug || null;
+    return original.apply(this, arguments);
+  };
+  const limpiar = window.limpiarMapa;
+  if (typeof limpiar === "function") {
+    window.limpiarMapa = function () { window._loteEstab = null; return limpiar.apply(this, arguments); };
+  }
+})();
+</script>
 <script src="/js/mapa-comparar.js"></script>
 <%# fin Sprint 2: comparador · overlay %>
