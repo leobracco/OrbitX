@@ -772,22 +772,21 @@ router.get("/mapa", async (req, res, next) => {
 
     let sections = null, stats = null, ts_ultimo = parsed.ts_ultimo || 0;
     const meta = masNuevoPorTs(hist);
-    if (meta) {
+    // El doc vigente también cuenta si cae en la temporada: en la temporada
+    // actual suele ser MÁS nuevo que cualquier snapshot del historial (cada
+    // sync archiva el anterior), y es el que tiene las stats al día.
+    const vig = base.find(d => d.subtipo === "sections_coverage");
+    const vigEnRango = vig && vig.ts >= rango.desdeMs && vig.ts <= rango.hastaMs;
+    const { parseSections } = require("../services/aog_parser");
+    if (vigEnRango && (!meta || (vig.ts || 0) >= (meta.ts || 0))) {
+      sections  = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
+      stats     = vig.stats || null;
+      ts_ultimo = vig.ts;
+    } else if (meta) {
       const doc = await estabDB.get(meta._id);
-      const { parseSections } = require("../services/aog_parser");
       sections  = parsed.origen ? parseSections(doc.contenido, parsed.origen) : null;
       stats     = doc.stats || null;
       ts_ultimo = doc.ts || ts_ultimo;
-    } else {
-      // Sin histórico en esa temporada: puede ser la actual, que vive en el
-      // doc vigente.
-      const vig = base.find(d => d.subtipo === "sections_coverage");
-      if (vig && vig.ts >= rango.desdeMs && vig.ts <= rango.hastaMs) {
-        const { parseSections } = require("../services/aog_parser");
-        sections  = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
-        stats     = vig.stats || null;
-        ts_ultimo = vig.ts;
-      }
     }
 
     const salida = [{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }];
