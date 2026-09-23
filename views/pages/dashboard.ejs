@@ -28,6 +28,49 @@
   </div>
 </div>
 
+<!-- Actividad de la temporada -->
+<div class="card" id="card-actividad">
+  <div class="card-head">
+    <span class="card-title">🌾 Actividad de la temporada <span id="act-temp"></span></span>
+    <a href="/reportes/temporada/vista" class="card-action">Ver reporte →</a>
+  </div>
+  <div class="card-body">
+    <div id="act-estado" class="empty-state" style="padding:30px">
+      <p>Cargando actividad…</p>
+    </div>
+    <div id="act-contenido" style="display:none">
+      <div class="kpi-grid">
+        <div class="kpi lime">
+          <div class="kpi-shine"></div>
+          <div class="kpi-label">Ha trabajadas</div>
+          <div class="kpi-val" id="act-ha-trab">–</div>
+          <div class="kpi-delta" id="act-ha-trab-d"></div>
+        </div>
+        <div class="kpi blue">
+          <div class="kpi-shine"></div>
+          <div class="kpi-label">Ha netas</div>
+          <div class="kpi-val" id="act-ha-netas">–</div>
+          <div class="kpi-delta" id="act-ha-netas-d"></div>
+        </div>
+        <div class="kpi teal">
+          <div class="kpi-shine"></div>
+          <div class="kpi-label">Equipos en línea</div>
+          <div class="kpi-val" id="act-equipos">–</div>
+          <div class="kpi-delta" id="act-equipos-d"></div>
+        </div>
+        <div class="kpi blue">
+          <div class="kpi-shine"></div>
+          <div class="kpi-label">Lluvia del mes</div>
+          <div class="kpi-val" id="act-lluvia">–</div>
+          <div class="kpi-delta" id="act-lluvia-d"></div>
+        </div>
+      </div>
+      <div class="td-dim" style="margin:8px 0">Últimos movimientos</div>
+      <ul id="act-ultimos" style="list-style:none;padding:0;margin:0"></ul>
+    </div>
+  </div>
+</div>
+
 <div class="g2">
 
   <!-- Registros pendientes (solo superadmin) -->
@@ -105,4 +148,124 @@ async function dashAprobar(token, nombre, btn) {
     btn.textContent = '✓ Aprobar';
   }
 }
+
+// --- Tarjeta de actividad de la temporada ---
+const ACT_ICONOS = { lote: 'var(--ap-green)', lluvia: 'var(--ap-blue)', alerta: 'var(--ap-red)', equipo: 'var(--ap-yellow)' };
+
+function actHaceTiempo(ts) {
+  const diffMin = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (diffMin < 1) return 'recién';
+  if (diffMin < 60) return 'hace ' + diffMin + ' min';
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return 'hace ' + diffH + ' h';
+  const diffD = Math.round(diffH / 24);
+  return 'hace ' + diffD + ' d';
+}
+
+function actMostrarEstado(msg) {
+  const est = document.getElementById('act-estado');
+  const cont = document.getElementById('act-contenido');
+  if (est) {
+    est.style.display = '';
+    est.querySelector('p').textContent = msg;
+  }
+  if (cont) cont.style.display = 'none';
+}
+
+function actPintar(d) {
+  const est = document.getElementById('act-estado');
+  const cont = document.getElementById('act-contenido');
+  if (est) est.style.display = 'none';
+  if (cont) cont.style.display = '';
+
+  const temp = document.getElementById('act-temp');
+  if (temp) temp.textContent = d.temporada ? ('· ' + d.temporada) : '';
+
+  const ha = d.hectareas || {};
+  document.getElementById('act-ha-trab').textContent = (ha.trabajadas ?? 0).toLocaleString('es-AR') + ' ha';
+  document.getElementById('act-ha-trab-d').textContent = (ha.lotes ?? 0) + ' lotes';
+  document.getElementById('act-ha-netas').textContent = (ha.netas ?? 0).toLocaleString('es-AR') + ' ha';
+  document.getElementById('act-ha-netas-d').textContent = 'repintado ' + (ha.repintado_pct ?? 0) + '%';
+
+  const eq = d.equipos || {};
+  document.getElementById('act-equipos').textContent = (eq.online ?? 0) + ' / ' + (eq.total ?? 0);
+  const sinRep = eq.sin_reportar || [];
+  const eqDelta = document.getElementById('act-equipos-d');
+  if (sinRep.length) {
+    const p = sinRep[0];
+    const horas = Math.round((p.hace_min || 0) / 60);
+    eqDelta.textContent = p.hostname + ' sin reportar hace ' + horas + ' h';
+  } else {
+    eqDelta.textContent = 'todos reportando';
+  }
+
+  const ll = d.lluvia || {};
+  document.getElementById('act-lluvia').textContent = (ll.mes_mm ?? 0) + ' mm';
+  const llDelta = document.getElementById('act-lluvia-d');
+  if (ll.ultima) {
+    const f = new Date(ll.ultima.fecha + 'T00:00:00');
+    const fFmt = f.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit' });
+    llDelta.textContent = 'última: ' + fFmt + ' · ' + ll.ultima.mm + ' mm';
+  } else {
+    llDelta.textContent = 'sin lluvias registradas';
+  }
+
+  const ul = document.getElementById('act-ultimos');
+  ul.textContent = '';
+  const ultimos = (d.ultimos || []).slice(0, 8);
+  if (!ultimos.length) {
+    const li = document.createElement('li');
+    li.className = 'td-dim';
+    li.style.padding = '8px 0';
+    li.textContent = 'Sin movimientos recientes';
+    ul.appendChild(li);
+  } else {
+    ultimos.forEach(ev => {
+      const li = document.createElement('li');
+      li.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.04)';
+
+      const dot = document.createElement('span');
+      dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex-shrink:0;background:' + (ACT_ICONOS[ev.tipo] || 'var(--ap-muted)');
+      li.appendChild(dot);
+
+      const texto = document.createElement('span');
+      texto.className = 'td-main';
+      texto.style.cssText = 'flex:1;min-width:0;font-size:12px;font-weight:400';
+      texto.textContent = ev.texto || '';
+      li.appendChild(texto);
+
+      const hora = document.createElement('span');
+      hora.className = 'td-dim';
+      hora.textContent = actHaceTiempo(ev.ts);
+      li.appendChild(hora);
+
+      ul.appendChild(li);
+    });
+  }
+}
+
+async function actCargar() {
+  try {
+    const r = await fetch('/api/actividad/resumen', { credentials: 'same-origin' });
+    if (r.status === 400) {
+      actMostrarEstado('Elegí un establecimiento arriba para ver la actividad');
+      return;
+    }
+    if (r.status === 401) {
+      actMostrarEstado('Iniciá sesión para ver la actividad');
+      return;
+    }
+    if (!r.ok) {
+      actMostrarEstado('No se pudo cargar la actividad');
+      return;
+    }
+    const data = await r.json();
+    actPintar(data);
+  } catch (e) {
+    actMostrarEstado('No se pudo cargar la actividad');
+  }
+}
+
+actCargar();
+setInterval(actCargar, 5 * 60 * 1000);
 </script>
