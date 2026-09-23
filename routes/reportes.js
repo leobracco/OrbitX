@@ -5,6 +5,12 @@
 const router = require("express").Router();
 const { reporteTemporada } = require("../services/reportes");
 const { temporadaActual, esTemporadaValida } = require("../services/temporada");
+const couch = require("../services/couchdb");
+
+// Nombre lindo de la org para la vista; si no está el doc, queda el slug.
+async function nombreOrg(slug) {
+  try { const o = await couch.getDB("global").get(`org_${slug}`); return o.nombre || slug; } catch { return slug; }
+}
 
 function resolverSlug(req) {
   const esSA = req.user?.rol_global === "superadmin";
@@ -36,7 +42,7 @@ router.get("/temporada/vista", async (req, res) => {
     const anteanterior = temporadaAnterior(anterior);
     const temporadas = [temp, anterior, anteanterior];
     const r = await reporteTemporada(slug, temp);
-    res.render("reporte-temporada", { r, org: slug, temporadas, emitido: new Date() });
+    res.render("reporte-temporada", { r, org: await nombreOrg(slug), temporadas, emitido: new Date() });
   } catch (e) { res.status(500).type("text/plain").send(e.message); }
 });
 
