@@ -13,13 +13,46 @@ const { normalizarColeccion, asignarDosis, desdeLocalStorage } = require("../lib
 const ESTADOS = ["borrador", "lista", "enviada"];
 let _cadena = Promise.resolve();
 
+// Tope de un trabajo en la cola. Un raster normal tarda segundos; 120 s es
+// holgado incluso para un lote grande con Copernicus lento.
+const TIMEOUT_TRABAJO_MS = 120_000;
+
+// El nombre del lote entra en selectores Mango: lo acotamos a texto corto para
+// que no llegue un objeto (`{$gt:null}` y amigos) ni una cadena de 1 MB.
+function texto(v, max = 120) { return String(v ?? "").slice(0, max); }
+
+// `local_id` viene del localStorage y ahí es un timestamp numérico, pero puede
+// llegar cualquier cosa por el body. Los números se guardan y se consultan como
+// números (para no romper la idempotencia de lo ya migrado en producción) y
+// todo lo demás como texto corto: nunca un objeto dentro de un selector Mango.
+function claveLocal(v) {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return texto(v);
+}
+
+// Corta una promesa colgada. Sin esto, un fetch que nunca resuelve deja la
+// cadena de la cola (concurrencia 1) trabada para siempre: no se genera una
+// sola prescripción más hasta reiniciar el proceso.
+function conTimeout(promesa, ms = TIMEOUT_TRABAJO_MS) {
+  let t;
+  const reloj = new Promise((_, rechazar) => {
+    t = setTimeout(
+      () => rechazar(Object.assign(new Error("La generación tardó demasiado y se canceló"), { status: 504 })),
+      ms
+    );
+    if (typeof t.unref === "function") t.unref();   // que no mantenga vivo el proceso
+  });
+  return Promise.race([promesa, reloj]).finally(() => clearTimeout(t));
+}
+
 // Cola de concurrencia 1: cada generación espera a la anterior. El setImmediate
 // saca el trabajo del tick del request — zonificar un raster grande es ~0,7 s
 // de CPU sincrónica y no queremos que caiga en el medio de responder.
 function enCola(fn) {
-  const correr = () => new Promise((resolver, rechazar) => {
+  const correr = () => conTimeout(new Promise((resolver, rechazar) => {
     setImmediate(() => { Promise.resolve().then(fn).then(resolver, rechazar); });
-  });
+  }));
   const siguiente = _cadena.then(correr, correr);
   _cadena = siguiente.catch(() => {});
   return siguiente;
@@ -54,7 +87,8 @@ function docNuevo({ slug, datos, uid }) {
     _id:         `presc_${ahora}_${Math.random().toString(36).slice(2, 6)}`,
     tipo:        "prescripcion",
     nombre:      String(datos.nombre || "Sin nombre").slice(0, 120),
-    lote_nombre: datos.lote_nombre || datos.lote || null,
+    // lote_nombre se usa después como clave de selector Mango: texto o null.
+    lote_nombre: (datos.lote_nombre || datos.lote) ? texto(datos.lote_nombre || datos.lote) : null,
     org_slug:    slug,
     origen:      ["manual", "ndvi", "import"].includes(datos.origen) ? datos.origen : "manual",
     estado:      ESTADOS.includes(datos.estado) ? datos.estado : "borrador",
@@ -62,7 +96,7 @@ function docNuevo({ slug, datos, uid }) {
     units:       datos.units || null,
     extra:       datos.extra || null,
     fuente:      datos.fuente || geo.properties?.fuente || null,
-    local_id:    datos.local_id || null,
+    local_id:    claveLocal(datos.local_id),
     created_at:  ahora,
     created_by:  uid || "system",
     updated_at:  ahora,
@@ -77,7 +111,7 @@ async function guardar(slug, datos, uid) {
 
 async function listar(slug, { lote = null, limit = 200 } = {}) {
   // Índice ["tipo","lote_nombre"] (Sprint 2, Tarea 1) cuando se filtra por lote.
-  const selector = lote ? { tipo: "prescripcion", lote_nombre: lote } : { tipo: "prescripcion" };
+  const selector = lote ? { tipo: "prescripcion", lote_nombre: texto(lote) } : { tipo: "prescripcion" };
   const r = await db.getDB(slug).find({
     selector,
     fields: ["_id", "nombre", "lote_nombre", "origen", "estado", "fuente", "local_id", "created_at", "created_by", "updated_at"],
@@ -103,7 +137,7 @@ async function actualizar(slug, id, datos, uid) {
   const doc = {
     ...previo,
     nombre:      datos.nombre != null ? String(datos.nombre).slice(0, 120) : previo.nombre,
-    lote_nombre: datos.lote_nombre ?? previo.lote_nombre,
+    lote_nombre: datos.lote_nombre != null ? texto(datos.lote_nombre) : previo.lote_nombre,
     estado:      ESTADOS.includes(datos.estado) ? datos.estado : previo.estado,
     geojson:     datos.geojson ? normalizarColeccion(datos.geojson, { nombre: datos.nombre || previo.nombre }) : previo.geojson,
     units:       datos.units ?? previo.units,
@@ -120,20 +154,35 @@ async function borrar(slug, id) {
   return true;
 }
 
+// ¿Ya migramos esta prescripción? Consulta dirigida por `local_id` con el
+// índice ["tipo","local_id"]: el `listar({limit:500})` de antes se traía media
+// base para armar un Set y, pasadas las 500, dejaba de ser idempotente.
+async function yaMigrada(slug, localId) {
+  const r = await db.getDB(slug).find({
+    selector: { tipo: "prescripcion", local_id: localId },
+    fields: ["_id"],
+    limit: 1,
+  }).catch(() => ({ docs: [] }));
+  return !!(r.docs || []).length;
+}
+
 // Migración única de lo que haya en localStorage. Idempotente por `local_id`:
 // abrir la pantalla dos veces no duplica nada.
 async function migrarLocales(slug, lista, uid) {
-  const existentes = new Set((await listar(slug, { limit: 500 })).map(d => d.local_id).filter(Boolean));
+  const vistos = new Set();   // duplicados dentro del mismo body
   let creados = 0, saltados = 0;
   for (const cruda of lista || []) {
     const conv = desdeLocalStorage(cruda);
     if (!conv) { saltados++; continue; }
-    if (conv.local_id && existentes.has(conv.local_id)) { saltados++; continue; }
+    const clave = claveLocal(conv.local_id);
+    if (clave != null && clave !== "") {
+      if (vistos.has(clave) || await yaMigrada(slug, clave)) { saltados++; continue; }
+      vistos.add(clave);
+    }
     await guardar(slug, { ...conv, estado: "borrador" }, uid);
-    if (conv.local_id) existentes.add(conv.local_id);
     creados++;
   }
   return { creados, saltados };
 }
 
-module.exports = { generar, guardar, listar, obtener, actualizar, borrar, migrarLocales, ESTADOS };
+module.exports = { generar, guardar, listar, obtener, actualizar, borrar, migrarLocales, enCola, ESTADOS };

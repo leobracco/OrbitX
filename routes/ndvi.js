@@ -9,9 +9,15 @@ const path    = require("path");
 const crypto  = require("crypto");
 const cfg     = require("../services/config_sistema");
 const indices = require("../lib/indices_satelitales");
+const { noDevices } = require("./devices");
 
 // Cache global de token (todas las orgs comparten el mismo).
 let tokenCache = { token: null, expiresAt: 0 };
+
+// Timeouts de los fetch a Copernicus. El Process API de un raster grande puede
+// tardar decenas de segundos; el token es un POST chico.
+const TIMEOUT_TOKEN_MS   = 30_000;
+const TIMEOUT_PROCESS_MS = 60_000;
 
 // Cache en disco de imágenes NDVI por (geometría + fecha).
 // Cada imagen pesa ~50-200 KB y se reusa mucho — lo persistimos.
@@ -59,6 +65,9 @@ async function getCopernicusToken() {
         client_id,
         client_secret,
       }),
+      // Sin timeout, un CDSE que acepta la conexión y nunca contesta deja el
+      // request colgado para siempre (y con él la cola de generación).
+      signal: AbortSignal.timeout(TIMEOUT_TOKEN_MS),
     }
   );
 
@@ -199,12 +208,19 @@ router.get("/fechas-disponibles", async (req, res) => {
 // `formato` y `crs` son opcionales: sin ellos el comportamiento es el de
 // siempre (PNG coloreado en CRS84). Con ellos se pide el raster de valores en
 // una proyección métrica, que es lo que necesita la zonificación.
-async function processAPI({ geometry, desde, hasta, width, height, evalscript, maxCloudCoverage, formato = "image/png", crs = null }) {
+//
+// `bbox` ([minX,minY,maxX,maxY] en el mismo CRS que `crs`) también es opcional
+// pero es lo que fija la ventana que Sentinel Hub renderiza: sin él, SH la
+// deriva de la geometría y la extensión real no coincide con la que el que
+// llama cree haber pedido. Con bbox + geometry, el bbox manda la extensión y
+// la geometry solo recorta.
+async function processAPI({ geometry, bbox = null, desde, hasta, width, height, evalscript, maxCloudCoverage, formato = "image/png", crs = null }) {
   const token = await getCopernicusToken();
 
   const body = {
     input: {
       bounds: {
+        ...(Array.isArray(bbox) && bbox.length === 4 ? { bbox } : {}),
         geometry,
         properties: { crs: crs || "http://www.opengis.net/def/crs/OGC/1.3/CRS84" },
       },
@@ -233,6 +249,9 @@ async function processAPI({ geometry, desde, hasta, width, height, evalscript, m
       "Accept":        formato,
     },
     body: JSON.stringify(body),
+    // Un Process API colgado bloqueaba la cola de generación de prescripciones
+    // (concurrencia 1) hasta el reinicio del proceso.
+    signal: AbortSignal.timeout(TIMEOUT_PROCESS_MS),
   });
 
   if (!r.ok) {
@@ -288,7 +307,9 @@ router.post("/lote", async (req, res) => {
       maxCloudCoverage,
     });
 
-    fs.promises.writeFile(cachePath, png).catch(e => console.warn("[ndvi/lote] cache write:", e.message));
+    fs.promises.writeFile(cachePath, png)
+      .then(purgarCacheSiToca)
+      .catch(e => console.warn("[ndvi/lote] cache write:", e.message));
 
     res.set("Content-Type",  "image/png");
     res.set("Cache-Control", "public, max-age=86400");
@@ -492,6 +513,19 @@ async function purgarCacheNDVI({ maxBytes = 200 * 1024 * 1024, maxDias = 30 } = 
   return { borrados, bytes };
 }
 
+// Disparo oportunista después de escribir en el cache. Sin esto la purga
+// existía pero no la llamaba nadie y .cache/ndvi crecía sin techo. Throttle de
+// 10 minutos: recorrer el directorio en cada MISS sería peor que el problema.
+// Es best-effort — no bloquea la respuesta ni propaga errores.
+const PURGA_CADA_MS = 10 * 60 * 1000;
+let _ultimaPurga = 0;
+function purgarCacheSiToca() {
+  const ahora = Date.now();
+  if (ahora - _ultimaPurga < PURGA_CADA_MS) return;
+  _ultimaPurga = ahora;
+  purgarCacheNDVI().catch(e => console.warn("[ndvi/cache] purga:", e.message));
+}
+
 // ══════════════════════════════════════════════════════════
 //  GET /api/ndvi/lote/raster?lote=&fecha=&indice=
 //  El raster de VALORES del índice, en la proyección métrica del lote.
@@ -499,8 +533,15 @@ async function purgarCacheNDVI({ maxBytes = 200 * 1024 * 1024, maxDias = 30 } = 
 //  el panel es una herramienta de diagnóstico, y la generación de zonas usa
 //  rasterDeLote() sin pasar por HTTP).
 // ══════════════════════════════════════════════════════════
-router.get("/lote/raster", async (req, res) => {
+// noDevices + el chequeo de isToken: ésta es la ruta más cara del servidor (un
+// Process API + un PNG de hasta 1 M de píxeles inflado en RAM). Un PilotX en el
+// campo o un token `orbx_` de solo lectura no tienen por qué poder dispararla:
+// es una herramienta de diagnóstico del panel.
+router.get("/lote/raster", noDevices, async (req, res) => {
   try {
+    if (req.user?.isToken)
+      return res.status(403).json({ error: "Sin permiso", detalle: "los tokens de organización no pueden pedir el raster" });
+
     const slug = req.query.estab || req.user?.estabSlug;
     const lote = req.query.lote ? decodeURIComponent(req.query.lote) : null;
     if (!slug) return res.status(400).json({ error: "Sin organización activa" });
@@ -510,12 +551,17 @@ router.get("/lote/raster", async (req, res) => {
         !(req.user?.memberships || []).some(m => m.orgSlug === req.query.estab))
       return res.status(403).json({ error: "Sin acceso a esa organización" });
 
+    // require perezoso: services/prescripciones → services/ndvi_raster → este
+    // archivo, así que pedirlos arriba haría un ciclo.
     const { rasterDeLote } = require("../services/ndvi_raster");
-    const r = await rasterDeLote({
+    const { enCola } = require("../services/prescripciones");
+    // Misma cola (concurrencia 1) que la generación de prescripciones: dos
+    // rasters grandes a la vez son 60-100 MB de pico en un droplet de 1 GB.
+    const r = await enCola(() => rasterDeLote({
       slug, lote,
       fecha:  req.query.fecha || null,
       indice: (req.query.indice || "ndvi").toLowerCase(),
-    });
+    }));
 
     res.set("X-Ancho", String(r.ancho));
     res.set("X-Alto", String(r.alto));

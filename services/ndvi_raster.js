@@ -13,6 +13,10 @@ const { parseKML, parseBoundaryTxt, parseFieldTxt } = require("./aog_parser");
 const MAX_PX = 1024;
 const MIN_PX = 32;
 
+// El nombre del lote entra en selectores Mango: lo acotamos a texto corto para
+// que no llegue un objeto (`{$gt:null}` y amigos) ni una cadena de 1 MB.
+function texto(v, max = 120) { return String(v ?? "").slice(0, max); }
+
 async function unDoc(estabDB, lote, subtipo) {
   // Índice ["tipo","subtipo","lote_nombre","ts"] (Sprint 2, Tarea 1).
   const r = await estabDB.find({
@@ -27,10 +31,12 @@ async function unDoc(estabDB, lote, subtipo) {
 // Devuelve el boundary como [[lat,lon], ...]. Prioridad: el lote_maestro (que
 // ya lo guarda en GeoJSON cuando el lote se creó desde OrbitX), después el KML
 // de PilotX (WGS84 directo) y por último Boundary.txt + Field.txt.
-async function boundaryDeLote(slug, lote) {
+async function boundaryDeLote(slug, loteCrudo) {
   const estabDB = db.getDB(slug);
+  const lote = texto(loteCrudo);
 
   try {
+    // Índice ["tipo","nombre"] (services/couchdb.js).
     const r = await estabDB.find({
       selector: { tipo: "lote_maestro", nombre: lote },
       fields: ["boundary_geojson"],
@@ -65,6 +71,13 @@ function anilloParaSH(puntosXY) {
 
 // Del contorno [[lat,lon],…] a la grilla métrica que se le pide a Copernicus.
 // Es JS puro (sin red ni disco), así que se testea entero con node --test.
+//
+// El bbox que sale de acá es EXACTAMENTE el que viaja en el request (ver
+// boundsDeGrilla) y el que se le pasa después a zonificar(): si no fueran el
+// mismo, las zonas quedan escaladas y corridas respecto de la imagen. El caso
+// que lo hacía evidente es un lote chico: con MIN_PX=32 píxeles de lado, un
+// lote de 100 m se pide en una ventana de 320 m, y si se declarara el bbox del
+// contorno (100 m) cada zona saldría 3,2 veces más grande de lo que es.
 function calcularGrilla(boundary, metrosPorPx = 10) {
   // Zona UTM por la longitud media del lote (en Argentina: 19, 20 o 21).
   const lonMedia = boundary.reduce((s, p) => s + p[1], 0) / boundary.length;
@@ -73,9 +86,9 @@ function calcularGrilla(boundary, metrosPorPx = 10) {
 
   const xy = boundary.map(([lat, lon]) => { const u = latLonAUtm(lat, lon, zona); return [u.x, u.y]; });
   const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
-  const bbox = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+  const lote = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
 
-  const anchoM = bbox.maxX - bbox.minX, altoM = bbox.maxY - bbox.minY;
+  const anchoM = lote.maxX - lote.minX, altoM = lote.maxY - lote.minY;
   const escala = Math.max(1, anchoM / (MAX_PX * metrosPorPx), altoM / (MAX_PX * metrosPorPx));
   const mPx = metrosPorPx * escala;
   // ceil, no round: con round el bbox reajustado de abajo queda MÁS CHICO que
@@ -83,11 +96,20 @@ function calcularGrilla(boundary, metrosPorPx = 10) {
   // ceil nunca pasa MAX_PX porque la escala ya garantiza anchoM/mPx <= MAX_PX.
   const ancho = Math.min(MAX_PX, Math.max(MIN_PX, Math.ceil(anchoM / mPx)));
   const alto  = Math.min(MAX_PX, Math.max(MIN_PX, Math.ceil(altoM / mPx)));
-  // El bbox se ajusta al tamaño final para que cada píxel mida exactamente lo mismo.
-  bbox.maxX = bbox.minX + ancho * mPx;
-  bbox.maxY = bbox.minY + alto * mPx;
 
-  return { zona, sur, xy, bbox, ancho, alto, mPx };
+  // La ventana final mide ancho*mPx x alto*mPx y se expande CENTRADA sobre el
+  // lote: así el sobrante del redondeo (y el del clamp por MIN_PX, que puede
+  // ser grande) queda repartido a ambos lados en vez de correr el lote contra
+  // la esquina inferior izquierda. Con esto, resX = (maxX-minX)/ancho = mPx y
+  // resY = (maxY-minY)/alto = mPx, exactos.
+  const cx = (lote.minX + lote.maxX) / 2, cy = (lote.minY + lote.maxY) / 2;
+  const extX = ancho * mPx, extY = alto * mPx;
+  const bbox = {
+    minX: cx - extX / 2, maxX: cx + extX / 2,
+    minY: cy - extY / 2, maxY: cy + extY / 2,
+  };
+
+  return { zona, sur, xy, bbox, lote, ancho, alto, mPx };
 }
 
 // EPSG del UTM WGS84: 327XX al sur del ecuador, 326XX al norte.
@@ -95,11 +117,34 @@ function crsUtm(zona, sur) {
   return `http://www.opengis.net/def/crs/EPSG/0/${sur ? 327 : 326}${String(zona).padStart(2, "0")}`;
 }
 
+// El `bounds` tal cual va en el body del Process API. Sentinel Hub deriva la
+// extensión renderizada del `bbox` cuando está presente y usa la `geometry`
+// SOLO para recortar; sin `bbox` la derivaba de la geometría y la ventana real
+// no era la que declarábamos. Es una función aparte, pura, para poder testear
+// que el bbox del request y el que se le pasa a zonificar son el mismo objeto.
+function boundsDeGrilla({ bbox, xy, zona, sur }) {
+  return {
+    bbox: [bbox.minX, bbox.minY, bbox.maxX, bbox.maxY],
+    geometry: { type: "Polygon", coordinates: [anilloParaSH(xy)] },
+    properties: { crs: crsUtm(zona, sur) },
+  };
+}
+
+// Centro del píxel (px, py) en coordenadas UTM, con la misma convención que
+// lib/zonificar.js: la fila 0 es la del norte, así que la Y baja al avanzar.
+function pixelAUtm({ bbox, ancho, alto }, px, py) {
+  return [
+    bbox.minX + ((px + 0.5) * (bbox.maxX - bbox.minX)) / ancho,
+    bbox.maxY - ((py + 0.5) * (bbox.maxY - bbox.minY)) / alto,
+  ];
+}
+
 async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 10, maxCloudCoverage = 30 }) {
   const boundary = await boundaryDeLote(slug, lote);
   if (!boundary) throw Object.assign(new Error(`El lote "${lote}" no tiene contorno cargado`), { status: 404 });
 
-  const { zona, sur, xy, bbox, ancho, alto, mPx } = calcularGrilla(boundary, metrosPorPx);
+  const grilla = calcularGrilla(boundary, metrosPorPx);
+  const { zona, sur, bbox, ancho, alto, mPx } = grilla;
 
   const hasta = fecha || new Date().toISOString().slice(0, 10);
   const desde = fecha || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -107,13 +152,15 @@ async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 
   // require perezoso: routes/ndvi.js requiere este módulo dentro de su handler,
   // así que pedirlo arriba haría un ciclo.
   const { processAPI } = require("../routes/ndvi");
+  const bounds = boundsDeGrilla(grilla);
   const png = await processAPI({
-    geometry: { type: "Polygon", coordinates: [anilloParaSH(xy)] },
+    bbox: bounds.bbox,
+    geometry: bounds.geometry,
     desde, hasta, width: ancho, height: alto,
     evalscript: indices.getEvalscriptRaster(indice),
     maxCloudCoverage,
     formato: "image/png",
-    crs: crsUtm(zona, sur),
+    crs: bounds.properties.crs,
   });
 
   const img = decodificarPNG(png);
@@ -139,4 +186,4 @@ async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 
   };
 }
 
-module.exports = { boundaryDeLote, rasterDeLote, calcularGrilla, crsUtm, anilloParaSH, MAX_PX, MIN_PX };
+module.exports = { boundaryDeLote, rasterDeLote, calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, MAX_PX, MIN_PX };

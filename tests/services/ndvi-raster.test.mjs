@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import raster from "../../services/ndvi_raster.js";
 
-const { calcularGrilla, crsUtm, anilloParaSH, MAX_PX } = raster;
+const { calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, MAX_PX, MIN_PX } = raster;
 
 // Lote rectangular de ~1010 x 620 m cerca de Pergamino (zona UTM 20 sur).
 const LOTE = [
@@ -45,12 +45,59 @@ test("calcularGrilla: un lote enorme se recorta al tope de píxeles bajando la r
   assert.equal(Math.max(g.ancho, g.alto), MAX_PX);
 });
 
+// El hallazgo C2: el bbox que se declara tiene que ser EL MISMO que el que
+// Copernicus renderiza. Si el request y lo que se le pasa a zonificar difieren,
+// las zonas salen escaladas y corridas sobre el lote.
+test("boundsDeGrilla: el bbox del request es exactamente el bbox de la grilla", () => {
+  const g = calcularGrilla(LOTE, 10);
+  const b = boundsDeGrilla(g);
+  assert.deepEqual(b.bbox, [g.bbox.minX, g.bbox.minY, g.bbox.maxX, g.bbox.maxY]);
+  assert.equal(b.properties.crs, crsUtm(g.zona, g.sur));
+  assert.equal(b.geometry.type, "Polygon");
+  // La resolución que implica el par (bbox, ancho/alto) es la declarada.
+  assert.ok(Math.abs((b.bbox[2] - b.bbox[0]) / g.ancho - g.mPx) < 1e-9);
+  assert.ok(Math.abs((b.bbox[3] - b.bbox[1]) / g.alto  - g.mPx) < 1e-9);
+});
+
+test("calcularGrilla: el píxel (ancho-1, alto-1) cae a menos de 1 px del vértice máximo", () => {
+  const g = calcularGrilla(LOTE, 10);
+  const [x, y] = pixelAUtm(g, g.ancho - 1, g.alto - 1);
+  // Esquina "última" del raster: máximo en X, mínimo en Y (la fila 0 es la del norte).
+  assert.ok(Math.abs(x - g.lote.maxX) <= g.mPx, `x=${x} vs maxX=${g.lote.maxX} (mPx=${g.mPx})`);
+  assert.ok(Math.abs(y - g.lote.minY) <= g.mPx, `y=${y} vs minY=${g.lote.minY} (mPx=${g.mPx})`);
+  // Y el píxel (0,0) arranca en la esquina noroeste del bbox.
+  const [x0, y0] = pixelAUtm(g, 0, 0);
+  assert.ok(Math.abs(x0 - g.bbox.minX) <= g.mPx);
+  assert.ok(Math.abs(y0 - g.bbox.maxY) <= g.mPx);
+});
+
 test("calcularGrilla: el bbox contiene a todos los vértices proyectados", () => {
   const g = calcularGrilla(LOTE, 10);
   for (const [x, y] of g.xy) {
     assert.ok(x >= g.bbox.minX - 1e-6 && x <= g.bbox.maxX + 1e-6, `x fuera del bbox: ${x}`);
     assert.ok(y >= g.bbox.minY - 1e-6 && y <= g.bbox.maxY + 1e-6, `y fuera del bbox: ${y}`);
   }
+});
+
+test("calcularGrilla: un lote chico se expande a MIN_PX centrado, no corrido", () => {
+  // ~100 x 100 m: a 10 m/px son 10 px de lado, muy por debajo de MIN_PX=32.
+  const chico = [
+    [-33.9000, -60.6000],
+    [-33.9000, -60.59892],
+    [-33.90090, -60.59892],
+    [-33.90090, -60.6000],
+  ];
+  const g = calcularGrilla(chico, 10);
+  assert.equal(g.ancho, MIN_PX);
+  assert.equal(g.alto, MIN_PX);
+  // La ventana declarada mide 32 px * 10 m = 320 m, no los ~100 m del contorno.
+  assert.ok(Math.abs((g.bbox.maxX - g.bbox.minX) - MIN_PX * g.mPx) < 1e-9);
+  assert.ok(Math.abs((g.bbox.maxY - g.bbox.minY) - MIN_PX * g.mPx) < 1e-9);
+  // Y el lote queda centrado: mismo margen de cada lado.
+  assert.ok(Math.abs((g.lote.minX - g.bbox.minX) - (g.bbox.maxX - g.lote.maxX)) < 1e-6);
+  assert.ok(Math.abs((g.lote.minY - g.bbox.minY) - (g.bbox.maxY - g.lote.maxY)) < 1e-6);
+  // Y es el mismo bbox que viaja en el request.
+  assert.deepEqual(boundsDeGrilla(g).bbox, [g.bbox.minX, g.bbox.minY, g.bbox.maxX, g.bbox.maxY]);
 });
 
 test("crsUtm: EPSG 327XX al sur y 326XX al norte", () => {
