@@ -215,13 +215,16 @@ function areaPoligono(pts) {
   return Math.abs(s) / 2;
 }
 
-function netoRaster(bloques) {
+// Prepara la grilla y devuelve el marcador de bloques. Se comparte entre la
+// versión sincrónica y la troceada para que no haya dos copias de la
+// geometría (y por lo tanto, dos resultados posibles).
+function _rasterizador(bloques) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const pts of bloques) for (const [x, y] of pts) {
     if (x < minX) minX = x; if (x > maxX) maxX = x;
     if (y < minY) minY = y; if (y > maxY) maxY = y;
   }
-  if (!isFinite(minX)) return { neto: 0, res: 0 };
+  if (!isFinite(minX)) return null;
   let res = 0.5;
   const MAX_CELDAS = 40e6;
   while (((maxX - minX) / res + 2) * ((maxY - minY) / res + 2) > MAX_CELDAS) res *= 2;
@@ -249,9 +252,31 @@ function netoRaster(bloques) {
       }
     }
   };
-  for (const pts of bloques)
-    for (let k = 0; k + 2 < pts.length; k++) marcar(pts[k], pts[k + 1], pts[k + 2]);
-  return { neto: celdas * res * res, res };
+  return {
+    marcarBloque(pts) { for (let k = 0; k + 2 < pts.length; k++) marcar(pts[k], pts[k + 1], pts[k + 2]); },
+    resultado() { return { neto: celdas * res * res, res }; },
+  };
+}
+
+function netoRaster(bloques) {
+  const r = _rasterizador(bloques);
+  if (!r) return { neto: 0, res: 0 };
+  for (const pts of bloques) r.marcarBloque(pts);
+  return r.resultado();
+}
+
+// Variante troceada: cede el event loop cada `cadaN` bloques. El peor archivo
+// medido en produccion (5,35 MB de el_susto) bloquea ~1 s en una notebook y
+// 3-5 s en el droplet: sin esto, el sync congela heartbeats y WebSockets.
+async function netoRasterAsync(bloques, { cadaN = 200 } = {}) {
+  const r = _rasterizador(bloques);
+  if (!r) return { neto: 0, res: 0 };
+  let i = 0;
+  for (const pts of bloques) {
+    r.marcarBloque(pts);
+    if (++i % cadaN === 0) await new Promise(cb => setImmediate(cb));
+  }
+  return r.resultado();
 }
 
 // Boundary (lat/lon) → metros locales para medir el contorno.
@@ -263,27 +288,44 @@ function contornoM2(boundaryLatLon) {
   return areaPoligono(pts);
 }
 
+function _statsDesde(bloques, neto, res, boundaryLatLon) {
+  let trabajado = 0;
+  for (const pts of bloques) trabajado += areaTira(pts);
+  const repintado = Math.max(0, trabajado - neto);
+  const contorno = contornoM2(boundaryLatLon);
+  const ha = (m2) => Math.round(m2 / 100) / 100;   // 2 decimales
+  return {
+    trabajado_ha:  ha(trabajado),
+    neto_ha:       ha(neto),
+    repintado_ha:  ha(repintado),
+    repintado_pct: trabajado > 0 ? Math.round((repintado / trabajado) * 1000) / 10 : 0,
+    contorno_ha:   ha(contorno),
+    bloques:       bloques.length,
+    resolucion_m:  res,
+  };
+}
+
 function calcularStats(sectionsTxt, boundaryLatLon) {
   try {
     const bloques = leerBloques(sectionsTxt);
     if (!bloques.length) return null;
-    let trabajado = 0;
-    for (const pts of bloques) trabajado += areaTira(pts);
     const { neto, res } = netoRaster(bloques);
-    const repintado = Math.max(0, trabajado - neto);
-    const contorno = contornoM2(boundaryLatLon);
-    const ha = (m2) => Math.round(m2 / 100) / 100;   // 2 decimales
-    return {
-      trabajado_ha:  ha(trabajado),
-      neto_ha:       ha(neto),
-      repintado_ha:  ha(repintado),
-      repintado_pct: trabajado > 0 ? Math.round((repintado / trabajado) * 1000) / 10 : 0,
-      contorno_ha:   ha(contorno),
-      bloques:       bloques.length,
-      resolucion_m:  res,
-    };
+    return _statsDesde(bloques, neto, res, boundaryLatLon);
   } catch (e) {
     console.error("[calcularStats]", e.message);
+    return null;
+  }
+}
+
+// Misma cuenta que calcularStats pero sin bloquear: la usa la cola del sync.
+async function calcularStatsAsync(sectionsTxt, boundaryLatLon) {
+  try {
+    const bloques = leerBloques(sectionsTxt);
+    if (!bloques.length) return null;
+    const { neto, res } = await netoRasterAsync(bloques);
+    return _statsDesde(bloques, neto, res, boundaryLatLon);
+  } catch (e) {
+    console.error("[calcularStatsAsync]", e.message);
     return null;
   }
 }
@@ -350,4 +392,4 @@ function parseLote(docs) {
   return result;
 }
 
-module.exports = { parseFieldTxt, parseBoundaryTxt, parseKML, parseSections, parseLote, leerBloques, calcularStats, STATS_VER, statsVigentes };
+module.exports = { parseFieldTxt, parseBoundaryTxt, parseKML, parseSections, parseLote, leerBloques, calcularStats, calcularStatsAsync, netoRaster, netoRasterAsync, contornoM2, STATS_VER, statsVigentes };
