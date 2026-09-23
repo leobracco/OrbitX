@@ -79,14 +79,12 @@ router.get("/historial", async (req, res) => {
 });
 
 // GET /api/notif-org/no-leidas — barato, para el badge de la campanita.
+// Consulta propia (solo _id/ts, sin titulo/cuerpo) vía notis.noLeidas().
 router.get("/no-leidas", async (req, res) => {
   try {
     const orgSlug = orgDe(req);
-    const [items, lectura] = await Promise.all([
-      notis.listar(orgSlug, { limit: 100 }),
-      notis.getLectura(orgSlug, req.user.uid),
-    ]);
-    res.json({ ok: true, n: notis.contarNoLeidas(items, lectura) });
+    const { no_leidas, hay_mas } = await notis.noLeidas(orgSlug, req.user.uid);
+    res.json({ ok: true, no_leidas, hay_mas });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 

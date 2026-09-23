@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import notis from "../../lib/notificaciones.js";
 
-const { armarNotificacion, contarNoLeidas, estaLeida, compactarLectura } = notis;
+const { armarNotificacion, contarNoLeidas, estaLeida, compactarLectura, mergearLecturas } = notis;
 
 test("armarNotificacion: forma completa del doc", () => {
   const n = armarNotificacion("nodo_caido", { titulo: "Equipo sin reportar", cuerpo: "PC-3 hace 20 min", url: "/app/#/equipos" }, 1700000000000);
@@ -14,7 +14,7 @@ test("armarNotificacion: forma completa del doc", () => {
   assert.equal(n.ts, 1700000000000);
   assert.equal(n.nivel, "info");
   assert.deepEqual(n.meta, {});
-  assert.match(n._id, /^notif_1700000000000_[a-z0-9]{4}$/);
+  assert.match(n._id, /^notif_1700000000000_[a-f0-9]{8}$/);
 });
 
 test("armarNotificacion: alerta_critica arranca en nivel critico", () => {
@@ -47,4 +47,33 @@ test("compactarLectura: los ids anteriores a ts_hasta ya no hacen falta", () => 
   const l = compactarLectura({ ts_hasta: 200, ids_leidas: ["n1", "n2", "n3"], ids_ts: { n1: 100, n2: 200, n3: 300 } });
   assert.deepEqual(l.ids_leidas, ["n3"]);
   assert.deepEqual(l.ids_ts, { n3: 300 });
+});
+
+test("mergearLecturas: union de ids, max de ts_hasta, compactado despues", () => {
+  const remota = {
+    _id: "notif_leidas_u1", _rev: "3-remoto",
+    ts_hasta: 100, ids_leidas: ["nA", "nB"], ids_ts: { nA: 50, nB: 90 },
+  };
+  const local = {
+    _id: "notif_leidas_u1", _rev: "2-viejo",
+    ts_hasta: 50, ids_leidas: ["nC"], ids_ts: { nC: 120 },
+  };
+  const merged = mergearLecturas(remota, local);
+
+  // se queda con el _rev remoto (el que hay que usar para el reintento)
+  assert.equal(merged._rev, "3-remoto");
+  // max de ts_hasta entre ambas
+  assert.equal(merged.ts_hasta, 100);
+  // union de ids marcados por las dos escrituras concurrentes, pero
+  // compactado despues: nA (ts 50) y nB (ts 90) ya quedan cubiertos por
+  // ts_hasta=100 y se caen; solo sobrevive nC (ts 120, > ts_hasta)
+  assert.deepEqual(merged.ids_leidas, ["nC"]);
+  assert.deepEqual(merged.ids_ts, { nC: 120 });
+});
+
+test("mergearLecturas: no pierde el marcado local si el remoto no lo tiene", () => {
+  const remota = { _id: "notif_leidas_u1", _rev: "5-remoto", ts_hasta: 0, ids_leidas: ["x1"], ids_ts: { x1: 10 } };
+  const local  = { _id: "notif_leidas_u1", _rev: "4-viejo",  ts_hasta: 0, ids_leidas: ["x2"], ids_ts: { x2: 20 } };
+  const merged = mergearLecturas(remota, local);
+  assert.deepEqual(new Set(merged.ids_leidas), new Set(["x1", "x2"]));
 });
