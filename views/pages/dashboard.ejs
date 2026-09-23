@@ -193,8 +193,9 @@ function actPintar(d) {
   const eqDelta = document.getElementById('act-equipos-d');
   if (sinRep.length) {
     const p = sinRep[0];
-    const horas = Math.round((p.hace_min || 0) / 60);
-    eqDelta.textContent = p.hostname + ' sin reportar hace ' + horas + ' h';
+    const min = p.hace_min || 0;
+    const hace = min < 60 ? min + ' min' : Math.round(min / 60) + ' h';
+    eqDelta.textContent = p.hostname + ' sin reportar hace ' + hace;
   } else {
     eqDelta.textContent = 'todos reportando';
   }
