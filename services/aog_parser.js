@@ -385,9 +385,16 @@ function parseLote(docs) {
 
   // 4. Estadisticas (ha trabajadas / netas / repintadas / contorno). No
   //    necesita origen: se calcula en metros sobre el archivo crudo.
-  result.stats = byType.sections_coverage?.[0]
-    ? calcularStats(byType.sections_coverage[0].contenido, result.boundary)
+  //    Sprint 2: si el doc ya trae stats vigentes (calculadas en el sync) se
+  //    usan tal cual y se ahorra el rasterizado; el contorno se recalcula
+  //    siempre porque depende del boundary, no del Sections.txt.
+  const covDoc = byType.sections_coverage?.[0] || null;
+  result.stats = covDoc
+    ? (statsVigentes(covDoc)
+        ? { ...covDoc.stats }
+        : calcularStats(covDoc.contenido, result.boundary))
     : null;
+  if (result.stats) result.stats.contorno_ha = Math.round(contornoM2(result.boundary) / 100) / 100;
 
   return result;
 }

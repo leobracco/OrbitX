@@ -4,7 +4,7 @@
 // alertas de la org, y arma un objeto liviano. Parsear coberturas es caro:
 // cache en memoria 5 min por org+temporada.
 const db = require("./couchdb");
-const { calcularStats } = require("./aog_parser");
+const { calcularStats, statsVigentes, parseKML, contornoM2 } = require("./aog_parser");
 const { temporadaActual, rangoTemporada, esTemporadaValida } = require("./temporada");
 const TZ = "America/Argentina/Buenos_Aires";
 const CACHE_MS = 5 * 60 * 1000, ONLINE_MS = 2 * 60 * 1000;
@@ -54,10 +54,77 @@ function armarResumen({ temporada, rango, coberturas = [], devices = [], lluvias
   };
 }
 
-async function cargarCoberturas(estabDB) {
-  // Solo los archivos de cobertura (uno por lote): contenido + ts. Índice ["tipo","subtipo","es_lote"].
-  const r = await estabDB.find({ selector: { tipo: "aog_archivo", es_lote: true, subtipo: "sections_coverage" }, limit: 2000 });
-  return (r.docs || []).map(d => ({ lote_nombre: d.lote_nombre, ts: d.ts || 0, stats: d.contenido ? calcularStats(d.contenido, null) : null }));
+// Tope de docs que se reparsean en vivo cuando todavía no tienen stats. Sin
+// tope, una org sin migrar reproduce el problema original (22,8 MB y ~2 s de
+// CPU por request); con tope, el Inicio nunca queda en blanco y el resto se
+// completa solo en la cola.
+const MAX_FALLBACK = 10;
+
+// Pura: divide los docs entre los que tienen stats confiables y los que no.
+function separarPorStats(docs) {
+  const listos = [], faltan = [];
+  for (const d of docs || []) (statsVigentes(d) ? listos : faltan).push(d);
+  return { listos, faltan };
+}
+
+// El contorno del lote no sale del Sections.txt: sale del boundary. Se pide
+// aparte y solo el KML (WGS84 directo, no necesita el origen del lote). Son
+// unos pocos KB por lote. Antes se pasaba boundary=null y contorno_ha era
+// siempre 0 en el Inicio y en el Reporte de temporada.
+async function cargarContornos(estabDB) {
+  const porLote = new Map();
+  try {
+    const r = await estabDB.find({
+      selector: { tipo: "aog_archivo", es_lote: true, subtipo: "boundary_kml" },
+      fields: ["lote_nombre", "contenido"],
+      limit: 2000,
+    });
+    for (const d of r.docs || []) {
+      const ring = parseKML(d.contenido);
+      if (ring && d.lote_nombre) porLote.set(d.lote_nombre, Math.round(contornoM2(ring) / 100) / 100);
+    }
+  } catch (e) {
+    console.warn("[actividad] contornos:", e.message);
+  }
+  return porLote;
+}
+
+async function cargarCoberturas(estabDB, slug = null) {
+  // Solo metadata + stats: sin `contenido`. Índice ["tipo","subtipo","es_lote"].
+  const r = await estabDB.find({
+    selector: { tipo: "aog_archivo", es_lote: true, subtipo: "sections_coverage" },
+    fields: ["_id", "lote_nombre", "ts", "ts_trabajo", "stats", "stats_ver", "stats_hash", "hash_md5"],
+    limit: 2000,
+  });
+  const { listos, faltan } = separarPorStats(r.docs || []);
+  const contornos = await cargarContornos(estabDB);
+  const conContorno = (nombre, stats) => ({ ...stats, contorno_ha: contornos.get(nombre) ?? 0 });
+
+  const out = listos.map(d => ({
+    lote_nombre: d.lote_nombre,
+    ts: d.ts_trabajo || d.ts || 0,
+    stats: conContorno(d.lote_nombre, d.stats),
+  }));
+
+  // Fallback acotado: bajar el contenido SOLO de unos pocos y calcular en vivo.
+  for (const d of faltan.slice(0, MAX_FALLBACK)) {
+    try {
+      const full = await estabDB.get(d._id);
+      const st = calcularStats(full.contenido || "", null);
+      if (st) out.push({ lote_nombre: full.lote_nombre, ts: full.ts || 0, stats: conContorno(full.lote_nombre, st) });
+    } catch (e) {
+      console.warn("[actividad] fallback stats:", d._id, e.message);
+    }
+  }
+
+  // El resto se calcula en la cola y queda listo para la próxima.
+  if (slug && faltan.length) {
+    try {
+      const { encolarStats } = require("./cobertura_stats");
+      for (const d of faltan) encolarStats(slug, d._id);
+    } catch (e) { console.warn("[actividad] encolarStats:", e.message); }
+  }
+  return out;
 }
 
 async function resumenActividad(slug, { temporada } = {}) {
@@ -67,7 +134,7 @@ async function resumenActividad(slug, { temporada } = {}) {
   if (hit && Date.now() - hit.ts < CACHE_MS) return { ...hit.data, cache: true };
   const estabDB = db.getDB(slug), globalDB = db.getDB("global");
   const [coberturas, devs, lluv, alertas] = await Promise.all([
-    cargarCoberturas(estabDB),
+    cargarCoberturas(estabDB, slug),
     globalDB.find({ selector: { tipo: "device", estab_slug: slug }, fields: ["device_id", "hostname", "ultimo_visto"], limit: 500 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
     estabDB.find({ selector: { tipo: "lluvia_registro" }, fields: ["fecha", "mm", "lote"], limit: 2000 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
     db.getAlertasActivas(slug).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
@@ -78,4 +145,4 @@ async function resumenActividad(slug, { temporada } = {}) {
   return data;
 }
 
-module.exports = { armarResumen, resumenActividad, cargarCoberturas, ONLINE_MS };
+module.exports = { armarResumen, resumenActividad, cargarCoberturas, separarPorStats, ONLINE_MS };

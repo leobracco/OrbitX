@@ -53,6 +53,7 @@ function agregarTemporada({ temporada, rango, maestros = [], coberturas = [], ll
       neto_ha: stats ? r1(stats.neto_ha || 0) : null,
       repintado_ha: stats ? r1(stats.repintado_ha || 0) : null,
       repintado_pct: stats ? r1(stats.repintado_pct || 0) : null,
+      contorno_ha: stats && stats.contorno_ha ? r1(stats.contorno_ha) : null,
       bloques: stats ? stats.bloques || 0 : null,
       ultimo_ts: cobertura ? cobertura.ts : null,
       lluvia_mm: lluviaPorLote(nombre),
@@ -95,7 +96,7 @@ async function reporteTemporada(slug, temporada) {
       .find({ selector: { tipo: "lote_maestro" }, fields: ["nombre", "cultivo", "temporada", "ha_estimadas"], limit: 2000 })
       .then(r => r.docs)
       .catch(e => { console.warn("[reportes] consulta lote_maestro falló:", e.message); return []; }),
-    cargarCoberturas(estabDB),
+    cargarCoberturas(estabDB, slug),
     estabDB
       .find({ selector: { tipo: "lluvia_registro", fecha: { $gte: rango.desde, $lte: rango.hasta } }, fields: ["fecha", "mm", "lote"], limit: 2000 })
       .then(r => r.docs)
