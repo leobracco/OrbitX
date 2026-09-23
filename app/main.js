@@ -108,10 +108,10 @@ let generacion = 0;
 async function enrutar() {
   const mia = ++generacion;
   const partes  = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  const pestana = partes[0] || "mapa";
+  const pestana = partes[0] || "inicio";
   const param   = partes[1] ? decodeURIComponent(partes[1]) : undefined;
   const permitidas = pestanasPara(ctx.rol);
-  const destino = permitidas.includes(pestana) ? pestana : "mapa";
+  const destino = permitidas.includes(pestana) ? pestana : "inicio";
   if (destino !== pestana) { location.hash = `#/${destino}`; return; }
   actual?.desmontar?.(); ctx.onPosicion = null;
   const root = $("pantalla"); root.innerHTML = ""; root.className = "pantalla";

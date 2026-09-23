@@ -5,7 +5,7 @@
 // app/version.json, un test verifica que coincidan). Así el nombre del cache
 // es constante aunque el navegador recicle el SW, y cambiar la versión cambia
 // los bytes de sw.js → el navegador detecta la actualización.
-const VERSION = "20260922-06";
+const VERSION = "20260923-01";
 const CACHE   = `orbitx-app-${VERSION}`;
 
 const SHELL = [
@@ -13,7 +13,7 @@ const SHELL = [
   "/app/core/store.js", "/app/core/api.js", "/app/core/auth.js", "/app/core/sync.js",
   "/app/core/permisos.js", "/app/core/fecha.js", "/app/core/socket.js", "/app/core/push.js",
   "/app/ui/nav.js", "/app/ui/sheet.js", "/app/ui/toast.js", "/app/ui/html.js", "/app/ui/selector.js",
-  "/app/pantallas/mapa.js", "/app/pantallas/lotes.js", "/app/pantallas/lluvias.js",
+  "/app/pantallas/inicio.js", "/app/pantallas/mapa.js", "/app/pantallas/lotes.js", "/app/pantallas/lluvias.js",
   "/app/pantallas/alertas.js", "/app/pantallas/equipos.js",
   "/app/icons/icon-192.png", "/app/icons/icon-512.png",
   "/css/variables.css", "/css/leaflet.min.css", "/js/leaflet.min.js", "/socket.io/socket.io.js",

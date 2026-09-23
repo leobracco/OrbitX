@@ -4,9 +4,9 @@
 // 'equipos' solo si el rol tiene lectura en 'dispositivos' (solo viewer no la
 // tiene; member sí: dispositivos: ["r"]).
 
-export const PESTANAS = ["mapa", "lotes", "lluvias", "alertas", "equipos"];
+export const PESTANAS = ["inicio", "mapa", "lotes", "lluvias", "alertas", "equipos"];
 
-const SIN_EQUIPOS = ["mapa", "lotes", "lluvias", "alertas"];
+const SIN_EQUIPOS = ["inicio", "mapa", "lotes", "lluvias", "alertas"];
 const CON_DISPOSITIVOS = new Set(["superadmin", "owner", "admin_org", "agronomo", "contratista", "operador", "member"]);
 
 export function pestanasPara(rol) {
