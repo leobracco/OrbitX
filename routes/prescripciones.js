@@ -10,8 +10,20 @@ const auth = require("../middleware/auth");
 const { noDevices } = require("./devices");
 const db = require("../services/couchdb");
 const presc = require("../services/prescripciones");
+const { conExtraLegacy } = require("../lib/prescripcion_schema");
 
+// Lectura: cualquier miembro autenticado que no sea un device.
 const guard = [auth.required, noDevices];
+
+// Escritura (crear / editar / borrar / generar / enviar al tractor): hace falta
+// permiso de escritura. PERMS (middleware/auth.js) no tiene una clave propia
+// `prescripciones`, así que usamos `lotes`/`write`, que es el recurso más
+// cercano: una prescripción es un plan de aplicación sobre un lote, y quien
+// puede escribir lotes es exactamente quien debería poder mandarle una dosis a
+// un tractor (superadmin, owner, admin_org). Si algún día se agrega la clave
+// `prescripciones` a PERMS, cambiar acá y nada más.
+// requirePermiso ya rechaza devices y deja los tokens `orbx_` en solo lectura.
+const guardW = [auth.required, noDevices, auth.requirePermiso("lotes", "write")];
 
 function orgDe(req) {
   const slug = req.query.estab || req.user?.estabSlug;
@@ -34,23 +46,23 @@ router.get("/docs/:id", ...guard, async (req, res) => {
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
-router.post("/docs", ...guard, async (req, res) => {
+router.post("/docs", ...guardW, async (req, res) => {
   try { res.json({ ok: true, doc: await presc.guardar(orgDe(req), req.body || {}, req.user?.uid) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
-router.put("/docs/:id", ...guard, async (req, res) => {
+router.put("/docs/:id", ...guardW, async (req, res) => {
   try { res.json({ ok: true, doc: await presc.actualizar(orgDe(req), req.params.id, req.body || {}, req.user?.uid) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
-router.delete("/docs/:id", ...guard, async (req, res) => {
+router.delete("/docs/:id", ...guardW, async (req, res) => {
   try { await presc.borrar(orgDe(req), req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // POST /api/prescripciones/generar — vista previa. No guarda nada salvo ?guardar=1.
-router.post("/generar", ...guard, async (req, res) => {
+router.post("/generar", ...guardW, async (req, res) => {
   try {
     const slug = orgDe(req);
     const { lote, fecha, indice, n_zonas, min_ha, dosis, unidad, sentido, nombre } = req.body || {};
@@ -76,7 +88,7 @@ router.post("/generar", ...guard, async (req, res) => {
 // POST /api/prescripciones/docs/:id/enviar — manda una prescripción guardada
 // a un tractor. Sin esto, lo generado desde NDVI se queda en CouchDB y nunca
 // aparece en /pendientes, que es de donde lo baja PilotX.
-router.post("/docs/:id/enviar", ...guard, async (req, res) => {
+router.post("/docs/:id/enviar", ...guardW, async (req, res) => {
   try {
     const slug = orgDe(req);
     const deviceId = req.body?.device_id;
@@ -95,6 +107,12 @@ router.post("/docs/:id/enviar", ...guard, async (req, res) => {
 
     const ahora = Date.now();
     const nombre = doc.nombre || "prescripcion";
+    // El GeoJSON es lo ÚNICO que viaja al tractor, así que las tres dosis
+    // (semilla, ferti en línea, ferti al costado) tienen que estar en las
+    // properties de cada feature. En los docs migrados con la versión vieja el
+    // ferti quedó en `extra`: lo plegamos acá para no mandar una prescripción
+    // incompleta al campo.
+    const geojson = conExtraLegacy(doc.geojson, doc.extra);
     await db.getDB(slug).insert({
       _id:       `prescripcion_${deviceId}_${ahora}`,
       tipo:      "aog_descarga_pendiente",
@@ -102,7 +120,7 @@ router.post("/docs/:id/enviar", ...guard, async (req, res) => {
       nombre,
       subtipo:   "prescripcion",
       producto:  req.body?.producto || "quantix",
-      contenido: JSON.stringify(doc.geojson),
+      contenido: JSON.stringify(geojson),
       presc_id:  doc._id,
       device_id: deviceId,
       entregado: false,
@@ -124,7 +142,7 @@ router.post("/docs/:id/enviar", ...guard, async (req, res) => {
 });
 
 // POST /api/prescripciones/migrar — sube lo que quedó en el localStorage.
-router.post("/migrar", ...guard, async (req, res) => {
+router.post("/migrar", ...guardW, async (req, res) => {
   try {
     const r = await presc.migrarLocales(orgDe(req), req.body?.locales || [], req.user?.uid);
     res.json({ ok: true, ...r });

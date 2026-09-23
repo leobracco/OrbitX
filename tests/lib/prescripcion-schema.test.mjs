@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import esquema from "../../lib/prescripcion_schema.js";
 
-const { normalizarColeccion, asignarDosis, desdeLocalStorage } = esquema;
+const { normalizarColeccion, asignarDosis, desdeLocalStorage, conExtraLegacy, PROPS_CANONICAS } = esquema;
 
 const FC = () => ({
   type: "FeatureCollection",
@@ -17,10 +17,33 @@ test("normalizarColeccion: deja siempre las mismas properties", () => {
   assert.equal(fc.properties.nombre, "Maíz lote 3");
   assert.equal(fc.properties.prescription_dosis_variable, true);
   for (const f of fc.features) {
-    assert.deepEqual(Object.keys(f.properties).sort(), ["dosis", "ha", "ndvi_medio", "nombre", "unidad", "zona"]);
+    assert.deepEqual(Object.keys(f.properties).sort(), PROPS_CANONICAS.slice().sort());
     assert.equal(typeof f.properties.zona, "number");
   }
   assert.equal(fc.features[0].properties.nombre, "Zona 1");
+});
+
+test("normalizarColeccion: conserva semilla / ferti_linea / ferti_costado", () => {
+  const fc = normalizarColeccion({
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [] },
+      properties: { zona: 1, dosis: 7.5, semilla: 7.5, ferti_linea: 80, ferti_costado: 20 },
+    }],
+  }, {});
+  const p = fc.features[0].properties;
+  assert.equal(p.semilla, 7.5);
+  assert.equal(p.ferti_linea, 80);
+  assert.equal(p.ferti_costado, 20);
+});
+
+test("normalizarColeccion: las tres dosis son opcionales y quedan en null", () => {
+  const fc = normalizarColeccion({ type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: {} }] }, {});
+  const p = fc.features[0].properties;
+  assert.equal(p.semilla, null);
+  assert.equal(p.ferti_linea, null);
+  assert.equal(p.ferti_costado, null);
 });
 
 test("normalizarColeccion: rellena zona y nombre si faltan", () => {
@@ -67,12 +90,46 @@ test("desdeLocalStorage: convierte el formato viejo del navegador", () => {
   assert.equal(out.nombre, "Prueba");
   assert.equal(out.origen, "manual");
   assert.equal(out.geojson.features.length, 2);
-  // La dosis canónica es la semilla; ferti va en units/meta para no perder nada.
+  // La dosis canónica es la semilla; las tres dosis van POR FEATURE (antes el
+  // ferti quedaba en un `extra` paralelo que nunca llegaba al tractor).
   assert.equal(out.geojson.features[0].properties.dosis, 7.5);
   assert.equal(out.geojson.features[0].properties.unidad, "sem_m");
   assert.equal(out.geojson.features[1].properties.zona, 2);
   assert.deepEqual(out.units, viejo.units);
-  assert.deepEqual(out.extra[0], { ferti_linea: 80, ferti_costado: 0 });
+  assert.equal(out.geojson.features[0].properties.semilla, 7.5);
+  assert.equal(out.geojson.features[0].properties.ferti_linea, 80);
+  assert.equal(out.geojson.features[0].properties.ferti_costado, 0);
+  assert.equal(out.geojson.features[1].properties.ferti_linea, 100);
+  assert.equal(out.extra, undefined, "el `extra` paralelo ya no existe");
+  // Y sobreviven a normalizarColeccion, que es por donde pasa todo antes de
+  // guardarse y de mandarse al tractor.
+  const norm = normalizarColeccion(out.geojson, { nombre: out.nombre });
+  assert.equal(norm.features[0].properties.ferti_linea, 80);
+  assert.equal(norm.features[1].properties.semilla, 9);
+});
+
+test("conExtraLegacy: pliega el `extra` de los docs viejos dentro de cada feature", () => {
+  const fc = normalizarColeccion({
+    type: "FeatureCollection",
+    features: [
+      { type: "Feature", geometry: null, properties: { zona: 1, dosis: 7.5 } },
+      { type: "Feature", geometry: null, properties: { zona: 2, dosis: 9 } },
+    ],
+  }, {});
+  const out = conExtraLegacy(fc, [{ ferti_linea: 80, ferti_costado: 0 }, { ferti_linea: 100, ferti_costado: 5 }]);
+  assert.equal(out.features[0].properties.ferti_linea, 80);
+  assert.equal(out.features[0].properties.semilla, 7.5, "sin semilla en el extra, cae a la dosis");
+  assert.equal(out.features[1].properties.ferti_costado, 5);
+});
+
+test("conExtraLegacy: sin `extra` no toca nada y no pisa lo que ya está", () => {
+  const fc = normalizarColeccion({
+    type: "FeatureCollection",
+    features: [{ type: "Feature", geometry: null, properties: { zona: 1, dosis: 7.5, ferti_linea: 42 } }],
+  }, {});
+  assert.equal(conExtraLegacy(fc, null), fc);
+  assert.equal(conExtraLegacy(fc, []), fc);
+  assert.equal(conExtraLegacy(fc, [{ ferti_linea: 999 }]).features[0].properties.ferti_linea, 42);
 });
 
 test("desdeLocalStorage: objeto basura devuelve null", () => {
