@@ -185,7 +185,7 @@ function actPintar(d) {
   document.getElementById('act-ha-trab').textContent = (ha.trabajadas ?? 0).toLocaleString('es-AR') + ' ha';
   document.getElementById('act-ha-trab-d').textContent = (ha.lotes ?? 0) + ' lotes';
   document.getElementById('act-ha-netas').textContent = (ha.netas ?? 0).toLocaleString('es-AR') + ' ha';
-  document.getElementById('act-ha-netas-d').textContent = 'repintado ' + (ha.repintado_pct ?? 0) + '%';
+  document.getElementById('act-ha-netas-d').textContent = 'repintado ' + (ha.repintado_pct ?? 0).toLocaleString('es-AR') + '%';
 
   const eq = d.equipos || {};
   document.getElementById('act-equipos').textContent = (eq.online ?? 0) + ' / ' + (eq.total ?? 0);
@@ -200,12 +200,12 @@ function actPintar(d) {
   }
 
   const ll = d.lluvia || {};
-  document.getElementById('act-lluvia').textContent = (ll.mes_mm ?? 0) + ' mm';
+  document.getElementById('act-lluvia').textContent = (ll.mes_mm ?? 0).toLocaleString('es-AR') + ' mm';
   const llDelta = document.getElementById('act-lluvia-d');
   if (ll.ultima) {
     const f = new Date(ll.ultima.fecha + 'T00:00:00');
     const fFmt = f.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit' });
-    llDelta.textContent = 'última: ' + fFmt + ' · ' + ll.ultima.mm + ' mm';
+    llDelta.textContent = 'última: ' + fFmt + ' · ' + Number(ll.ultima.mm).toLocaleString('es-AR') + ' mm';
   } else {
     llDelta.textContent = 'sin lluvias registradas';
   }
