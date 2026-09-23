@@ -768,7 +768,6 @@ async function toggleCapa(capaId, nombreEnc, idx) {
       // bug pasaba de latente a garantizado.
       const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto${typeof _estabQS === "function" ? _estabQS() : ""}`);
       // fin Sprint 2: estab en los toggles de capa
-      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
       const externas = ctx.capas?.externas || {};
       const todasCapas = Object.entries(externas).flatMap(([sub, cs]) =>
         cs.map(c => ({ ...c, subtipo: sub }))
@@ -813,7 +812,12 @@ async function toggleCapaSHP(capaId, nombreEnc) {
     toggle.classList.remove("off");
     mostrarLoading("Cargando shapefile…");
     try {
-      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto`);
+      // Sprint 2: estab en los toggles de capa
+      // Sin ?estab=, un superadmin mirando otra org traía el contexto
+      // equivocado. Con dos paneles que pueden apuntar a orgs distintas, el
+      // bug pasaba de latente a garantizado.
+      const ctx      = await Auth.get(`/api/lotes-maestro/${nombreEnc}/contexto${typeof _estabQS === "function" ? _estabQS() : ""}`);
+      // fin Sprint 2: estab en los toggles de capa
       const externas = ctx.capas?.externas || {};
       const todasCapas = Object.entries(externas).flatMap(([sub, cs]) =>
         cs.map(c => ({ ...c, subtipo: sub }))
