@@ -336,6 +336,14 @@ async function getDensidadesPorLote(slug, loteId, limit=2000) {
 }
 
 // ── Alertas ──────────────────────────────────────────────────
+// Niveles "altos" que ameritan el hook alerta_critica de notify-org (además
+// del "CRITICO" que ya usa routes/sync.js). Normalizado sin tildes y en
+// minúscula para cubrir variantes ("Crítica", "ALTA", etc).
+const NIVELES_CRITICOS = ["critico", "critica", "alta"];
+function esNivelCritico(nivel) {
+  return NIVELES_CRITICOS.includes(String(nivel || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""));
+}
+
 async function insertAlerta(slug, data) {
   const id = `alert_${Date.now()}_${data.bajada_id||0}`;
   const r  = await upsert(getDB(slug), id, { ...data, tipo:"alerta", synced_at:Date.now() });
@@ -345,7 +353,9 @@ async function insertAlerta(slug, data) {
     if (push.configurado() && !data.resuelta)
       push.notificarOrg(slug, { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta en el campo", url: "/app/#/alertas" })
           .catch(e => console.warn("[push/alerta]", e.message));
-    if (!data.resuelta)
+    // El hook alerta_critica es para avisos por mail/webhook de nivel alto: no
+    // spamear notify-org con cada advertencia menor, solo con las críticas.
+    if (!data.resuelta && esNivelCritico(data.nivel))
       require("../lib/notify-org").notify(slug, "alerta_critica", { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta" })
           .catch(e => console.warn("[notify/alerta]", e.message));
   } catch (e) { console.warn("[push/alerta]", e.message); }
