@@ -135,28 +135,22 @@ router.get("/", async (req, res) => {
       total = lista.length;
 
     } else {
-      // Modo sin búsqueda: usar VISTAS NATIVAS de CouchDB.
-      // 1) Lotes maestros ordenados por fecha desc, paginación nativa.
+      // Modo sin búsqueda: lista COMPLETA mergeada (maestros + lotes AOG) y
+      // paginación sobre el merge. Antes se paginaba solo sobre lote_maestro
+      // y los lotes AOG-sin-maestro se inyectaban únicamente cuando skip===0:
+      // en orgs donde casi todo viene del sync AOG (lo normal), la página 2
+      // volvía vacía y "Cargar 10 más" no hacía nada.
+
+      // 1) Todos los maestros (liviano: columnas de la vista, sin docs).
       const t0 = Date.now();
       let docsMaestros = [];
       try {
         const r = await estabDB.view("orbitx", "lotes_maestros_por_fecha", {
           descending: true,
-          limit, skip,
           include_docs: false,
           reduce: false,
         });
-        docsMaestros = (r.rows || []).map(row => ({
-          _id:          row.id,
-          nombre:       row.value.nombre,
-          cultivo:      row.value.cultivo,
-          temporada:    row.value.temporada,
-          ha_estimadas: row.value.ha_estimadas,
-          ha_calculadas:row.value.ha_calculadas,
-          tags:         row.value.tags,
-          origen:       row.value.origen,
-          updated_at:   row.value.updated_at,
-        }));
+        docsMaestros = (r.rows || []).map(row => ({ _id: row.id, ...row.value }));
       } catch (e) {
         // Fallback Mango si la vista no está construida todavía.
         console.warn("[lotes-maestro] view fallback:", e.message);
@@ -164,13 +158,13 @@ router.get("/", async (req, res) => {
           const r = await estabDB.find({
             selector: { tipo: "lote_maestro", updated_at: { $gte: 0 } },
             sort:     [{ updated_at: "desc" }],
-            limit, skip,
+            limit:    2000,
           });
           docsMaestros = r.docs;
         } catch {
           const fb = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
           fb.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-          docsMaestros = fb.slice(skip, skip + limit);
+          docsMaestros = fb;
         }
       }
       timings.maestros = Date.now() - t0;
@@ -182,66 +176,41 @@ router.get("/", async (req, res) => {
         tsUltimo: m.updated_at || 0,
       }));
 
-      // 2) Sumar lotes AOG sin maestro SOLO en la primera página, con vista group:1.
-      if (skip === 0) {
-        const t1 = Date.now();
-        let nombresAOG = [];
-        try {
-          const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
-            group_level: 1,
-          });
-          nombresAOG = (r.rows || []).map(row => row.key).filter(Boolean);
-        } catch (e) {
-          console.warn("[lotes-maestro] view AOG fallback:", e.message);
-        }
-        timings.aog_unicos = Date.now() - t1;
+      // 2) Flags AOG de TODOS los lotes en una sola llamada a la vista
+      //    (una fila liviana por archivo, sin docs).
+      const t1 = Date.now();
+      try {
+        const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", { reduce: false });
+        const flags = {};
+        (r.rows || []).forEach(row => {
+          const n = row.key;
+          if (!n) return;
+          const subtipo = row.value?.subtipo;
+          const ts      = row.value?.ts || 0;
+          if (!flags[n]) flags[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
+          if (subtipo === "boundary" || subtipo === "boundary_kml") flags[n].tiene_boundary = true;
+          if (subtipo === "sections_coverage")                       flags[n].tiene_sections = true;
+          if (subtipo === "field_origin")                            flags[n].tiene_origen   = true;
+          if (ts > flags[n].ts) flags[n].ts = ts;
+          flags[n].archivos++;
+        });
 
-        // 3) Para los lotes de la página + los AOG-sin-maestro, traer flags por vista.
+        // Flags para los maestros + lotes AOG sin maestro como filas propias.
         const yaMaestros = new Set(lista.map(x => x.nombre));
-        const aogSinMaestro = nombresAOG.filter(n => !yaMaestros.has(n)).slice(0, 100);
-        const todosNombres = [...lista.map(x => x.nombre), ...aogSinMaestro];
-
-        if (todosNombres.length) {
-          const t2 = Date.now();
-          try {
-            const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
-              keys: todosNombres,
-              reduce: false,
-            });
-            const flags = {};
-            (r.rows || []).forEach(row => {
-              const n = row.key;
-              const subtipo = row.value?.subtipo;
-              const ts      = row.value?.ts || 0;
-              if (!flags[n]) flags[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
-              if (subtipo === "boundary" || subtipo === "boundary_kml") flags[n].tiene_boundary = true;
-              if (subtipo === "sections_coverage")                       flags[n].tiene_sections = true;
-              if (subtipo === "field_origin")                            flags[n].tiene_origen   = true;
-              if (ts > flags[n].ts) flags[n].ts = ts;
-              flags[n].archivos++;
-            });
-
-            // Asignar flags a la lista.
-            lista.forEach(it => { if (flags[it.nombre]) it.aog = flags[it.nombre]; });
-
-            // Sumar lotes AOG sin maestro.
-            for (const nombre of aogSinMaestro) {
-              const aog = flags[nombre];
-              if (aog) lista.push({ nombre, m: null, aog, tsUltimo: aog.ts || 0 });
-            }
-            lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
-          } catch (e) { console.warn("[lotes-maestro] view flags:", e.message); }
-          timings.aog_flags = Date.now() - t2;
+        lista.forEach(it => { if (flags[it.nombre]) it.aog = flags[it.nombre]; });
+        for (const [nombre, aog] of Object.entries(flags)) {
+          if (!yaMaestros.has(nombre))
+            lista.push({ nombre, m: null, aog, tsUltimo: aog.ts || 0 });
         }
-      }
+      } catch (e) { console.warn("[lotes-maestro] view AOG:", e.message); }
+      timings.aog_flags = Date.now() - t1;
 
-      total = null;  // se usa hayMas
+      lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+      total = lista.length;
     }
 
-    const hayMas = q
-      ? (skip + limit < lista.length)
-      : (lista.length >= limit); // si vino lleno, asumimos que hay más
-    const pagina = q ? lista.slice(skip, skip + limit) : lista.slice(0, limit);
+    const hayMas = skip + limit < lista.length;
+    const pagina = lista.slice(skip, skip + limit);
 
     timings.total = Date.now() - tStart;
 
@@ -345,7 +314,18 @@ router.get("/", async (req, res) => {
 router.get("/:nombre/contexto", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
-    const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    let slug      = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    // ?estab= permite pedir el contexto de otra org: superadmin (mapa global)
+    // o usuarios con membresía en esa org.
+    const qEstab = req.query.estab;
+    if (qEstab && qEstab !== slug) {
+      const esSA      = jwtUser?.rol_global === "superadmin";
+      const esMiembro = (jwtUser?.memberships || []).some(m => m.orgSlug === qEstab);
+      if (!esSA && !esMiembro)
+        return res.status(403).json({ error: "Sin acceso a esa organización" });
+      slug = qEstab;
+    }
+    if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
     const nombre  = decodeURIComponent(req.params.nombre);
     const estabDB = getDB(slug);
 
@@ -366,10 +346,19 @@ router.get("/:nombre/contexto", async (req, res) => {
     if (aogDocs.length) {
       const { parseLote } = require("../services/aog_parser");
       const parsed = parseLote(aogDocs);
+      const st = parsed.stats || {};
       contexto.capas.aog = {
         tiene_boundary:  !!parsed.boundary,
         tiene_sections:  !!parsed.sections,
-        pasadas:         parsed.sections?.length || 0,
+        // Antes habia un campo "pasadas": era la cantidad de bloques del
+        // Sections.txt (y mal contados). Un bloque no es una pasada; se saco
+        // porque confundia. Lo que sirve son las hectareas.
+        bloques:         st.bloques || 0,
+        trabajado_ha:    st.trabajado_ha ?? null,
+        neto_ha:         st.neto_ha ?? null,
+        repintado_ha:    st.repintado_ha ?? null,
+        repintado_pct:   st.repintado_pct ?? null,
+        contorno_ha:     st.contorno_ha ?? null,
         tiene_origen:    !!parsed.origen,
         origen:          parsed.origen,
         archivos:        aogDocs.map(d => ({ subtipo: d.subtipo, nombre: d.nombre, ts: d.ts })),
@@ -421,6 +410,18 @@ router.get("/:nombre/contexto", async (req, res) => {
       });
       contexto.capas.externas = porSubtipo;
     }
+
+    // Marcas de ingeniero ("de aca hasta aca se sembro X a Y sem/m"): van
+
+    // con el contexto para que el mapa las dibuje sin otra llamada.
+
+    try {
+
+      const marcasDocs = await findAll(estabDB, { tipo: "lote_marca", lote_ref: nombre }, 500);
+
+      contexto.marcas = marcasDocs.map(limpiarMarca).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    } catch (e) { contexto.marcas = []; }
 
     res.json(contexto);
   } catch(e) {
@@ -512,6 +513,133 @@ router.post("/:nombre/capa", async (req, res) => {
     console.error("[lotes-maestro/capa]", e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ══════════════════════════════════════════════════════════
+//  MARCAS DE LOTE (para ingenieros)
+//  "De aca hasta aca se sembro <insumo> a <dosis> <unidad>": un tramo o un
+//  poligono dibujado sobre el mapa con insumo, dosis, fecha y notas.
+//  Doc en la DB del establecimiento:
+//    { tipo:"lote_marca", lote_ref, estab_slug, geom:{ tipo:"tramo"|"poligono",
+//      puntos:[[lat,lon],...] }, insumo_tipo, insumo, dosis, unidad, fecha,
+//      notas, creado_por, ts, editado_ts }
+//    GET    /api/lotes-maestro/:nombre/marcas
+//    POST   /api/lotes-maestro/:nombre/marca
+//    PUT    /api/lotes-maestro/:nombre/marca/:id
+//    DELETE /api/lotes-maestro/:nombre/marca/:id
+// ══════════════════════════════════════════════════════════
+const MARCA_INSUMOS  = ["semilla", "fertilizante", "fitosanitario", "otro"];
+const MARCA_UNIDADES = ["sem_m", "sem_ha", "kg_ha", "l_ha", "pl_ha", "otro"];
+
+function limpiarMarca(d) {
+  return {
+    _id: d._id, lote_ref: d.lote_ref, geom: d.geom, insumo_tipo: d.insumo_tipo, insumo: d.insumo,
+    dosis: d.dosis, unidad: d.unidad, fecha: d.fecha, notas: d.notas, creado_por: d.creado_por,
+    ts: d.ts, editado_ts: d.editado_ts || null,
+  };
+}
+
+function validarMarca(b) {
+  const geom = b.geom || {};
+  const puntos = Array.isArray(geom.puntos) ? geom.puntos
+    .filter(p => Array.isArray(p) && p.length >= 2 && Number.isFinite(+p[0]) && Number.isFinite(+p[1]))
+    .map(p => [Math.round(+p[0] * 1e7) / 1e7, Math.round(+p[1] * 1e7) / 1e7]).slice(0, 200) : [];
+  const tipoGeom = geom.tipo === "poligono" ? "poligono" : "tramo";
+  if (puntos.length < 2) return { error: "La marca necesita al menos dos puntos" };
+  if (tipoGeom === "poligono" && puntos.length < 3) return { error: "Un poligono necesita al menos tres puntos" };
+  const insumoTipo = MARCA_INSUMOS.includes(b.insumo_tipo) ? b.insumo_tipo : "otro";
+  const unidad = MARCA_UNIDADES.includes(b.unidad) ? b.unidad : "otro";
+  const dosis = b.dosis === "" || b.dosis === null || b.dosis === undefined ? null : +b.dosis;
+  if (dosis !== null && !Number.isFinite(dosis)) return { error: "Dosis invalida" };
+  return {
+    ok: {
+      geom: { tipo: tipoGeom, puntos },
+      insumo_tipo: insumoTipo,
+      insumo: String(b.insumo || "").slice(0, 120),
+      dosis, unidad,
+      fecha: String(b.fecha || "").slice(0, 10) || new Date().toISOString().slice(0, 10),
+      notas: String(b.notas || "").slice(0, 2000),
+    },
+  };
+}
+
+// El JWT no trae nombre ni email (solo uid): para que la marca diga quien la
+// hizo se busca el usuario en la DB global. Best-effort: si falla, usr_<uid>.
+async function nombreUsuario(jwtUser) {
+  const uid = jwtUser?.uid;
+  if (!uid) return "?";
+  try {
+    const u = await db.getDB("global").get(`usr_${uid}`);
+    return u.nombre || u.email || `usr_${uid}`;
+  } catch { return `usr_${uid}`; }
+}
+
+function slugMarca(req) {
+  const jwtUser = req.jwtUser || req.user;
+  let slug = jwtUser?.estabSlug || jwtUser?.estab_slug;
+  const qEstab = req.query.estab || (req.body && req.body.estab);
+  if (qEstab && qEstab !== slug) {
+    const esSA = jwtUser?.rol_global === "superadmin";
+    const esMiembro = (jwtUser?.memberships || []).some(m => m.orgSlug === qEstab);
+    if (!esSA && !esMiembro) return { error: "Sin acceso a esa organizacion" };
+    slug = qEstab;
+  }
+  if (!slug) return { error: "Sin establecimiento" };
+  return { slug, jwtUser };
+}
+
+router.get("/:nombre/marcas", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const nombre  = decodeURIComponent(req.params.nombre);
+    const marcas  = await findAll(estabDB, { tipo: "lote_marca", lote_ref: nombre }, 500);
+    res.json({ ok: true, marcas: marcas.map(limpiarMarca).sort((a, b) => (b.ts || 0) - (a.ts || 0)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/:nombre/marca", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const v = validarMarca(req.body || {}); if (v.error) return res.status(400).json({ error: v.error });
+    const estabDB = getDB(r.slug);
+    const nombre  = decodeURIComponent(req.params.nombre);
+    const now     = Date.now();
+    const id      = `lote_marca_${r.slug}_${nombre}_${now}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 220);
+    const doc = { _id: id, tipo: "lote_marca", lote_ref: nombre, estab_slug: r.slug, ...v.ok,
+      creado_por: await nombreUsuario(r.jwtUser), ts: now };
+    await estabDB.insert(doc);
+    res.json({ ok: true, marca: limpiarMarca(doc) });
+  } catch (e) { console.error("[lotes-maestro/marca]", e.message); res.status(500).json({ error: e.message }); }
+});
+
+// El cliente del panel (Auth) tiene patch pero no put: se aceptan los dos.
+async function actualizarMarca(req, res) {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const doc = await estabDB.get(req.params.id).catch(() => null);
+    if (!doc || doc.tipo !== "lote_marca") return res.status(404).json({ error: "Marca no encontrada" });
+    if (doc.lote_ref !== decodeURIComponent(req.params.nombre)) return res.status(403).json({ error: "La marca no pertenece a ese lote" });
+    const v = validarMarca({ ...doc, ...(req.body || {}) }); if (v.error) return res.status(400).json({ error: v.error });
+    const nuevo = { ...doc, ...v.ok, editado_ts: Date.now() };
+    await estabDB.insert(nuevo);
+    res.json({ ok: true, marca: limpiarMarca(nuevo) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+}
+router.put("/:nombre/marca/:id", actualizarMarca);
+router.patch("/:nombre/marca/:id", actualizarMarca);
+
+router.delete("/:nombre/marca/:id", async (req, res) => {
+  try {
+    const r = slugMarca(req); if (r.error) return res.status(403).json({ error: r.error });
+    const estabDB = getDB(r.slug);
+    const doc = await estabDB.get(req.params.id).catch(() => null);
+    if (!doc || doc.tipo !== "lote_marca") return res.status(404).json({ error: "Marca no encontrada" });
+    if (doc.lote_ref !== decodeURIComponent(req.params.nombre)) return res.status(403).json({ error: "La marca no pertenece a ese lote" });
+    await estabDB.destroy(doc._id, doc._rev);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ══════════════════════════════════════════════════════════

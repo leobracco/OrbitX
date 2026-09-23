@@ -46,20 +46,30 @@ function requireSuperadmin(req, res, next) {
   next();
 }
 
+// Rol efectivo: superadmin global, si no el rol de la membresía en la org
+// activa. Los usuarios creados por invitación tienen rol_global "user", así
+// que mirar solo rol_global dejaba a owners/admin_org sin menú Admin.
+function rolEfectivo(req) {
+  const u = req.jwtUser || {};
+  if (u.rol_global === "superadmin") return "superadmin";
+  const slug = u.estabSlug || u.estab_slug;
+  const m = (u.memberships || []).find(m => m.orgSlug === slug);
+  return m?.rol || u.rol_global || "viewer";
+}
+
 function requireAdmin(req, res, next) {
-  const rol = req.jwtUser?.rol_global;
-  if (!["superadmin","owner","admin_org"].includes(rol)) return res.redirect("/dashboard");
+  if (!["superadmin","owner","admin_org"].includes(rolEfectivo(req))) return res.redirect("/dashboard");
   next();
 }
 
 function isSA(req) { return req.jwtUser?.rol_global === "superadmin"; }
 function isAdmin(req) {
-  return ["superadmin","owner","admin_org"].includes(req.jwtUser?.rol_global);
+  return ["superadmin","owner","admin_org"].includes(rolEfectivo(req));
 }
 
 // ── base EJS vars ─────────────────────────────────────────
 function base(req, extra = {}) {
-  const rol = req.jwtUser?.rol_global || "usuario";
+  const rol = rolEfectivo(req);
   return {
     user:       req.jwtUser,
     rol,
@@ -104,6 +114,7 @@ router.get("/invitacion/:token", async (req, res) => {
       invitadoPor:  inv.invitado_por_nombre,
       emailDestino: inv.email_destino,
       expira_at:    inv.expira_at,
+      ya_existe:    await svc.emailTieneCuenta(inv.email_destino).catch(() => false),
     };
   } catch (e) {
     error = e.message || "Invitación no válida";
@@ -145,9 +156,9 @@ router.get(["/", "/dashboard"], requireAuth, async (req, res) => {
                      .map(({ password_hash, reset_token, ...u })=>u).slice(0,5);
       stats.usuarios = docs.filter(d => d.tipo==="usuario" && d.activo!==false).length;
     } else if (Admin && miSlug) {
-      // Buscar usuarios del mismo estab
-      const membs = docs.filter(d => d.tipo==="membresia" && d.estab_slug===miSlug);
-      const uids  = new Set(membs.map(m => m.usuario_id));
+      // Buscar usuarios del mismo estab (docs membresia: campos orgSlug/uid)
+      const membs = docs.filter(d => d.tipo==="membresia" && d.orgSlug===miSlug && d.activa);
+      const uids  = new Set(membs.map(m => m.uid));
       usuarios = docs.filter(d => d.tipo==="usuario" && uids.has(d._id) && d.activo!==false)
                      .map(({ password_hash, reset_token, ...u })=>u).slice(0,5);
       stats.usuarios = usuarios.length;
@@ -194,6 +205,23 @@ router.get("/registros", requireAuth, requireSuperadmin, async (req, res) => {
 // ─────────────────────────────────────────────────────────
 // USUARIOS — solo superadmin
 // ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────
+// EQUIPO — miembros e invitaciones de la org activa
+// (owner/admin_org de la org; superadmin entra a la org con el selector)
+// ─────────────────────────────────────────────────────────
+router.get("/equipo", requireAuth, requireAdmin, async (req, res) => {
+  const db     = req.app.locals.globalDB;
+  const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
+  if (!miSlug) return res.redirect("/establecimientos"); // SA en vista global: elegir org primero
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", {
+    ...base(req, { regBadge }),
+    title:"Equipo", page:"equipo",
+    orgSlug: miSlug,
+    roles: require("../roles").ROLES
+  });
+});
+
 router.get("/usuarios", requireAuth, requireSuperadmin, async (req, res) => {
   const db = req.app.locals.globalDB;
   let usuarios = [];
@@ -258,21 +286,20 @@ router.get("/establecimientos", requireAuth, requireAdmin, async (req, res) => {
     // Mapa id→nombre para owners
     docs.filter(d => d.tipo==="usuario").forEach(u => { ownerNombre[u._id] = u.nombre || u.email; });
 
-    // Asegurar que cada estab tenga campos completos para el modal
+    // Asegurar que cada estab tenga los campos que la vista espera
+    // (docs org_*: ha_total, plan, owner_uid, activa — ver auth_service.js aprobarRegistro)
     establecimientos = establecimientos.map(e => ({
       _id:          e._id,
       slug:         e.slug       || "",
       nombre:       e.nombre     || "",
-      rut:          e.rut        || "",
-      domicilio:    e.domicilio  || "",
-      localidad:    e.localidad  || "",
       provincia:    e.provincia  || "",
       pais:         e.pais       || "Argentina",
-      email:        e.email      || "",
-      telefono:     e.telefono   || "",
-      owner_id:     e.owner_id   || "",
-      activo:       e.activo !== false,
-      ts_creacion:  e.ts_creacion || null,
+      ciudad:       e.ciudad     || "",
+      ha_total:     e.ha_total   || 0,
+      plan:         e.plan       || "free",
+      owner_uid:    e.owner_uid  || "",
+      activa:       e.activa !== false,
+      created_at:   e.created_at || null,
     }));
 
   } catch(e) { console.error("[Panel/estab]", e.message); }
@@ -370,6 +397,8 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
   const db     = req.app.locals.globalDB;
   const SA     = isSA(req);
   const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
+  const ultimasFw = {};
+  const backups = {};
   let dispositivos = [], establecimientos = [];
   const ahora = Date.now();
 
@@ -390,10 +419,30 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
       online: d.ultimo_visto && (ahora - d.ultimo_visto) < 2*60*1000,
     }));
 
+    // Ultima version publicada por producto (catalogo OTA): para marcar en
+    // Dispositivos las pantallas y los nodos que tienen algo mas nuevo.
+    const cmpVer = (a, b) => {
+      const pa = String(a || "").split(".").map(x => parseInt(x, 10) || 0);
+      const pb = String(b || "").split(".").map(x => parseInt(x, 10) || 0);
+      for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+      return 0;
+    };
+    for (const f of docs.filter(d => d.tipo === "firmware" && d.producto && d.version)) {
+      if (!ultimasFw[f.producto] || cmpVer(f.version, ultimasFw[f.producto]) > 0) ultimasFw[f.producto] = f.version;
+    }
+
+    // Respaldo de configuracion por equipo (config_backup_<device>): fecha del
+    // ultimo y cantidad de versiones guardadas.
+    for (const b of docs.filter(d => d.tipo === "config_backup" && d.device_id)) {
+      const vs = Array.isArray(b.versiones) ? b.versiones : [];
+      const ult = vs[vs.length - 1] || {};
+      backups[b.device_id] = { ultimo_visto: b.ultimo_visto || null, n: vs.length, ts: ult.ts || null, version_pilotx: ult.version_pilotx || "" };
+    }
+
   } catch(e) { console.error("[Panel/dispositivos]", e.message); }
 
   const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos });
+  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos, ultimasFw, backups });
 });
 
 // ─────────────────────────────────────────────────────────
@@ -703,6 +752,15 @@ router.get("/lluvias", requireAuth, async (req, res) => {
   const db = req.app.locals.globalDB;
   const regBadge = await getRegBadge(db).catch(() => 0);
   res.render("layout", { ...base(req, { regBadge }), title: "Lluvias", page: "lluvias" });
+});
+
+// ─────────────────────────────────────────────────────────
+// SOPORTE — chat con las pantallas PilotX (datos vía /api/soporte/chat)
+// ─────────────────────────────────────────────────────────
+router.get("/soporte-chat", requireAuth, requireAdmin, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Soporte", page: "soporte-chat" });
 });
 
 module.exports = router;

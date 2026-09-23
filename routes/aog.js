@@ -651,6 +651,14 @@ router.get("/mapa", async (req, res) => {
     const filtroEstab = req.query.estab;
     const filtroLote  = req.query.lote ? decodeURIComponent(req.query.lote) : null;
 
+    // ?estab= solo para superadmin, la propia org o una membresía —
+    // sin esto cualquier usuario logueado leía los mapas de otra org.
+    if (filtroEstab && filtroEstab !== "unassigned" && !isSA &&
+        filtroEstab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === filtroEstab)) {
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+    }
+
     // Cache key — incluye filtros y user para no leakear entre orgs.
     const cacheKey = `${miSlug || "sa"}::${filtroEstab || ""}::${filtroLote || ""}`;
     const cached = mapaCacheGet(cacheKey);

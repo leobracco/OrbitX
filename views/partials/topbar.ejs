@@ -30,8 +30,9 @@
 
 <script>
 (function () {
-  let _membs = [];
+  let _opciones = [];   // [{slug, sub}] — para SA son todas las orgs; para el resto, sus membresías
   let _orgActiva = "";
+  let _esSA = false;
 
   async function cargarOrgs() {
     try {
@@ -40,35 +41,50 @@
       });
       if (!r.ok) return;
       const u = await r.json();
-      _membs = u.memberships || [];
-      _orgActiva = u.prefs?.org_activa || _membs[0]?.orgSlug || "";
+      _esSA = u.rol_global === "superadmin";
+      _orgActiva = u.org_activa || "";
+
+      if (_esSA) {
+        // Superadmin: puede entrar a cualquier org de la plataforma
+        const ro = await fetch("/api/admin/orgs", {
+          headers: { "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` }
+        });
+        const orgs = ro.ok ? await ro.json() : [];
+        _opciones = orgs.map(o => ({ slug: o.slug, sub: o.nombre || o.slug }));
+      } else {
+        const membs = u.memberships || [];
+        if (!_orgActiva) _orgActiva = u.prefs?.org_activa || membs[0]?.orgSlug || "";
+        _opciones = membs.map(m => ({ slug: m.orgSlug, sub: m.rol }));
+      }
       pintar();
     } catch {}
   }
 
   function pintar() {
     const lbl = document.getElementById("org-actual");
-    const memb = _membs.find(m => m.orgSlug === _orgActiva);
-    if (lbl) lbl.textContent = memb?.orgSlug || _orgActiva || "—";
+    if (lbl) lbl.textContent = _orgActiva || (_esSA ? "Global" : "—");
 
     const dd = document.getElementById("org-dropdown");
     if (!dd) return;
-    if (!_membs.length) {
+    if (!_opciones.length && !_esSA) {
       dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Sin orgs disponibles</div>`;
       return;
     }
-    dd.innerHTML = _membs.map(m => {
-      const activa = m.orgSlug === _orgActiva;
+    const items = _esSA
+      ? [{ slug: "", sub: "todas las orgs", label: "Vista global" }, ..._opciones]
+      : _opciones;
+    dd.innerHTML = items.map(m => {
+      const activa = m.slug === _orgActiva;
       return `
-        <div onclick="cambiarOrg('${m.orgSlug.replace(/'/g, "\\'")}')"
+        <div onclick="cambiarOrg('${m.slug.replace(/'/g, "\\'")}')"
           style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--ap-border-soft);transition:background .1s;${activa ? 'background:var(--ap-green-dim)' : ''}"
           onmouseover="this.style.background='${activa ? 'var(--ap-green-dim)' : 'var(--ap-bg)'}'"
           onmouseout="this.style.background='${activa ? 'var(--ap-green-dim)' : 'transparent'}'">
           <div style="display:flex;align-items:center;gap:8px">
             ${activa ? '<span style="color:var(--ap-green);font-size:14px">●</span>' : '<span style="width:14px"></span>'}
             <div style="flex:1;min-width:0">
-              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${m.orgSlug}</div>
-              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${m.rol}</div>
+              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${m.label || m.slug}</div>
+              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${m.sub || ""}</div>
             </div>
           </div>
         </div>

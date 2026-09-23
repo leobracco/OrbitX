@@ -173,6 +173,7 @@ const PERMS = {
   agronomo:   { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[] },
   contratista:{ usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
   operador:   { usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
+  member:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[] },
   viewer:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:[],            audit_log:[] },
 };
 const AM = { read:"r", write:"w", delete:"d", invite:"i" };
