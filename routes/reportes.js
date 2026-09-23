@@ -37,7 +37,7 @@ router.get("/temporada/vista", async (req, res) => {
     const temporadas = [temp, anterior, anteanterior];
     const r = await reporteTemporada(slug, temp);
     res.render("reporte-temporada", { r, org: slug, temporadas, emitido: new Date() });
-  } catch (e) { res.status(500).send(e.message); }
+  } catch (e) { res.status(500).type("text/plain").send(e.message); }
 });
 
 module.exports = router;

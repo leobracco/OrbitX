@@ -73,7 +73,7 @@
   <div class="no-print">
     <div>
       <label for="sel-temporada">Temporada</label>
-      <select id="sel-temporada" onchange="location.search='?temporada='+encodeURIComponent(this.value)">
+      <select id="sel-temporada" onchange="const p=new URLSearchParams(location.search);p.set('temporada',this.value);location.search='?'+p.toString()">
         <% temporadas.forEach(function(t) { %>
         <option value="<%= t %>" <%= t === r.temporada ? "selected" : "" %>><%= t %></option>
         <% }) %>
