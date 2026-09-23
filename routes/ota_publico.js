@@ -33,26 +33,10 @@ try {
   console.warn("[ota_publico] no se pudo leer flash-app/:", e.message);
 }
 
-// ── Límite de descargas por IP: 20/hora, en memoria (Map ip → [ts…]) ──────
-// No persiste entre reinicios del proceso a propósito: es solo un freno
-// anti-abuso, no un cupo contable. Se limpian tanto los timestamps viejos
-// como las IPs que quedan sin descargas recientes, para que el Map no
-// crezca sin límite con tráfico de muchas IPs distintas.
-const LIMITE_DESCARGAS_HORA = 20;
-const VENTANA_MS = 60 * 60 * 1000;
-const descargasPorIp = new Map();
-
-function permitirDescarga(ip) {
-  const ahora = Date.now();
-  const previas = (descargasPorIp.get(ip) || []).filter((ts) => ahora - ts < VENTANA_MS);
-  if (previas.length >= LIMITE_DESCARGAS_HORA) {
-    descargasPorIp.set(ip, previas);
-    return false;
-  }
-  previas.push(ahora);
-  descargasPorIp.set(ip, previas);
-  return true;
-}
+// ── Límite de descargas por IP: 20/hora (lib/limite-descargas.js) ─────────
+const { crearLimite, ipCliente } = require("../lib/limite-descargas");
+const limiteDescargas = crearLimite({ limite: 20, ventanaMs: 60 * 60 * 1000 });
+setInterval(() => limiteDescargas.barrer(), 10 * 60 * 1000).unref();
 
 // ── Catálogo: docs tipo:"firmware" filtrados por lista blanca ─────────────
 async function cargarCatalogo() {
@@ -109,9 +93,7 @@ router.get("/firmware/:producto/:version", (req, res) => {
     if (!fw.existeBin(producto, version))
       return res.status(404).json({ error: "Firmware no encontrado" });
 
-    // Detrás de Nginx Proxy Manager req.ip es la IP del proxy (no hay trust proxy): usar el primer salto de X-Forwarded-For.
-    const ipCliente = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip;
-    if (!permitirDescarga(ipCliente))
+    if (!limiteDescargas.permitir(ipCliente(req)))
       return res.status(429).json({ error: "Demasiadas descargas, esperá una hora" });
 
     const ruta = fw.rutaBin(producto, version);
