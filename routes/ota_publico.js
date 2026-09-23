@@ -103,7 +103,11 @@ router.get("/firmware/:producto/:version", (req, res) => {
         res.status(500).json({ error: "Error leyendo firmware" });
       }
     });
-  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  } catch (e) {
+    // Los 400 de validación (producto/versión inválidos) son mensajes seguros; el resto no se expone.
+    if (e.status && e.status < 500) return res.status(e.status).json({ error: e.message });
+    console.error("[ota_publico] descarga:", e.message); res.status(500).json({ error: "Error interno" });
+  }
 });
 
 // ══════════════════════════════════════════════════════════
