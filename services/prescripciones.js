@@ -184,10 +184,12 @@ async function yaMigrada(slug, localId) {
 
 // Migración única de lo que haya en localStorage. Idempotente por `local_id`:
 // abrir la pantalla dos veces no duplica nada.
+const MAX_MIGRAR = 200;   // el localStorage guardaba como mucho 30; más que esto es un body armado a mano
+
 async function migrarLocales(slug, lista, uid) {
   const vistos = new Set();   // duplicados dentro del mismo body
   let creados = 0, saltados = 0;
-  for (const cruda of lista || []) {
+  for (const cruda of (Array.isArray(lista) ? lista : []).slice(0, MAX_MIGRAR)) {
     const conv = desdeLocalStorage(cruda);
     if (!conv) { saltados++; continue; }
     const clave = claveLocal(conv.local_id);

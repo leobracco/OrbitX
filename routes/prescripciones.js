@@ -21,7 +21,12 @@ const guard = [auth.required, noDevices];
 // JWT y ya rechaza devices y tokens `orbx_`; como estas rutas aceptan ?estab=,
 // permisoEnOrg vuelve a evaluar el permiso contra la org efectiva (un owner de
 // la org A que es viewer en la B no puede escribir en la B).
-const guardW = [auth.required, noDevices, auth.requirePermiso("prescripciones", "write"), permisoEnOrg("write")];
+// No se usa requirePermiso acá: evalúa el rol en la org ACTIVA del JWT y daba
+// falso negativo a un owner de la org B que es viewer en su org activa.
+const soloUsuarios = (req, res, next) => req.user?.isToken
+  ? res.status(403).json({ error: "Sin permiso", detalle: "los tokens de organización son de solo lectura" })
+  : next();
+const guardW = [auth.required, noDevices, soloUsuarios, permisoEnOrg("write")];
 
 // Rol del usuario en la org pedida (superadmin en todas; el resto por membresía).
 function rolEn(req, slug) {
