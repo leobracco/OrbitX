@@ -24,6 +24,9 @@ const _ultimoUso = new Map();     // _id  -> ts del último write
 // (credenciales globales), OTA, soporte, el propio CRUD de tokens y el puente
 // CRM (que tiene su propio audience).
 const RUTAS_PROHIBIDAS = [
+  // Avisos internos de la org y administración de tokens: no son para integraciones de lectura.
+  /^\/api\/notif-org(\/|$)/,
+  /^\/api\/tokens-org(\/|$)/,
   /^\/api\/auth(\/|$)/,
   /^\/api\/admin(\/|$)/,
   /^\/api\/config-sistema(\/|$)/,

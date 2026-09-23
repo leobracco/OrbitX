@@ -65,3 +65,9 @@ test("puedeRevocar: autorización de dueño ANTES de mutar (fix IDOR)", () => {
   // Doc inexistente (null) tampoco.
   assert.equal(puedeRevocar(null, { orgSlug: "org-a", esSuperadmin: true }), false);
 });
+
+test("rutaProhibida: un token no lee los avisos internos ni administra tokens", () => {
+  assert.equal(rutaProhibida("/api/notif-org/historial"), true);
+  assert.equal(rutaProhibida("/api/tokens-org"), true);
+  assert.equal(rutaProhibida("/api/actividad/resumen"), false);
+});
