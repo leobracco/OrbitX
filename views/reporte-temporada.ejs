@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reporte de temporada · <%= org %></title>
+<link rel="stylesheet" href="/css/variables.css">
+<style>
+  body { overflow: auto; padding: 28px; }
+  .hoja { max-width: 980px; margin: 0 auto; }
+
+  .cabecera {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; margin-bottom: 18px; padding-bottom: 16px;
+    border-bottom: 1px solid var(--ap-border);
+  }
+  .cabecera h1 { font-size: 20px; font-weight: 700; color: var(--ap-text); margin-bottom: 4px; }
+  .cabecera .sub { font-size: 13px; color: var(--ap-muted); }
+  .cabecera .sub strong { color: var(--ap-green); font-weight: 600; }
+  .cabecera .emitido { text-align: right; font-size: 12px; color: var(--ap-muted-2); white-space: nowrap; }
+
+  .no-print {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 18px; padding: 10px 14px;
+    background: var(--ap-card); border: 1px solid var(--ap-border); border-radius: var(--radius);
+  }
+  .no-print label { font-size: 12px; color: var(--ap-muted); margin-right: 8px; }
+  .no-print select {
+    background: var(--ap-bg); color: var(--ap-text); border: 1px solid var(--ap-border);
+    border-radius: 6px; padding: 6px 10px; font-family: var(--ap-font); font-size: 13px;
+  }
+  .no-print button {
+    background: var(--ap-green); color: #121618; border: none; border-radius: 6px;
+    padding: 8px 16px; font-family: var(--ap-font); font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .no-print button:hover { background: var(--ap-green-2); }
+
+  .tabla-wrap { overflow-x: auto; border: 1px solid var(--ap-border); border-radius: var(--radius); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; padding: 10px 12px; background: var(--ap-card);
+    color: var(--ap-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--ap-border); white-space: nowrap;
+  }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--ap-border-soft); color: var(--ap-text); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tfoot td { padding: 10px 12px; font-weight: 700; background: var(--ap-card); border-top: 1px solid var(--ap-border); }
+
+  .vacio { padding: 32px; text-align: center; color: var(--ap-muted); }
+
+  footer.pie { margin-top: 20px; text-align: center; font-size: 11px; color: var(--ap-muted-2); }
+
+  @media print {
+    body { background: #fff; color: #000; overflow: visible; padding: 0; }
+    .no-print { display: none; }
+    .hoja { max-width: none; margin: 0; }
+    .tabla-wrap { border-color: #ccc; }
+    thead th { background: #f2f2f2; color: #333; border-color: #ccc; }
+    tbody td, tfoot td { color: #000; border-color: #ddd; }
+    tfoot td { background: #f2f2f2; }
+    .cabecera { border-color: #ccc; }
+    .cabecera .sub strong { color: #000; }
+    table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; }
+  }
+  @page { size: A4; margin: 14mm; }
+</style>
+</head>
+<body>
+<div class="hoja">
+
+  <div class="no-print">
+    <div>
+      <label for="sel-temporada">Temporada</label>
+      <select id="sel-temporada" onchange="location.search='?temporada='+encodeURIComponent(this.value)">
+        <% temporadas.forEach(function(t) { %>
+        <option value="<%= t %>" <%= t === r.temporada ? "selected" : "" %>><%= t %></option>
+        <% }) %>
+      </select>
+    </div>
+    <button onclick="window.print()">Imprimir / Guardar PDF</button>
+  </div>
+
+  <div class="cabecera">
+    <div>
+      <h1>Reporte de temporada</h1>
+      <div class="sub"><strong><%= org %></strong> · Temporada <%= r.temporada %> · <%= r.rango.desde %> a <%= r.rango.hasta %></div>
+    </div>
+    <div class="emitido">
+      Emitido<br>
+      <%= emitido.toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", dateStyle: "short", timeStyle: "short" }) %>
+    </div>
+  </div>
+
+  <% const n = (v, d=1) => v == null ? "—" : Number(v).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d }); %>
+
+  <% if (r.lotes.length === 0) { %>
+  <div class="tabla-wrap">
+    <div class="vacio">No hay lotes para esta temporada.</div>
+  </div>
+  <% } else { %>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Lote</th>
+          <th>Cultivo</th>
+          <th class="num">Ha estimadas</th>
+          <th class="num">Ha trabajadas</th>
+          <th class="num">Ha netas</th>
+          <th class="num">Repintado %</th>
+          <th class="num">Lluvia mm</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% r.lotes.forEach(function(l) { %>
+        <tr>
+          <td><%= l.nombre %></td>
+          <td><%= l.cultivo == null ? "—" : l.cultivo %></td>
+          <td class="num"><%= n(l.ha_estimadas) %></td>
+          <td class="num"><%= n(l.trabajado_ha) %></td>
+          <td class="num"><%= n(l.neto_ha) %></td>
+          <td class="num"><%= n(l.repintado_pct) %></td>
+          <td class="num"><%= n(l.lluvia_mm) %></td>
+        </tr>
+        <% }) %>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Totales</td>
+          <td><%= r.totales.lotes %> lote<%= r.totales.lotes === 1 ? "" : "s" %></td>
+          <td class="num">—</td>
+          <td class="num"><%= n(r.totales.trabajado_ha) %></td>
+          <td class="num"><%= n(r.totales.neto_ha) %></td>
+          <td class="num">—</td>
+          <td class="num"><%= n(r.totales.lluvia_mm) %></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  <% } %>
+
+  <footer class="pie">Generado por OrbitX · Agro Parallel</footer>
+
+</div>
+</body>
+</html>
