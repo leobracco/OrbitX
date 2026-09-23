@@ -201,6 +201,10 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","entregado"],
   ["tipo","doc_ref"],
   ["tipo","resuelta","ts_inicio"],
+  // Sprint 2 — Pieza 2: temporadas de cobertura de un lote desde aog_historial.
+  ["tipo","subtipo","lote_nombre","ts"],
+  // Sprint 2 — Pieza 1: prescripciones guardadas de un lote.
+  ["tipo","lote_nombre"],
 ];
 
 async function ensureEstabIndexes(slug) {
@@ -231,6 +235,10 @@ const GLOBAL_INDEX_FIELDS = [
   ["tipo","estab_slug","ts"],
   ["tipo","device_id"],
   ["tipo","producto","version"],
+  // Sprint 2 — Pieza 5: lookup de token_org por hash (obligatorio: sin este
+  // índice, validar un token es un full scan de toda la base de auth).
+  ["tipo","hash"],
+  ["tipo","org_slug"],
 ];
 async function ensureGlobalIndexes() {
   const db = getDB("global");
@@ -433,5 +441,6 @@ module.exports = {
   insertAlerta, getAlertasActivas, resolverAlerta,
   getNodo, upsertNodo, getNodos,
   saveBackupAOG, getBackupsAOG,
-  procesarBatchSync, countPendingSync
+  procesarBatchSync, countPendingSync,
+  ESTAB_INDEX_FIELDS, GLOBAL_INDEX_FIELDS
 };

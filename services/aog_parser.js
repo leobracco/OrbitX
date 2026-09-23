@@ -288,6 +288,22 @@ function calcularStats(sectionsTxt, boundaryLatLon) {
   }
 }
 
+// ── Vigencia de las stats precalculadas ───────────────────
+// STATS_VER se bumpea cuando cambia el algoritmo de calcularStats: sube la
+// versión y todos los docs quedan invalidados sin tocar la base.
+const STATS_VER = 1;
+
+// Un doc tiene stats confiables solo si: existen, son de esta versión, y el
+// hash con el que se calcularon coincide con el hash del contenido actual.
+// Si falta cualquiera de los dos hashes NO se confía: comparar dos undefined
+// daba true y dejaba stats viejas pegadas a un archivo nuevo.
+function statsVigentes(doc, ver = STATS_VER) {
+  if (!doc || !doc.stats) return false;
+  if (doc.stats_ver !== ver) return false;
+  if (!doc.hash_md5 || !doc.stats_hash) return false;
+  return doc.stats_hash === doc.hash_md5;
+}
+
 // ── Parser completo de un lote ────────────────────────────
 function parseLote(docs) {
   const result = {
@@ -334,4 +350,4 @@ function parseLote(docs) {
   return result;
 }
 
-module.exports = { parseFieldTxt, parseBoundaryTxt, parseKML, parseSections, parseLote, leerBloques, calcularStats };
+module.exports = { parseFieldTxt, parseBoundaryTxt, parseKML, parseSections, parseLote, leerBloques, calcularStats, STATS_VER, statsVigentes };
