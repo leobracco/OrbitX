@@ -21,6 +21,7 @@
  *   - OrbitNDVI.toggle()
  *   - OrbitNDVI.setIndice(clave)
  *   - OrbitNDVI.setFecha(fecha)
+ *   - OrbitNDVI.setTodo({ boundary, nombre, indice, fecha, activar })  → un solo pedido
  *   - OrbitNDVI.setOpacity(0-1)
  *   - OrbitNDVI.destroy()
  */
@@ -51,6 +52,10 @@
   let _fecha        = "";        // YYYY-MM-DD o "" = mejor disponible últimos 30 días
   let _opacity      = 0.78;
   let _container    = null;
+  // Token incremental de pedidos: si mientras viaja una respuesta se dispara
+  // otro pedido (cambio de índice, de fecha o de lote), la vieja llega tarde y
+  // pintaba encima de la nueva. Solo pinta la request cuyo token sigue vigente.
+  let _reqSeq       = 0;
 
   const TOKEN  = () => localStorage.getItem("orbitx_token") || "";
   const auth   = (extra) => Object.assign({ "Authorization": `Bearer ${TOKEN()}` }, extra || {});
@@ -229,6 +234,9 @@
     const geom = geometriaLote();
     if (!geom) { toast("NDVI", "No hay lote seleccionado", "amber"); return false; }
 
+    const miReq   = ++_reqSeq;
+    const vigente = () => miReq === _reqSeq;
+
     statusMsg("Pidiendo imagen a Copernicus…");
     try {
       const body = {
@@ -243,6 +251,8 @@
         body:    JSON.stringify(body),
       });
 
+      if (!vigente()) return false;   // llegó tarde: ya hay otro pedido en curso
+
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         statusMsg(`✗ ${r.status}: ${j.error || "error"}`, "error");
@@ -254,6 +264,8 @@
       if (cacheBadge) cacheBadge.style.display = r.headers.get("X-Cache") === "HIT" ? "inline-block" : "none";
 
       const blob = await r.blob();
+      if (!vigente()) return false;   // idem, pero después de bajar el PNG
+
       if (_objUrl) URL.revokeObjectURL(_objUrl);
       _objUrl = URL.createObjectURL(blob);
 
@@ -267,6 +279,7 @@
       _activo = true;
       return true;
     } catch (e) {
+      if (!vigente()) return false;
       statusMsg("✗ " + (e.message || e), "error");
       toast("NDVI", e.message, "red");
       return false;
@@ -315,6 +328,7 @@
   }
 
   function destroy() {
+    _reqSeq++;                       // invalida cualquier pedido en vuelo
     if (_imgLayer && mapaDe()) {
       mapaDe().removeLayer(_imgLayer);
       _imgLayer = null;
@@ -335,11 +349,44 @@
     if (_activo && !_boundary) destroy();             // si limpiaron el lote, apagar
   }
 
+  // Sprint 2 — setea lote + índice + fecha y pide UNA sola imagen.
+  // Llamar setLoteBoundary() + setIndice() + setFecha() en fila disparaba hasta
+  // tres requests a Copernicus compitiendo entre sí (3 PU en vez de 1, y la
+  // última en llegar no era necesariamente la correcta).
+  //   cfg = { boundary, nombre, indice, fecha, activar }
+  // `activar:true` prende el panel aunque estuviera apagado (lo que antes hacía
+  // el toggle() del comparador); sin él, solo re-pide si ya estaba activo.
+  async function setTodo(cfg) {
+    const c = cfg || {};
+    if ("boundary" in c) {
+      _boundary   = Array.isArray(c.boundary) && c.boundary.length > 2 ? c.boundary : null;
+      _loteNombre = c.nombre || "";
+    }
+    if (c.indice) {
+      _indiceActual = c.indice;
+      const sel = $("idx");
+      if (sel) sel.value = _indiceActual;
+      pintarLeyenda();
+      pintarDesc();
+    }
+    if ("fecha" in c) {
+      _fecha = c.fecha || "";
+      const inp = $("fecha");
+      if (inp) inp.value = _fecha;
+    }
+    // Si limpiaron el lote, apagar (mismo criterio que setLoteBoundary).
+    if ("boundary" in c && !_boundary) { if (_activo) destroy(); return false; }
+    if (!_activo && c.activar !== true) return false;
+    abrirPanel();
+    return await pedirImagen();
+  }
+
   const api = {
     init,
     toggle,
     setIndice,
     setFecha,
+    setTodo,
     setOpacity,
     setLoteBoundary,
     destroy,

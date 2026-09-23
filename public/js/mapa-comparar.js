@@ -15,14 +15,21 @@
   const auth = (extra) => Object.assign({ "Authorization": `Bearer ${TOKEN()}` }, extra || {});
   const toast = (...a) => (typeof global.toast === "function") && global.toast(...a);
 
-  // El selector de establecimiento vive en el DOM, no en una variable.
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // El dropdown de establecimiento es un FILTRO de listado: puede estar en
+  // "Todos". Para pedir el contexto de un lote lo que vale es el
+  // establecimiento de ESE lote (window._loteEstab, que setea mapa.ejs al
+  // seleccionarlo); el dropdown queda solo como fallback.
+  const dropdownEstab = () => document.getElementById("filtro-estab")?.value || "";
+  const qsEstab = (slug) => (slug ? `?estab=${encodeURIComponent(slug)}` : "");
+
   // Se expone global porque mapa.ejs lo usa para arreglar los /contexto que
   // hoy piden sin ?estab= (bug latente que con dos paneles es garantizado).
   global._estabQS = function () {
-    const v = document.getElementById("filtro-estab")?.value || "";
-    return v ? `?estab=${encodeURIComponent(v)}` : "";
+    return qsEstab(global._loteEstab || dropdownEstab());
   };
-  const estabSlug = () => document.getElementById("filtro-estab")?.value || "";
 
   // El lote abierto en el mapa principal es un `let` del <script> inline de
   // mapa.ejs: vive en el scope léxico global, no en window. Por eso se lee con
@@ -54,8 +61,10 @@
     return mapa;
   }
 
+  // El listado sí usa el dropdown: si dice "Todos", queremos todos los lotes
+  // (después cada <option> se acuerda de su propio establecimiento).
   async function cargarLotes() {
-    const r = await fetch(`/api/aog/lotes-mapa${global._estabQS()}`, { headers: auth() });
+    const r = await fetch(`/api/aog/lotes-mapa${qsEstab(dropdownEstab())}`, { headers: auth() });
     return r.ok ? await r.json() : [];
   }
 
@@ -68,16 +77,15 @@
     return j.fechas || [];
   }
 
-  async function cargarTemporadas(lote) {
-    const qs = estabSlug() ? `?estab=${encodeURIComponent(estabSlug())}` : "";
-    const r = await fetch(`/api/aog/lotes/${encodeURIComponent(lote)}/temporadas${qs}`, { headers: auth() });
+  async function cargarTemporadas(lote, estab) {
+    const r = await fetch(`/api/aog/lotes/${encodeURIComponent(lote)}/temporadas${qsEstab(estab)}`, { headers: auth() });
     const j = r.ok ? await r.json() : { temporadas: [] };
     return j.temporadas || [];
   }
 
-  async function cargarLote(lote, temporada) {
+  async function cargarLote(lote, estab, temporada) {
     const p = new URLSearchParams({ lote });
-    if (estabSlug()) p.set("estab", estabSlug());
+    if (estab) p.set("estab", estab);
     if (temporada) p.set("temporada", temporada);
     const r = await fetch(`/api/aog/mapa?${p}`, { headers: auth() });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -122,33 +130,51 @@
     ver("temp",   capa === "cobertura");
   }
 
+  // El <option> elegido es la única fuente de verdad del par lote+estab:
+  // dos orgs distintas pueden tener un lote con el mismo nombre.
+  function loteElegido(id) {
+    const sel = document.getElementById(`cmp-lote-${id}`);
+    const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+    if (!opt) return null;
+    return { clave: opt.value, nombre: opt.dataset.nombre || opt.value, estab: opt.dataset.estab || "" };
+  }
+
   async function refrescar(id) {
     const pan = paneles[id];
     if (!pan) return;
-    const lote = document.getElementById(`cmp-lote-${id}`).value;
+    const sel  = loteElegido(id);
     const capa = document.getElementById(`cmp-capa-${id}`).value;
     aplicarVisibilidad(id, capa);
-    if (!lote) return;
+    if (!sel || !sel.nombre) return;
     try {
       const temporada = capa === "cobertura" ? (document.getElementById(`cmp-temp-${id}`).value || "") : "";
-      const datos = await cargarLote(lote, temporada);
+      const datos = await cargarLote(sel.nombre, sel.estab, temporada);
       dibujar(pan, datos, capa === "cobertura");
       pan.boundary = datos?.boundary || null;
-      pan.ndvi.setLoteBoundary(pan.boundary, lote);
       if (capa === "ndvi") {
-        pan.ndvi.setIndice(document.getElementById(`cmp-indice-${id}`).value);
-        pan.ndvi.setFecha(document.getElementById(`cmp-fecha-${id}`).value);
-        if (!pan.ndvi.estado.activo) await pan.ndvi.toggle();
+        // Un solo pedido a Copernicus por refresco (antes eran hasta tres,
+        // compitiendo entre sí): setTodo setea boundary+índice+fecha y pide.
+        await pan.ndvi.setTodo({
+          boundary: pan.boundary,
+          nombre:   sel.nombre,
+          indice:   document.getElementById(`cmp-indice-${id}`).value,
+          fecha:    document.getElementById(`cmp-fecha-${id}`).value,
+          activar:  true,
+        });
       } else {
+        // Primero apagar y después guardar el boundary: al revés, un NDVI
+        // activo re-pedía la imagen justo antes de destruirla.
         pan.ndvi.destroy();
+        pan.ndvi.setTodo({ boundary: pan.boundary, nombre: sel.nombre });
       }
-      await poblarSelectores(id, lote, pan.boundary);
+      await poblarSelectores(id, sel, pan.boundary);
     } catch (e) {
       toast("Comparar", e.message, "red");
     }
   }
 
-  async function poblarSelectores(id, lote, boundary) {
+  async function poblarSelectores(id, sel, boundary) {
+    const lote = sel.clave;
     const selF = document.getElementById(`cmp-fecha-${id}`);
     if (selF && selF.dataset.lote !== lote) {
       const fechas = await cargarFechas(boundary);
@@ -160,7 +186,7 @@
     }
     const selT = document.getElementById(`cmp-temp-${id}`);
     if (selT && selT.dataset.lote !== lote) {
-      const temps = await cargarTemporadas(lote);
+      const temps = await cargarTemporadas(sel.nombre, sel.estab);
       const elegida = selT.value;
       selT.innerHTML = `<option value="">Última cobertura</option>` +
         temps.map(t => `<option value="${t.temporada}">${t.temporada}${t.trabajado_ha != null ? ` · ${t.trabajado_ha} ha` : ""}</option>`).join("");
@@ -198,7 +224,9 @@
     }
 
     const lotes = await cargarLotes();
+    if (!_abierto) return cerrar();   // cerraron el overlay mientras cargaba
     const indicesResp = await fetch("/api/ndvi/indices", { headers: auth() }).then(r => r.ok ? r.json() : { indices: [] }).catch(() => ({ indices: [] }));
+    if (!_abierto) return cerrar();
 
     for (const id of ["A", "B"]) {
       const mapa = crearMapa(`cmp-mapa-${id}`);
@@ -207,11 +235,18 @@
         ndvi: global.crearNDVI({ prefijo: `cmp${id}`, mapa }),
       };
       await paneles[id].ndvi.init(`cmp-controls-${id}`);
+      if (!_abierto) return cerrar();
 
       const selL = document.getElementById(`cmp-lote-${id}`);
-      selL.innerHTML = lotes.map(l => `<option>${l.nombre}</option>`).join("");
+      // value = "<estab>|<nombre>": dos orgs pueden tener lotes homónimos y el
+      // value solo con el nombre los hacía colisionar.
+      selL.innerHTML = lotes.map(l => {
+        const est = l.estab_slug || "";
+        return `<option value="${esc(est + "|" + (l.nombre || ""))}" data-estab="${esc(est)}" data-nombre="${esc(l.nombre || "")}">` +
+               `${esc(l.nombre || "?")}${est && est !== "unassigned" ? ` · ${esc(est)}` : ""}</option>`;
+      }).join("");
       document.getElementById(`cmp-indice-${id}`).innerHTML =
-        (indicesResp.indices || []).map(i => `<option value="${i.clave}">${i.nombre}</option>`).join("") || `<option value="ndvi">NDVI</option>`;
+        (indicesResp.indices || []).map(i => `<option value="${esc(i.clave)}">${esc(i.nombre)}</option>`).join("") || `<option value="ndvi">NDVI</option>`;
 
       for (const campo of ["lote", "capa", "indice", "fecha", "temp"]) {
         document.getElementById(`cmp-${campo}-${id}`)?.addEventListener("change", () => refrescar(id));
@@ -220,17 +255,23 @@
 
     sincronizar(paneles.A.mapa, paneles.B.mapa);
     // Obligatorio: los contenedores nacen con tamaño 0 dentro del overlay.
-    setTimeout(() => { paneles.A.mapa.invalidateSize(); paneles.B.mapa.invalidateSize(); }, 60);
+    setTimeout(() => { if (paneles.A && paneles.B) { paneles.A.mapa.invalidateSize(); paneles.B.mapa.invalidateSize(); } }, 60);
 
-    // Arranca con el lote que ya estaba abierto en el mapa principal, si hay.
+    // Arranca con el lote que ya estaba abierto en el mapa principal, si hay
+    // (prefiriendo el del mismo establecimiento cuando hay homónimos).
     const abierto = loteActual();
+    const estabAbierto = global._loteEstab || "";
     if (abierto) {
       for (const id of ["A", "B"]) {
-        const sel = document.getElementById(`cmp-lote-${id}`);
-        if ([...sel.options].some(o => o.value === abierto)) sel.value = abierto;
+        const selL = document.getElementById(`cmp-lote-${id}`);
+        const opts = [...selL.options];
+        const match = opts.find(o => o.dataset.nombre === abierto && o.dataset.estab === estabAbierto)
+                   || opts.find(o => o.dataset.nombre === abierto);
+        if (match) selL.value = match.value;
       }
     }
     await refrescar("A");
+    if (!_abierto) return cerrar();
     await refrescar("B");
   }
 
@@ -241,6 +282,9 @@
       if (!paneles[id]) continue;
       try { paneles[id].ndvi.destroy(); paneles[id].mapa.remove(); } catch {}
       delete paneles[id];
+      // Sin esto el registro global se queda con instancias muertas y los
+      // onclick inline de un panel viejo seguirían resolviendo.
+      if (global.__ndvi) delete global.__ndvi[`cmp${id}`];
     }
     _abierto = false;
   }

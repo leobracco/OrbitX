@@ -14,7 +14,7 @@ test("agrupa por temporada agrícola y se queda con el snapshot más nuevo", () 
   ];
   const r = derivarTemporadasDeHistorial(docs);
   assert.deepEqual(r.map(x => x.temporada), ["2026/27", "2025/26"]);
-  assert.equal(r[1].hist_id, "h2");
+  assert.equal(r[1].doc_id, "h2");
   assert.equal(r[1].trabajado_ha, 140);
   assert.equal(r[0].trabajado_ha, 60);
 });

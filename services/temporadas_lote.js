@@ -18,7 +18,7 @@ function derivarTemporadasDeHistorial(docs) {
     porTemporada.set(t, {
       temporada:    t,
       ts,
-      hist_id:      d._id || null,
+      doc_id:       d._id || null,
       trabajado_ha: d.stats?.trabajado_ha ?? null,
       neto_ha:      d.stats?.neto_ha ?? null,
     });
