@@ -59,7 +59,7 @@ export async function montar(ctx, root) {
 
     const sinRep = eq.sin_reportar?.[0];
     const rotuloEquipos = sinRep
-      ? `${sinRep.hostname} sin reportar hace ${Math.round((sinRep.hace_min || 0) / 60)} h`
+      ? `${sinRep.hostname} sin reportar hace ${(sinRep.hace_min || 0) < 60 ? (sinRep.hace_min || 0) + " min" : Math.round((sinRep.hace_min || 0) / 60) + " h"}`
       : "todos reportando";
 
     const rotuloLluvia = ll.ultima
