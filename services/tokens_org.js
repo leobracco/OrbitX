@@ -27,6 +27,8 @@ const RUTAS_PROHIBIDAS = [
   // Avisos internos de la org y administración de tokens: no son para integraciones de lectura.
   /^\/api\/notif-org(\/|$)/,
   /^\/api\/tokens-org(\/|$)/,
+  // NDVI dispara llamadas pagas a Copernicus y decodifica rasters en el droplet: no para tokens.
+  /^\/api\/ndvi(\/|$)/,
   /^\/api\/auth(\/|$)/,
   /^\/api\/admin(\/|$)/,
   /^\/api\/config-sistema(\/|$)/,
