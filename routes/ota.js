@@ -17,7 +17,8 @@ const fs     = require("fs");
 const fw     = require("../lib/firmware");
 const couch  = require("../services/couchdb");
 const notify = require("../lib/notify-admin");
-const { soloSuperadmin } = require("../middleware/auth");
+const { soloSuperadmin, adminOnly } = require("../middleware/auth");
+const { noDevices } = require("./devices");
 
 let multer;
 try { multer = require("multer"); }
@@ -146,8 +147,14 @@ router.delete("/firmware/:producto/:version", soloSuperadmin, async (req, res) =
 // ══════════════════════════════════════════════════════════
 //  POST /api/ota/disparar — Owner/admin manda OTA a un dispositivo de su org.
 //  Body: { device_id, producto, version }
+//
+//  auth.required TAMBIEN autentica equipos (rol_global "device"), asi que sin
+//  noDevices un token de equipo robado disparaba un flasheo a cualquier tractor
+//  de su org, eligiendo cualquier version del catalogo (CoreX-ECU incluido, que
+//  es el modulo de pilotaje). adminOnly ademas saca a viewer/operador: flashear
+//  no es una accion de lectura.
 // ══════════════════════════════════════════════════════════
-router.post("/disparar", async (req, res) => {
+router.post("/disparar", noDevices, adminOnly, async (req, res) => {
   try {
     const { device_id, producto, version } = req.body || {};
     if (!device_id || !producto || !version)
