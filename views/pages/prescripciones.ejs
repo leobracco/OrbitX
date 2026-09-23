@@ -1489,7 +1489,10 @@ async function cargarLotesGen() {
     const r = await fetch("/api/aog/lotes-mapa", { headers: AUTH_H() });
     const lotes = r.ok ? await r.json() : [];
     const sel = document.getElementById("gen-lote");
-    sel.innerHTML = lotes.filter(l => l.tiene_boundary).map(l => `<option>${l.nombre}</option>`).join("")
+    // escHTML: el nombre del lote lo escribe el usuario y viene de la API —
+    // sin escapar, un lote llamado `<img onerror=…>` ejecuta script en el panel.
+    sel.innerHTML = lotes.filter(l => l.tiene_boundary)
+        .map(l => `<option value="${escHTML(l.nombre)}">${escHTML(l.nombre)}</option>`).join("")
       || `<option value="">— sin lotes con contorno —</option>`;
     sel.addEventListener("change", cargarFechasGen);
     cargarFechasGen();
@@ -1559,14 +1562,16 @@ async function generarDesdeNDVI(guardar) {
 function pintarTablaZonas(fc, lote) {
   const cont = document.getElementById("gen-zonas-tabla");
   const body = document.getElementById("gen-zonas-body");
+  // Todo lo que sale del GeoJSON pasa por escHTML: el nombre y la unidad de
+  // cada zona son texto libre (llegan de una prescripción importada o editada).
   body.innerHTML = fc.features.map(f => `
     <tr>
-      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${PALETA[(f.properties.zona - 1) % PALETA.length]};margin-right:6px"></span>${f.properties.nombre}</td>
-      <td>${f.properties.ndvi_medio ?? "–"}</td>
-      <td>${f.properties.ha}</td>
-      <td><input type="number" step="0.1" value="${f.properties.dosis ?? ""}" data-zona="${f.properties.zona}"
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${PALETA[(f.properties.zona - 1) % PALETA.length]};margin-right:6px"></span>${escHTML(f.properties.nombre)}</td>
+      <td>${escHTML(f.properties.ndvi_medio ?? "–")}</td>
+      <td>${escHTML(f.properties.ha)}</td>
+      <td><input type="number" step="0.1" value="${escHTML(f.properties.dosis ?? "")}" data-zona="${escHTML(f.properties.zona)}"
            style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"/>
-          <span style="color:var(--muted2)">${f.properties.unidad || ""}</span></td>
+          <span style="color:var(--muted2)">${escHTML(f.properties.unidad || "")}</span></td>
     </tr>`).join("");
   document.getElementById("gen-nombre").value = `${lote} · NDVI`;
   cont.style.display = "block";
@@ -1604,8 +1609,10 @@ function pintarZonasGeneradas(fc) {
   _genLayers = [];
   const capa = L.geoJSON(fc, {
     style: (f) => ({ color: PALETA[(f.properties.zona - 1) % PALETA.length], weight: 2, fillOpacity: 0.45 }),
+    // bindPopup con string interpola HTML: sin escHTML, el nombre de una zona
+    // importada puede meter script en el popup de Leaflet.
     onEachFeature: (f, l) => l.bindPopup(
-      `<b>${f.properties.nombre}</b><br>NDVI medio: ${f.properties.ndvi_medio ?? "–"}<br>${f.properties.ha} ha<br>Dosis: ${f.properties.dosis ?? "–"} ${f.properties.unidad || ""}`),
+      `<b>${escHTML(f.properties.nombre)}</b><br>NDVI medio: ${escHTML(f.properties.ndvi_medio ?? "–")}<br>${escHTML(f.properties.ha)} ha<br>Dosis: ${escHTML(f.properties.dosis ?? "–")} ${escHTML(f.properties.unidad || "")}`),
   }).addTo(mapaL);
   _genLayers.push(capa);
   try { mapaL.fitBounds(capa.getBounds()); } catch {}
@@ -1645,16 +1652,25 @@ async function cargarPrescServidor() {
         <span style="color:var(--muted2)">${escHTML(d.lote_nombre || "—")}</span>
         <span style="color:var(--muted2)">${escHTML(d.origen)} · ${escHTML(d.estado)}</span>
         <select data-tractor-de="${escHTML(d._id)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:11px">${opciones}</select>
-        <button class="btn btn-sm btn-ghost" onclick="enviarPrescNube('${escHTML(d._id)}')" title="Enviar al tractor">📡</button>
+        <button class="btn btn-sm btn-ghost" data-enviar-id="${escHTML(d._id)}" title="Enviar al tractor">📡</button>
       </div>`).join("");
+    // data-id + listener en vez de onclick="…('${id}')": escapar para HTML no
+    // alcanza dentro de un atributo de evento, que es contexto de JavaScript.
+    // El <select> se busca por el DOM (closest/querySelector) y no armando un
+    // selector CSS con el id adentro.
+    lista.querySelectorAll("button[data-enviar-id]").forEach(b => {
+      b.addEventListener("click", () => {
+        const sel = b.closest("div")?.querySelector("select[data-tractor-de]");
+        enviarPrescNube(b.dataset.enviarId, sel);
+      });
+    });
     cont.style.display = "block";
   } catch (e) { console.warn("[presc] listar:", e.message); }
 }
 
-async function enviarPrescNube(id) {
+async function enviarPrescNube(id, selEl) {
   const est = document.getElementById("gen-estado");
-  const sel = document.querySelector(`[data-tractor-de="${id}"]`);
-  const device_id = sel?.value;
+  const device_id = selEl?.value;
   if (!device_id) { est.textContent = "No hay tractor destino"; return; }
   est.textContent = "Enviando al tractor…";
   try {
