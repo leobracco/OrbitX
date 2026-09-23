@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import raster from "../../services/ndvi_raster.js";
 
-const { calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, MAX_PX, MIN_PX } = raster;
+const { calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, valoresConMascara, MAX_PX, MIN_PX } = raster;
 
 // Lote rectangular de ~1010 x 620 m cerca de Pergamino (zona UTM 20 sur).
 const LOTE = [
@@ -121,4 +121,60 @@ test("anilloParaSH: cierra el anillo y lo deja antihorario", () => {
 test("anilloParaSH: un anillo ya antihorario y cerrado no se altera", () => {
   const ccw = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]];
   assert.deepEqual(anilloParaSH(ccw), ccw);
+});
+
+// ── Revisión final de la Pieza 1 ─────────────────────────────
+
+// C3. El tope de píxeles bajó de 1024 a 512: con nubes moteadas, un raster de
+// 1024x1024 llegaba a decenas de miles de anillos y más de 10 s de CPU
+// sincrónica por prescripción. A 10 m/px, 512 px siguen cubriendo 5,1 km de
+// lado; un lote más grande se pide a menos resolución, como siempre.
+test("MAX_PX: a 10 m/px la ventana cubre más de 5 km de lado", () => {
+  assert.equal(MAX_PX, 512);
+  assert.ok(MAX_PX * 10 >= 5000, `${MAX_PX} px a 10 m/px cubren ${MAX_PX * 10} m`);
+  // Un lote de 4 km entra entero sin aflojar la resolución.
+  const cuatroKm = [
+    [-33.9000, -60.6000],
+    [-33.9000, -60.5570],
+    [-33.9360, -60.5570],
+    [-33.9360, -60.6000],
+  ];
+  const g = calcularGrilla(cuatroKm, 10);
+  assert.equal(g.mPx, 10, `la resolución no debería aflojarse para 4 km (quedó en ${g.mPx})`);
+  assert.ok(g.ancho <= MAX_PX && g.alto <= MAX_PX, `${g.ancho}x${g.alto}`);
+});
+
+// Minor: el hemisferio se tomaba del PRIMER vértice. Un contorno a caballo del
+// ecuador salía proyectado con la falsa ordenada equivocada (10.000 km de
+// error) y en silencio.
+test("calcularGrilla: un contorno que cruza el ecuador es un error explícito", () => {
+  const aCaballo = [
+    [-0.01, -60.00],
+    [-0.01, -59.99],
+    [0.01, -59.99],
+    [0.01, -60.00],
+  ];
+  assert.throws(() => calcularGrilla(aCaballo, 10), /ecuador/);
+  // Los que no lo cruzan siguen andando, de los dos lados.
+  assert.equal(calcularGrilla([[-0.02, -60], [-0.02, -59.99], [-0.01, -59.99], [-0.01, -60]], 10).sur, true);
+  assert.equal(calcularGrilla([[0.01, -60], [0.01, -59.99], [0.02, -59.99], [0.02, -60]], 10).sur, false);
+});
+
+// I16. Un PNG RGB (3 canales) pasaba el filtro viejo (`canales < 2`) y terminaba
+// usando el canal AZUL como máscara de dato válido: donde el azul diera 0 se
+// tiraba dato bueno, y donde diera != 0 se tomaba por válido un píxel nublado.
+test("valoresConMascara: solo acepta gris+alfa (2) o RGBA (4)", () => {
+  const img = (canales, datos) => ({ ancho: datos.length / canales, alto: 1, canales, datos: Uint8Array.from(datos) });
+  assert.throws(() => valoresConMascara(img(1, [10, 20])), /1 canal/);
+  assert.throws(() => valoresConMascara(img(3, [10, 20, 0, 40, 50, 7])), /3 canal/);
+  assert.throws(() => valoresConMascara(img(3, [10, 20, 0])), /gris\+alfa \(2\) o RGBA \(4\)/);
+});
+
+test("valoresConMascara: el valor sale del primer canal y la máscara del último", () => {
+  // gris + alfa: el segundo píxel está enmascarado (alfa 0) → DN 0 = sin dato.
+  const gris = { ancho: 3, alto: 1, canales: 2, datos: Uint8Array.from([100, 255, 200, 0, 150, 255]) };
+  assert.deepEqual(Array.from(valoresConMascara(gris)), [100, 0, 150]);
+  // RGBA: mismo criterio, el alfa es el canal 3 (no el azul, que acá vale 0).
+  const rgba = { ancho: 2, alto: 1, canales: 4, datos: Uint8Array.from([120, 9, 0, 255, 200, 9, 0, 0]) };
+  assert.deepEqual(Array.from(valoresConMascara(rgba)), [120, 0]);
 });

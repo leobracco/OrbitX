@@ -203,3 +203,73 @@ test("un PNG del tamaño exacto declarado no lo corta el tope del inflate", () =
   assert.equal(r.alto, alto);
   assert.deepEqual(Array.from(r.datos), Array.from(pixeles));
 });
+
+// ── Revisión final de la Pieza 1 ─────────────────────────────
+
+// I15. El tamaño se chequea contra el IHDR ANTES de inflar: quien pide la
+// imagen sabe de qué tamaño la pidió, y descomprimir primero para descartar
+// después es pagar los megabytes al pedo. El tope de píxeles bajó de 4096x4096
+// (64 MB inflados de RGBA) a 1024x1024, que es el doble de lo que llega a pedir
+// services/ndvi_raster.js (MAX_PX = 512).
+test("decodificarPNG: el tamaño esperado se rechaza contra el IHDR, sin inflar el IDAT", () => {
+  const ancho = 64, alto = 64;
+  // IDAT que infla a 4 MB: si el chequeo de dimensiones corriera DESPUÉS del
+  // inflate, acá ya se habrían descomprimido los 4 MB (o habría saltado el
+  // error de maxOutputLength, que es otro mensaje).
+  const bomba = zlib.deflateSync(Buffer.alloc(4 * 1024 * 1024, 0));
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(ancho, 0);
+  ihdr.writeUInt32BE(alto, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const buf = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", bomba),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  assert.throws(() => decodificarPNG(buf, { anchoEsperado: 32, altoEsperado: 32 }), /se esperaba 32x32/);
+});
+
+test("decodificarPNG: con el tamaño esperado correcto decodifica normal, y sin esperado no cambia nada", () => {
+  const ancho = 5, alto = 4, canales = 2;
+  const pixeles = new Uint8Array(ancho * alto * canales);
+  for (let i = 0; i < pixeles.length; i++) pixeles[i] = (i * 7) % 256;
+  const buf = armarPNG({ ancho, alto, colorType: 4, canales, pixeles, filtros: [0, 1, 2, 3, 4] });
+  assert.deepEqual(Array.from(decodificarPNG(buf, { anchoEsperado: ancho, altoEsperado: alto }).datos), Array.from(pixeles));
+  assert.deepEqual(Array.from(decodificarPNG(buf).datos), Array.from(pixeles));
+  assert.throws(() => decodificarPNG(buf, { anchoEsperado: ancho, altoEsperado: alto + 1 }), /se esperaba/);
+});
+
+test("decodificarPNG: un IHDR que declara más de 1024x1024 se rechaza antes de inflar", () => {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(2000, 0);
+  ihdr.writeUInt32BE(2000, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const buf = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    chunk("IHDR", ihdr),
+    // IDAT que NO es un stream deflate válido: si llegara a inflarse, el error
+    // sería otro. Que salga "demasiado grande" prueba que ni se intentó.
+    chunk("IDAT", Buffer.from([1, 2, 3, 4])),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  assert.throws(() => decodificarPNG(buf), /demasiado grande/);
+});
+
+// Minor: un largo de chunk inventado dejaba un `datos` más corto de lo que
+// declaraba y el readUInt32BE del IHDR tiraba un RangeError pelado.
+test("decodificarPNG: un chunk que se pasa del buffer es un PNG inválido, no un RangeError", () => {
+  const largo = Buffer.alloc(4);
+  largo.writeUInt32BE(9999, 0);
+  const buf = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    largo,
+    Buffer.from("IHDR", "ascii"),
+    Buffer.alloc(5),      // el IHDR queda TRUNCADO: 5 bytes de los 13 que dice
+  ]);
+  assert.throws(() => decodificarPNG(buf), (e) => {
+    assert.ok(!(e instanceof RangeError), `tiró un RangeError: ${e.message}`);
+    assert.match(e.message, /PNG inválido/);
+    return true;
+  });
+});

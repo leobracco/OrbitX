@@ -7,10 +7,12 @@ const { zonaUtmPorLon, latLonAUtm } = require("../lib/zonificar");
 const indices = require("../lib/indices_satelitales");
 const { parseKML, parseBoundaryTxt, parseFieldTxt } = require("./aog_parser");
 
-// Tope duro: 1024x1024 = 1 M de píxeles ≈ 1 MB de grilla + el PNG inflado.
-// A 10 m/px cubre 10 km de lado, de sobra para cualquier lote, y en un droplet
-// de 1 GB con ~25 apps no hay lugar para más.
-const MAX_PX = 1024;
+// Tope duro: 512x512 = 262.144 píxeles. A 10 m/px cubre 5,1 km de lado, de
+// sobra para cualquier lote real (un lote más grande simplemente se pide a
+// menos resolución), y en un droplet de 1 GB con ~25 apps no hay lugar para
+// más. Era 1024: con nubes moteadas ese tamaño llegaba a decenas de miles de
+// anillos y varios segundos de CPU sincrónica por prescripción.
+const MAX_PX = 512;
 const MIN_PX = 32;
 
 // El nombre del lote entra en selectores Mango: lo acotamos a texto corto para
@@ -82,7 +84,15 @@ function calcularGrilla(boundary, metrosPorPx = 10) {
   // Zona UTM por la longitud media del lote (en Argentina: 19, 20 o 21).
   const lonMedia = boundary.reduce((s, p) => s + p[1], 0) / boundary.length;
   const zona = zonaUtmPorLon(lonMedia);
-  const sur = boundary[0][0] < 0;
+  // El hemisferio se decide para TODO el lote (la falsa ordenada de UTM cambia
+  // en 10.000 km entre uno y otro). Tomarlo del primer vértice era silencioso y
+  // catastrófico si el contorno cruzara el ecuador: mejor un error explícito.
+  const alSur = boundary.some(p => p[0] < 0), alNorte = boundary.some(p => p[0] >= 0);
+  if (alSur && alNorte)
+    throw Object.assign(
+      new Error("El contorno del lote cruza el ecuador: no se puede proyectar a una sola zona UTM (revisá las coordenadas del lote)"),
+      { status: 422 });
+  const sur = alSur;
 
   const xy = boundary.map(([lat, lon]) => { const u = latLonAUtm(lat, lon, zona); return [u.x, u.y]; });
   const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
@@ -139,6 +149,31 @@ function pixelAUtm({ bbox, ancho, alto }, px, py) {
   ];
 }
 
+// De la imagen decodificada a la grilla de valores con el nodata ya aplicado
+// (DN 0 = sin dato, el contrato que espera lib/zonificar.js). Es JS puro, sin
+// red ni disco, así que se testea con node --test.
+//
+// Con output {bands:2, sampleType:"UINT8"} Sentinel Hub devuelve un PNG
+// gris+alfa (color type 4): canal 0 = valor, canal 1 = máscara. La doc de CDSE
+// no lo garantiza por escrito ("PNG can only support 1 or 3 color components
+// plus an alpha channel"), así que no asumimos exactamente 2: el valor es
+// siempre el primer canal y la máscara el ÚLTIMO (el alfa), que también es lo
+// correcto si alguna vez volviera promovido a RGBA.
+//
+// Por eso mismo solo se aceptan 2 canales (gris+alfa) o 4 (RGBA): son los dos
+// únicos formatos donde el último canal es el alfa. Un PNG RGB de 3 canales
+// pasaba el filtro viejo (`canales < 2`) y terminaba usando el canal AZUL como
+// máscara: donde el azul diera 0 se tiraba dato bueno, y donde diera != 0 se
+// tomaba por válido un píxel nublado.
+function valoresConMascara(img) {
+  if (img.canales !== 2 && img.canales !== 4)
+    throw new Error(`Copernicus devolvió un PNG de ${img.canales} canal(es): se esperaba gris+alfa (2) o RGBA (4), con la máscara de dato válido en el canal alfa`);
+  const valores = extraerCanal(img, 0);
+  const mascara = extraerCanal(img, img.canales - 1);
+  for (let i = 0; i < valores.length; i++) if (!mascara[i]) valores[i] = 0;   // 0 = sin dato
+  return valores;
+}
+
 async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 10, maxCloudCoverage = 30 }) {
   const boundary = await boundaryDeLote(slug, lote);
   if (!boundary) throw Object.assign(new Error(`El lote "${lote}" no tiene contorno cargado`), { status: 404 });
@@ -163,21 +198,10 @@ async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 
     crs: bounds.properties.crs,
   });
 
-  const img = decodificarPNG(png);
-  if (img.ancho !== ancho || img.alto !== alto)
-    throw new Error(`Copernicus devolvió ${img.ancho}x${img.alto}, se pidió ${ancho}x${alto}`);
-  if (img.canales < 2)
-    throw new Error(`Copernicus devolvió ${img.canales} canal(es): se esperaban 2 (valor + máscara)`);
-
-  // Con output {bands:2, sampleType:"UINT8"} Sentinel Hub devuelve un PNG
-  // gris+alfa (color type 4): canal 0 = valor, canal 1 = máscara. La doc de
-  // CDSE no lo garantiza por escrito ("PNG can only support 1 or 3 color
-  // components plus an alpha channel"), así que no asumimos exactamente 2:
-  // el valor es siempre el primer canal y la máscara el último (alfa), que
-  // también es lo correcto si alguna vez volviera promovido a RGBA.
-  const valores = extraerCanal(img, 0);
-  const mascara = extraerCanal(img, img.canales - 1);
-  for (let i = 0; i < valores.length; i++) if (!mascara[i]) valores[i] = 0;   // 0 = sin dato
+  // El tamaño se chequea contra el IHDR ANTES de inflar: un PNG que declara
+  // otras dimensiones no se descomprime, ni siquiera para descartarlo.
+  const img = decodificarPNG(png, { anchoEsperado: ancho, altoEsperado: alto });
+  const valores = valoresConMascara(img);
 
   return {
     datos: valores, ancho, alto, bbox, zona, sur,
@@ -186,4 +210,4 @@ async function rasterDeLote({ slug, lote, fecha, indice = "ndvi", metrosPorPx = 
   };
 }
 
-module.exports = { boundaryDeLote, rasterDeLote, calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, MAX_PX, MIN_PX };
+module.exports = { boundaryDeLote, rasterDeLote, calcularGrilla, boundsDeGrilla, pixelAUtm, crsUtm, anilloParaSH, valoresConMascara, MAX_PX, MIN_PX };
