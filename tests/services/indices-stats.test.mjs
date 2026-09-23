@@ -38,13 +38,3 @@ test("statsVigentes: sin hash_md5 NO hay falso positivo undefined === undefined"
   assert.equal(statsVigentes({ stats: { neto_ha: 1 }, stats_ver: STATS_VER }), false);
   assert.equal(statsVigentes({ stats: { neto_ha: 1 }, stats_ver: STATS_VER, stats_hash: undefined, hash_md5: undefined }), false);
 });
-
-- [ ] **Paso 2: Correr el test y verificar que falla**
-
-Run: `node --test tests/services/indices-stats.test.mjs`
-Esperado: FALLA — `ESTAB_INDEX_FIELDS` es `undefined` (`Cannot read properties of undefined`).
-
-- [ ] **Paso 3: Agregar los índices en `services/couchdb.js`**
-
-En `ESTAB_INDEX_FIELDS`, después de la línea `  ["tipo","resuelta","ts_inicio"],` agregar:
-
