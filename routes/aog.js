@@ -666,6 +666,66 @@ function mapaLite(lotes, req) {
 // Sprint 2: comparador por temporada
 // Este handler se registra ANTES del /mapa de siempre y solo actúa cuando se
 // pide una temporada; si no, hace next() y todo sigue igual.
+
+// Misma resolución de docs de lote que el /mapa de siempre: vista nativa por
+// nombre y, si no devuelve nada (archivos viejos sin `es_lote`/`lote_nombre`),
+// fallback a Mango + clasificarLote()/extraerLoteDeRuta(). Un find directo por
+// { es_lote:true, lote_nombre } se salteaba esos lotes y los devolvía vacíos.
+async function docsDeLoteSprint2(slug, lote) {
+  const estabDB = getEstabDB(slug);
+  try { await db.ensureDesignOnOrg(slug); }
+  catch (e) { console.warn("[AOG/temporada] ensureDesignOnOrg:", e.message); }
+
+  let docs = [];
+  try {
+    const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
+      key: lote, reduce: false, include_docs: true,
+    });
+    docs = (r.rows || []).map(row => row.doc).filter(Boolean);
+  } catch (e) {
+    console.warn("[AOG/temporada] vista lotes_aog_por_nombre:", e.message);
+  }
+  if (!docs.length) {
+    const todos = await _findAll(estabDB, { tipo: "aog_archivo" });
+    docs = todos.filter(d => {
+      const cls = clasificarLote(d);
+      return cls && cls.nombre === lote;
+    });
+  }
+  return docs.map(d => ({ ...d, lote_nombre: d.lote_nombre || extraerLoteDeRuta(d.ruta_rel), es_lote: true }));
+}
+
+// find con `fields` y SIN `sort`: el índice ["tipo","subtipo","lote_nombre","ts"]
+// no tiene a `ts` de prefijo, así que un sort:[{ts:"desc"}] Mango lo puede
+// rechazar (y el error terminaba disfrazado de "no hay datos"). Se pagina con
+// bookmark hasta agotar — una sola página con limit N devolvía los N primeros
+// que encontró, no los más nuevos — y el máximo por `ts` se elige en JS.
+async function findPaginadoSprint2(estabDB, selector, fields, porPagina = 200, maxDocs = 4000) {
+  const docs = [];
+  let bookmark = null;
+  while (docs.length < maxDocs) {
+    const q = { selector, fields, limit: porPagina };
+    if (bookmark) q.bookmark = bookmark;
+    const r = await estabDB.find(q);
+    const pagina = r.docs || [];
+    docs.push(...pagina);
+    if (pagina.length < porPagina || !r.bookmark) break;
+    bookmark = r.bookmark;
+  }
+  return docs;
+}
+
+const masNuevoPorTs = (docs) => (docs || []).reduce(
+  (mejor, d) => (!mejor || (Number(d.ts) || 0) > (Number(mejor.ts) || 0) ? d : mejor), null);
+
+// Piso de búsqueda: 6 temporadas hacia atrás desde la actual. Sin acotar el
+// rango de `ts`, el selector barría todo el historial del lote.
+function pisoMsSprint2() {
+  const { temporadaActual } = require("../services/temporada");
+  const anio = Math.max(2015, Number(temporadaActual().slice(0, 4)) - 6);
+  return Date.parse(`${anio}-09-01T00:00:00-03:00`);
+}
+
 router.get("/mapa", async (req, res, next) => {
   if (!req.query.temporada) return next();
   try {
@@ -687,24 +747,23 @@ router.get("/mapa", async (req, res, next) => {
     const estabDB = getEstabDB(slug);
 
     // Contorno y origen salen del estado vigente (no cambian por temporada).
-    const base = await _findAll(estabDB, { tipo: "aog_archivo", es_lote: true, lote_nombre: lote }, 50);
+    const base   = await docsDeLoteSprint2(slug, lote);
     const parsed = parseLote(base.filter(d => d.subtipo !== "sections_coverage"));
 
     // El snapshot de cobertura más nuevo dentro de la temporada pedida.
-    const hist = await estabDB.find({
-      selector: { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gte: rango.desdeMs, $lte: rango.hastaMs } },
-      fields: ["_id", "ts", "stats"],
-      sort: [{ ts: "desc" }],
-      limit: 1,
-    }).catch(() => ({ docs: [] }));
+    // Solo _id/ts/stats: el `contenido` se baja después, y de uno solo.
+    const hist = await findPaginadoSprint2(estabDB, {
+      tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote,
+      ts: { $gte: rango.desdeMs, $lte: rango.hastaMs },
+    }, ["_id", "ts", "stats"]);
 
     let sections = null, stats = null, ts_ultimo = parsed.ts_ultimo || 0;
-    const meta = hist.docs?.[0];
+    const meta = masNuevoPorTs(hist);
     if (meta) {
       const doc = await estabDB.get(meta._id);
       const { parseSections } = require("../services/aog_parser");
-      sections = parsed.origen ? parseSections(doc.contenido, parsed.origen) : null;
-      stats = doc.stats || null;
+      sections  = parsed.origen ? parseSections(doc.contenido, parsed.origen) : null;
+      stats     = doc.stats || null;
       ts_ultimo = doc.ts || ts_ultimo;
     } else {
       // Sin histórico en esa temporada: puede ser la actual, que vive en el
@@ -712,20 +771,20 @@ router.get("/mapa", async (req, res, next) => {
       const vig = base.find(d => d.subtipo === "sections_coverage");
       if (vig && vig.ts >= rango.desdeMs && vig.ts <= rango.hastaMs) {
         const { parseSections } = require("../services/aog_parser");
-        sections = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
-        stats = vig.stats || null;
+        sections  = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
+        stats     = vig.stats || null;
         ts_ultimo = vig.ts;
       }
     }
 
     res.json(mapaLite([{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }], req));
   } catch (e) {
-    console.error("[AOG/mapa temporada]", e.message);
+    console.error("[AOG/mapa temporada]", e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/aog/lotes/:nombre/temporadas — sale de un find con `fields`: gracias
+// GET /api/aog/lotes/:nombre/temporadas — sale de finds con `fields`: gracias
 // a las stats copiadas al historial (Pieza 0) no baja un byte de contenido.
 router.get("/lotes/:nombre/temporadas", async (req, res) => {
   try {
@@ -738,17 +797,19 @@ router.get("/lotes/:nombre/temporadas", async (req, res) => {
         !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
       return res.status(403).json({ error: "Sin acceso a esa organización" });
 
-    const lote = decodeURIComponent(req.params.nombre);
+    const lote    = decodeURIComponent(req.params.nombre);
     const estabDB = getEstabDB(slug);
-    const campos = ["_id", "ts", "stats"];
+    const campos  = ["_id", "ts", "stats"];
+    const piso    = pisoMsSprint2();
+
     const [hist, vig] = await Promise.all([
-      estabDB.find({ selector: { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, fields: campos, limit: 500 }).catch(() => ({ docs: [] })),
-      estabDB.find({ selector: { tipo: "aog_archivo",   subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, fields: campos, limit: 5 }).catch(() => ({ docs: [] })),
+      findPaginadoSprint2(estabDB, { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gte: piso } }, campos),
+      findPaginadoSprint2(estabDB, { tipo: "aog_archivo",   subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, campos, 5, 5),
     ]);
     const { derivarTemporadasDeHistorial } = require("../services/temporadas_lote");
-    res.json({ ok: true, lote, temporadas: derivarTemporadasDeHistorial([...(hist.docs || []), ...(vig.docs || [])]) });
+    res.json({ ok: true, lote, temporadas: derivarTemporadasDeHistorial([...hist, ...vig]) });
   } catch (e) {
-    console.error("[AOG/temporadas]", e.message);
+    console.error("[AOG/temporadas]", e);
     res.status(500).json({ error: e.message });
   }
 });
