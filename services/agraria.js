@@ -2,10 +2,13 @@
 const API = "https://api.anthropic.com/v1/messages";
 
 async function call(system, user, max_tokens=500) {
+  // Sin clave no hay llamada: devolvemos null y el que llama decide (el cron no manda nada).
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) { console.warn("[agrarIA] ANTHROPIC_API_KEY no configurada"); return null; }
   try {
     const r = await fetch(API, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens,
@@ -14,6 +17,7 @@ async function call(system, user, max_tokens=500) {
       })
     });
     const d = await r.json();
+    if (!r.ok) { console.error("[agrarIA]", r.status, d.error?.message || ""); return null; }
     return d.content?.[0]?.text?.trim() || null;
   } catch(e) {
     console.error("[agrarIA]", e.message);

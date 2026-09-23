@@ -241,12 +241,15 @@ app.use("/api/agraria",        auth.required, routeAgraria);
 app.use("/api/grupos",         auth.required, routeGrupos);
 app.use("/api/lluvias",        auth.required, routeLluvias);
 // ── Sprint 1: actividad / reportes / releases ─────────────
-app.use("/api/actividad", auth.required, require("./routes/actividad"));
-app.use("/api/reportes", auth.required, require("./routes/reportes"));
-app.use("/reportes", auth.required, require("./routes/reportes"));
+// noDevices: un token de equipo (PilotX) no tiene por qué leer la actividad ni los reportes de la org.
+const { noDevices: sinEquipos } = require("./routes/devices");
+app.use("/api/actividad", auth.required, sinEquipos, require("./routes/actividad"));
+app.use("/api/reportes", auth.required, sinEquipos, require("./routes/reportes"));
+app.use("/reportes", auth.required, sinEquipos, require("./routes/reportes"));
 app.use("/api/ota/publico", require("./routes/ota_publico")); // sin auth: catálogo curado + descargas con límite por IP
 app.get("/releases", (req, res) => res.redirect("/api/ota/publico/pagina"));
-for (const p of ["flowx", "quantix", "quantix7", "vistax"]) app.use(`/flash-publico/${p}`, express.static(path.join(__dirname, "flash-app", p)));
+// Toda la carpeta flash-app (índice, bootstrap, esp-web-tools y los productos): las páginas usan rutas relativas "../".
+app.use("/flash-publico", express.static(path.join(__dirname, "flash-app")));
 // ── fin Sprint 1 ──────────────────────────────────────────
 app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
 app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
@@ -334,6 +337,7 @@ cron.schedule(
         if (!res) continue;
         const analisis = await agraria.analizarDia(res);
 // Sprint 1: notify-org (tras: const analisis = await agraria.analizarDia(res);)
+        if (!analisis) continue; // sin análisis (agrarIA caída o sin clave) no se manda nada
         require("./lib/notify-org").notify(e.slug, "reporte_diario", { titulo: `Resumen diario · ${e.nombre || e.slug}`, cuerpo: (typeof analisis === "string" ? analisis : JSON.stringify(analisis)).slice(0, 1500) }).catch(err => console.warn("[notify/diario]", err.message));
         // fin Sprint 1: notify-org
         io.to(`estab:${e.slug}`).emit("agraria:resumen_diario", {
