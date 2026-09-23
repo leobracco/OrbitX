@@ -196,14 +196,17 @@ router.get("/fechas-disponibles", async (req, res) => {
 //  Mucho más eficiente que WMS tile-by-tile y NO requiere configurar
 //  un layer en el dashboard (el evalscript va inline en el body).
 // ══════════════════════════════════════════════════════════
-async function processAPI({ geometry, desde, hasta, width, height, evalscript, maxCloudCoverage }) {
+// `formato` y `crs` son opcionales: sin ellos el comportamiento es el de
+// siempre (PNG coloreado en CRS84). Con ellos se pide el raster de valores en
+// una proyección métrica, que es lo que necesita la zonificación.
+async function processAPI({ geometry, desde, hasta, width, height, evalscript, maxCloudCoverage, formato = "image/png", crs = null }) {
   const token = await getCopernicusToken();
 
   const body = {
     input: {
       bounds: {
         geometry,
-        properties: { crs: "http://www.opengis.net/def/crs/OGC/1.3/CRS84" },
+        properties: { crs: crs || "http://www.opengis.net/def/crs/OGC/1.3/CRS84" },
       },
       data: [{
         type: "sentinel-2-l2a",
@@ -217,7 +220,7 @@ async function processAPI({ geometry, desde, hasta, width, height, evalscript, m
     output: {
       width:  width  || 1024,
       height: height || 1024,
-      responses: [{ identifier: "default", format: { type: "image/png" } }],
+      responses: [{ identifier: "default", format: { type: formato } }],
     },
     evalscript: evalscript || EVALSCRIPT_NDVI,
   };
@@ -227,7 +230,7 @@ async function processAPI({ geometry, desde, hasta, width, height, evalscript, m
     headers: {
       "Authorization": `Bearer ${token}`,
       "Content-Type":  "application/json",
-      "Accept":        "image/png",
+      "Accept":        formato,
     },
     body: JSON.stringify(body),
   });
@@ -388,7 +391,9 @@ async function statsAPI({ geometry, desde, hasta, indice = "ndvi", evalscript, m
     },
     calculations: {
       default: {
-        statistics: { default: { percentiles: { k: [10, 50, 90] } } },
+        // Deciles completos: dan cortes de cuantiles sin pedir un raster,
+        // para el modo "rápido" de la generación de zonas.
+        statistics: { default: { percentiles: { k: [10, 20, 30, 40, 50, 60, 70, 80, 90] } } },
         // Histograms omitidos: requieren matchear sampleType (FLOAT32 vs int)
         // y para el análisis nos alcanza con mean/min/max/percentiles.
       },
@@ -456,9 +461,83 @@ router.post("/lote/stats", async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════
+//  Purga del cache en disco. Sin esto, .cache/ndvi crece para siempre: hoy
+//  guarda PNGs de 1024x1024 sin TTL ni tope, en el disco del droplet.
+// ══════════════════════════════════════════════════════════
+async function purgarCacheNDVI({ maxBytes = 200 * 1024 * 1024, maxDias = 30 } = {}) {
+  ensureCacheDir();
+  const nombres = await fs.promises.readdir(NDVI_CACHE_DIR).catch(() => []);
+  const archivos = [];
+  for (const n of nombres) {
+    const p = path.join(NDVI_CACHE_DIR, n);
+    try { const st = await fs.promises.stat(p); if (st.isFile()) archivos.push({ p, size: st.size, mtime: st.mtimeMs }); }
+    catch {}
+  }
+  const corte = Date.now() - maxDias * 86400000;
+  let borrados = 0, bytes = 0;
+  // Primero lo viejo.
+  for (const a of archivos) {
+    if (a.mtime >= corte) continue;
+    try { await fs.promises.unlink(a.p); borrados++; bytes += a.size; a.borrado = true; } catch {}
+  }
+  // Después, si sigue pasado de tamaño, lo más viejo primero.
+  let total = archivos.filter(a => !a.borrado).reduce((s, a) => s + a.size, 0);
+  const restantes = archivos.filter(a => !a.borrado).sort((a, b) => a.mtime - b.mtime);
+  for (const a of restantes) {
+    if (total <= maxBytes) break;
+    try { await fs.promises.unlink(a.p); borrados++; bytes += a.size; total -= a.size; } catch {}
+  }
+  if (borrados) console.log(`[ndvi/cache] purga: ${borrados} archivos, ${Math.round(bytes / 1024)} KB`);
+  return { borrados, bytes };
+}
+
+// ══════════════════════════════════════════════════════════
+//  GET /api/ndvi/lote/raster?lote=&fecha=&indice=
+//  El raster de VALORES del índice, en la proyección métrica del lote.
+//  Devuelve los metadatos de georreferenciación (el PNG crudo no viaja: para
+//  el panel es una herramienta de diagnóstico, y la generación de zonas usa
+//  rasterDeLote() sin pasar por HTTP).
+// ══════════════════════════════════════════════════════════
+router.get("/lote/raster", async (req, res) => {
+  try {
+    const slug = req.query.estab || req.user?.estabSlug;
+    const lote = req.query.lote ? decodeURIComponent(req.query.lote) : null;
+    if (!slug) return res.status(400).json({ error: "Sin organización activa" });
+    if (!lote) return res.status(400).json({ error: "Pasá ?lote=" });
+    if (req.query.estab && req.query.estab !== req.user?.estabSlug &&
+        req.user?.rol_global !== "superadmin" &&
+        !(req.user?.memberships || []).some(m => m.orgSlug === req.query.estab))
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+
+    const { rasterDeLote } = require("../services/ndvi_raster");
+    const r = await rasterDeLote({
+      slug, lote,
+      fecha:  req.query.fecha || null,
+      indice: (req.query.indice || "ndvi").toLowerCase(),
+    });
+
+    res.set("X-Ancho", String(r.ancho));
+    res.set("X-Alto", String(r.alto));
+    res.set("X-Zona-Utm", String(r.zona));
+    res.set("X-Bbox-Utm", `${r.bbox.minX},${r.bbox.minY},${r.bbox.maxX},${r.bbox.maxY}`);
+    res.set("X-Resolucion-M", String(r.resolucion_m));
+    res.json({
+      ok: true, lote, indice: r.indice, fecha: r.fecha,
+      ancho: r.ancho, alto: r.alto, zona_utm: r.zona, sur: r.sur,
+      bbox_utm: r.bbox, resolucion_m: r.resolucion_m,
+      con_dato: r.datos.reduce((s, v) => s + (v ? 1 : 0), 0),
+    });
+  } catch (e) {
+    console.error("[ndvi/lote/raster]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // Exponer helpers para reuso.
 module.exports = router;
 module.exports.invalidarToken = invalidarToken;
 module.exports.processAPI     = processAPI;
 module.exports.statsAPI       = statsAPI;
 module.exports.EVALSCRIPT_NDVI = EVALSCRIPT_NDVI;
+module.exports.purgarCacheNDVI = purgarCacheNDVI;

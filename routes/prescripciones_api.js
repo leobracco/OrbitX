@@ -80,6 +80,9 @@ router.get("/pendientes", async (req, res) => {
     const r = await estabDB.find({
       selector: {
         tipo: "aog_descarga_pendiente",
+        // Sin el subtipo, acá también salían los boundaries de lote que encola
+        // routes/lotes_maestro.js y el tractor los pedía como prescripciones.
+        subtipo: "prescripcion",
         device_id: deviceId,
         entregado: false
       },
@@ -126,15 +129,18 @@ router.get("/pendientes/:id/contenido", async (req, res) => {
     if (doc.device_id !== deviceId)
       return res.status(403).json({ error: "No autorizado" });
 
-    // Marcar como entregado.
-    await estabDB.insert({ ...doc, entregado: true, entregado_at: Date.now() });
-
+    // Marcar como entregado DESPUÉS de responder: si la respuesta se pierde en
+    // el camino (el campo tiene la conexión que tiene), la prescripción sigue
+    // pendiente y el tractor la vuelve a pedir.
     res.json({
       nombre: doc.nombre,
       ruta_rel: doc.ruta_rel,
       contenido: doc.contenido,
       producto: doc.producto
     });
+
+    estabDB.insert({ ...doc, entregado: true, entregado_at: Date.now() })
+      .catch(e => console.warn("[prescripciones] marcar entregado:", e.message));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

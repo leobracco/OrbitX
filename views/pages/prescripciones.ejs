@@ -296,6 +296,64 @@
   </div>
 </div>
 
+<!-- ── Generar desde NDVI ─────────────────────────────── -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-head">
+    <span class="card-title">Generar desde NDVI</span>
+    <span id="gen-estado" style="font-size:11px;color:var(--muted2)"></span>
+  </div>
+  <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div style="flex:1;min-width:160px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Lote</label>
+      <select id="gen-lote" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"></select>
+    </div>
+    <div style="min-width:150px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Fecha del satélite</label>
+      <select id="gen-fecha" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option value="">Mejor de los últimos 30 días</option>
+      </select>
+    </div>
+    <div style="width:90px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Zonas</label>
+      <select id="gen-zonas" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option>2</option><option selected>3</option><option>4</option><option>5</option>
+      </select>
+    </div>
+    <div style="min-width:200px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Criterio</label>
+      <select id="gen-sentido" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option value="mas_donde_menos">Más insumo donde hay menos vigor</option>
+        <option value="mas_donde_mas">Más insumo donde hay más vigor</option>
+      </select>
+    </div>
+    <div style="width:100px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Dosis mín.</label>
+      <input id="gen-dmin" type="number" value="60" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+    </div>
+    <div style="width:100px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Dosis máx.</label>
+      <input id="gen-dmax" type="number" value="120" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+    </div>
+    <button class="btn btn-lime" onclick="generarDesdeNDVI(false)">Ver zonas</button>
+    <button class="btn btn-ghost" onclick="generarDesdeNDVI(true)">Generar y guardar</button>
+  </div>
+  <div class="card-body" id="gen-zonas-tabla" style="display:none;border-top:1px solid var(--border)">
+    <table style="width:100%;font-size:12px">
+      <thead><tr><th style="text-align:left">Zona</th><th style="text-align:left">NDVI medio</th><th style="text-align:left">ha</th><th style="text-align:left">Dosis</th></tr></thead>
+      <tbody id="gen-zonas-body"></tbody>
+    </table>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <input id="gen-nombre" placeholder="Nombre de la prescripción"
+        style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+      <button class="btn btn-lime" onclick="guardarZonasEditadas()">Guardar con estas dosis</button>
+    </div>
+  </div>
+  <div class="card-body" id="gen-nube" style="display:none;border-top:1px solid var(--border)">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);margin-bottom:8px">Guardadas en la nube</div>
+    <div id="gen-nube-lista" style="display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+</div>
+
 <!-- Leaflet + Leaflet.draw -->
 <link rel="stylesheet" href="/lib/leaflet/leaflet.min.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
@@ -1420,6 +1478,214 @@ async function confirmarEnviar() {
   }
 }
 
+// ── Generar desde NDVI ────────────────────────────────────
+const AUTH_H = () => ({ "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}`, "Content-Type": "application/json" });
+let _genLayers = [];
+let _genFC = null;      // última FeatureCollection generada (para guardar con dosis editadas)
+let _genLote = "";
+
+async function cargarLotesGen() {
+  try {
+    const r = await fetch("/api/aog/lotes-mapa", { headers: AUTH_H() });
+    const lotes = r.ok ? await r.json() : [];
+    const sel = document.getElementById("gen-lote");
+    sel.innerHTML = lotes.filter(l => l.tiene_boundary).map(l => `<option>${l.nombre}</option>`).join("")
+      || `<option value="">— sin lotes con contorno —</option>`;
+    sel.addEventListener("change", cargarFechasGen);
+    cargarFechasGen();
+  } catch (e) { console.warn("[gen] lotes:", e.message); }
+}
+
+async function cargarFechasGen() {
+  const lote = document.getElementById("gen-lote").value;
+  const sel = document.getElementById("gen-fecha");
+  sel.innerHTML = `<option value="">Mejor de los últimos 30 días</option>`;
+  if (!lote) return;
+  try {
+    const rm = await fetch(`/api/aog/mapa?lote=${encodeURIComponent(lote)}&lite=1`, { headers: AUTH_H() });
+    const lotes = rm.ok ? await rm.json() : [];
+    const b = lotes[0]?.boundary;
+    if (!b || b.length < 3) return;
+    const lats = b.map(p => p[0]), lons = b.map(p => p[1]);
+    const bbox = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)].join(",");
+    const rf = await fetch(`/api/ndvi/fechas-disponibles?bbox=${bbox}&dias=90`, { headers: AUTH_H() });
+    const j = rf.ok ? await rf.json() : { fechas: [] };
+    // La nubosidad decide: zonificar sobre una imagen nublada da una
+    // prescripción agronómicamente peligrosa.
+    for (const f of (j.fechas || []).slice(0, 30)) {
+      const op = document.createElement("option");
+      op.value = f.fecha;
+      op.textContent = `${f.fecha} · ${f.cloud_cover}% nubes`;
+      sel.appendChild(op);
+    }
+  } catch (e) { console.warn("[gen] fechas:", e.message); }
+}
+
+async function generarDesdeNDVI(guardar) {
+  const est = document.getElementById("gen-estado");
+  const lote = document.getElementById("gen-lote").value;
+  if (!lote) { est.textContent = "Elegí un lote"; return; }
+  est.textContent = "Pidiendo la imagen y armando las zonas…";
+  try {
+    const body = {
+      lote,
+      fecha:   document.getElementById("gen-fecha").value || null,
+      indice:  "ndvi",
+      n_zonas: Number(document.getElementById("gen-zonas").value),
+      min_ha:  0.5,
+      sentido: document.getElementById("gen-sentido").value,
+      unidad:  "kg_ha",
+      dosis:   { min: Number(document.getElementById("gen-dmin").value), max: Number(document.getElementById("gen-dmax").value) },
+      nombre:  `${lote} · NDVI`,
+    };
+    const r = await fetch(`/api/prescripciones/generar${guardar ? "?guardar=1" : ""}`, {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    _genFC = j.geojson;
+    _genLote = lote;
+    pintarZonasGeneradas(j.geojson);
+    pintarTablaZonas(j.geojson, lote);
+    est.textContent = guardar ? "✓ Guardada en la nube" : `✓ ${j.geojson.features.length} zonas · previsualización`;
+    if (guardar) cargarPrescServidor();
+  } catch (e) {
+    est.textContent = "✗ " + e.message;
+  }
+}
+
+// La dosis precargada es una propuesta: el agrónomo la edita zona por zona
+// antes de guardar.
+function pintarTablaZonas(fc, lote) {
+  const cont = document.getElementById("gen-zonas-tabla");
+  const body = document.getElementById("gen-zonas-body");
+  body.innerHTML = fc.features.map(f => `
+    <tr>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${PALETA[(f.properties.zona - 1) % PALETA.length]};margin-right:6px"></span>${f.properties.nombre}</td>
+      <td>${f.properties.ndvi_medio ?? "–"}</td>
+      <td>${f.properties.ha}</td>
+      <td><input type="number" step="0.1" value="${f.properties.dosis ?? ""}" data-zona="${f.properties.zona}"
+           style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"/>
+          <span style="color:var(--muted2)">${f.properties.unidad || ""}</span></td>
+    </tr>`).join("");
+  document.getElementById("gen-nombre").value = `${lote} · NDVI`;
+  cont.style.display = "block";
+}
+
+async function guardarZonasEditadas() {
+  const est = document.getElementById("gen-estado");
+  if (!_genFC) { est.textContent = "Generá las zonas primero"; return; }
+  const inputs = document.querySelectorAll("#gen-zonas-body input[data-zona]");
+  const porZona = {};
+  inputs.forEach(i => { porZona[Number(i.dataset.zona)] = i.value === "" ? null : Number(i.value); });
+  const fc = {
+    ..._genFC,
+    features: _genFC.features.map(f => ({ ...f, properties: { ...f.properties, dosis: porZona[f.properties.zona] ?? f.properties.dosis } })),
+  };
+  try {
+    const r = await fetch("/api/prescripciones/docs", {
+      method: "POST", headers: AUTH_H(),
+      body: JSON.stringify({
+        nombre: document.getElementById("gen-nombre").value || `${_genLote} · NDVI`,
+        lote_nombre: _genLote, origen: "ndvi", estado: "lista",
+        geojson: fc, fuente: _genFC.properties?.fuente || null,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    est.textContent = "✓ Guardada con las dosis editadas";
+    cargarPrescServidor();
+  } catch (e) { est.textContent = "✗ " + e.message; }
+}
+
+function pintarZonasGeneradas(fc) {
+  if (!mapaL) initMapa();
+  _genLayers.forEach(l => mapaL.removeLayer(l));
+  _genLayers = [];
+  const capa = L.geoJSON(fc, {
+    style: (f) => ({ color: PALETA[(f.properties.zona - 1) % PALETA.length], weight: 2, fillOpacity: 0.45 }),
+    onEachFeature: (f, l) => l.bindPopup(
+      `<b>${f.properties.nombre}</b><br>NDVI medio: ${f.properties.ndvi_medio ?? "–"}<br>${f.properties.ha} ha<br>Dosis: ${f.properties.dosis ?? "–"} ${f.properties.unidad || ""}`),
+  }).addTo(mapaL);
+  _genLayers.push(capa);
+  try { mapaL.fitBounds(capa.getBounds()); } catch {}
+}
+
+// ── Prescripciones guardadas en la nube + migración única ──
+let _tractoresNube = [];
+
+function escHTML(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function cargarPrescServidor() {
+  try {
+    const r = await fetch("/api/prescripciones/docs", { headers: AUTH_H() });
+    if (!r.ok) return;
+    const j = await r.json();
+    const items = j.items || [];
+    const cont = document.getElementById("gen-nube");
+    const lista = document.getElementById("gen-nube-lista");
+    if (!cont || !lista) return;
+    if (!items.length) { cont.style.display = "none"; return; }
+
+    if (!_tractoresNube.length) {
+      try {
+        const rt = await fetch("/api/prescripciones/tractores", { headers: AUTH_H() });
+        if (rt.ok) _tractoresNube = await rt.json();
+      } catch { _tractoresNube = []; }
+    }
+    const opciones = _tractoresNube.length
+      ? _tractoresNube.map(t => `<option value="${escHTML(t.device_id)}">${escHTML(t.nombre)}${t.online ? " ·  en línea" : ""}</option>`).join("")
+      : `<option value="">— sin tractores —</option>`;
+
+    lista.innerHTML = items.map(d => `
+      <div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:1">${escHTML(d.nombre)}</span>
+        <span style="color:var(--muted2)">${escHTML(d.lote_nombre || "—")}</span>
+        <span style="color:var(--muted2)">${escHTML(d.origen)} · ${escHTML(d.estado)}</span>
+        <select data-tractor-de="${escHTML(d._id)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:11px">${opciones}</select>
+        <button class="btn btn-sm btn-ghost" onclick="enviarPrescNube('${escHTML(d._id)}')" title="Enviar al tractor">📡</button>
+      </div>`).join("");
+    cont.style.display = "block";
+  } catch (e) { console.warn("[presc] listar:", e.message); }
+}
+
+async function enviarPrescNube(id) {
+  const est = document.getElementById("gen-estado");
+  const sel = document.querySelector(`[data-tractor-de="${id}"]`);
+  const device_id = sel?.value;
+  if (!device_id) { est.textContent = "No hay tractor destino"; return; }
+  est.textContent = "Enviando al tractor…";
+  try {
+    const r = await fetch(`/api/prescripciones/docs/${encodeURIComponent(id)}/enviar`, {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify({ device_id }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    est.textContent = "✓ " + j.mensaje;
+    cargarPrescServidor();
+  } catch (e) { est.textContent = "✗ " + e.message; }
+}
+
+async function migrarPrescLocales() {
+  let locales = [];
+  try { locales = JSON.parse(localStorage.getItem("orbitx_presc") || "[]"); } catch { return; }
+  if (!locales.length) return;
+  try {
+    const r = await fetch("/api/prescripciones/migrar", {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify({ locales }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    if (j.creados) toast("✓ Prescripciones subidas", `${j.creados} pasaron a la nube`, "lime");
+  } catch (e) { console.warn("[presc] migrar:", e.message); }
+}
+
 // ── Init ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => { initMapa(); });
+document.addEventListener('DOMContentLoaded', () => {
+  initMapa();
+  cargarLotesGen();
+  migrarPrescLocales().then(cargarPrescServidor);
+});
 </script>
