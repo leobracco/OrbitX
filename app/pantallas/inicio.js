@@ -41,7 +41,8 @@ export async function montar(ctx, root) {
   async function cargar() {
     let r;
     try {
-      r = await ctx.api.get("/api/actividad/resumen");
+      // Timeout más largo: el primer hit del server (cache fría) puede tardar ~8 s.
+      r = await ctx.api.get("/api/actividad/resumen", { timeoutMs: 15000 });
     } catch (e) {
       if (e instanceof ErrorHttp && e.status === 400) {
         root.innerHTML = `<div class="vacio">Elegí un establecimiento arriba</div>`;

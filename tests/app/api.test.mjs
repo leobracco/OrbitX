@@ -64,6 +64,20 @@ test("post no usa cache y devuelve el body; error trae status y body", async () 
   await assert.rejects(() => api2.post("/api/lluvias", {}), (e) => e.status === 400 && e.body.error === "mm inválidos");
 });
 
+test("get acepta timeoutMs por llamada, que pisa el default", async () => {
+  // fetch tarda 80ms: con el timeoutMs default de arma() (50ms) abortaría,
+  // pero pasando { timeoutMs: 300 } tiene que esperar y devolver datos frescos.
+  const lenta = () => (_u, { signal }) => new Promise((res, rej) => {
+    const t = setTimeout(() => res(new Response(JSON.stringify([5]), { status: 200 })), 80);
+    signal.addEventListener("abort", () => { clearTimeout(t); rej(new DOMException("abort", "AbortError")); });
+  });
+  const { api, store } = arma(lenta());
+  await store.cacheSet("GET /api/lento", [0]); // si abortara, caería acá
+  const r = await api.get("/api/lento", { timeoutMs: 300 });
+  assert.deepEqual(r.data, [5]);
+  assert.equal(r.desdeCache, false);
+});
+
 test("si guardar en cache falla, get devuelve igual los datos frescos", async () => {
   const store = crearStore(memBackend());
   store.cacheSet = async () => { throw new Error("IndexedDB lleno"); };

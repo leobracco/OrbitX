@@ -15,9 +15,9 @@ export class ErrorHttp extends Error {
 }
 
 export function crearApi({ fetchFn = globalThis.fetch, store, getToken, onNoAuth = () => {}, timeoutMs = 4000, base = "" }) {
-  async function pedir(metodo, ruta, body) {
+  async function pedir(metodo, ruta, body, { timeoutMs: timeoutMsPedido } = {}) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMsPedido ?? timeoutMs);
     try {
       const headers = { Accept: "application/json" };
       const tok = getToken();
@@ -36,11 +36,11 @@ export function crearApi({ fetchFn = globalThis.fetch, store, getToken, onNoAuth
   }
 
   return {
-    async get(ruta) {
+    async get(ruta, { timeoutMs } = {}) {
       const clave = `GET ${ruta}`;
       let data;
       try {
-        data = await pedir("GET", ruta);
+        data = await pedir("GET", ruta, undefined, { timeoutMs });
       } catch (e) {
         if (e instanceof ErrorHttp) throw e; // el server respondió: no es un problema de red
         const c = await store.cacheGet(clave);
