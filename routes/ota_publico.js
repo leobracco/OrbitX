@@ -109,7 +109,9 @@ router.get("/firmware/:producto/:version", (req, res) => {
     if (!fw.existeBin(producto, version))
       return res.status(404).json({ error: "Firmware no encontrado" });
 
-    if (!permitirDescarga(req.ip))
+    // Detrás de Nginx Proxy Manager req.ip es la IP del proxy (no hay trust proxy): usar el primer salto de X-Forwarded-For.
+    const ipCliente = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip;
+    if (!permitirDescarga(ipCliente))
       return res.status(429).json({ error: "Demasiadas descargas, esperá una hora" });
 
     const ruta = fw.rutaBin(producto, version);
