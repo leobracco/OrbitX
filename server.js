@@ -384,6 +384,29 @@ cron.schedule("*/5 * * * *", async () => {
     }
   } catch (e) { console.error("[CRON/caidos]", e.message); }
 }, { timezone: "America/Argentina/Cordoba" });
+// Sprint 2: retencion y limpieza
+// 03:40, antes del backup de las 03:00 del día siguiente y lejos del horario
+// de campo. Todo best-effort: si falla, se loguea y sigue.
+cron.schedule("40 3 * * *", async () => {
+  try {
+    const notis = require("./lib/notificaciones");
+    const estabs = await db.getEstablecimientos();
+    for (const e of estabs) {
+      try {
+        const n = await notis.purgar(e.slug, notis.RETENCION_DIAS);
+        if (n) console.log(`[CRON/retencion] ${e.slug}: ${n} avisos viejos borrados`);
+      } catch (err) { console.warn("[CRON/retencion]", e.slug, err.message); }
+      // Respirar entre orgs: el droplet es 1 vCPU con ~25 apps.
+      await new Promise(cb => setTimeout(cb, 500));
+    }
+  } catch (e) { console.error("[CRON/retencion]", e.message); }
+
+  try {
+    const { purgarCacheNDVI } = require("./routes/ndvi");
+    if (typeof purgarCacheNDVI === "function") await purgarCacheNDVI({ maxBytes: 200 * 1024 * 1024, maxDias: 30 });
+  } catch (e) { console.warn("[CRON/retencion] cache ndvi:", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+// fin Sprint 2: retencion y limpieza
 
 // Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
 const { runBackup } = require("./scripts/backup-couchdb");
