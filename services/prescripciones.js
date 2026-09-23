@@ -68,12 +68,17 @@ function enCola(fn) {
 
 async function generar({ slug, lote, fecha, indice = "ndvi", n = 3, areaMinHa = 0.5, dosis = null, unidad = null, sentido = "mas_donde_menos", nombre = "" }) {
   const zonas = Math.min(Math.max(Number(n) || 3, 2), 5);
+  // Área mínima por zona acotada a [0,1 ; 5] ha: por debajo de 0,1 la salida se
+  // llena de manchitas que el tractor no puede aplicar, y por arriba de 5 se
+  // come zonas enteras de un lote chico. Lo que no sea número cae al default.
+  const minHa = (areaMinHa === null || areaMinHa === "") ? NaN : Number(areaMinHa);
+  const areaMin = Number.isFinite(minHa) ? Math.min(Math.max(minHa, 0.1), 5) : 0.5;
   return enCola(async () => {
     const r = await rasterDeLote({ slug, lote, fecha, indice });
     const fc = zonificar({
       datos: r.datos, ancho: r.ancho, alto: r.alto, bbox: r.bbox,
       zona: r.zona, sur: r.sur, n: zonas,
-      areaMinHa: Number(areaMinHa) >= 0 ? Number(areaMinHa) : 0.5,
+      areaMinHa: areaMin,
       rango: r.rango,
     });
     if (!fc.features.length)

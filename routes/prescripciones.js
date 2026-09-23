@@ -79,6 +79,14 @@ router.post("/generar", ...guardW, async (req, res) => {
     const slug = orgDe(req);
     const { lote, fecha, indice, n_zonas, min_ha, dosis, unidad, sentido, nombre } = req.body || {};
     if (!lote) return res.status(400).json({ error: "Elegí un lote" });
+    // El área mínima por zona se acota a [0,1 ; 5] ha. Si viene algo fuera de
+    // rango o que no es número, se avisa en vez de recortarlo por lo bajo: el
+    // que pidió 0,01 ha no quiere 0,1, quiere saber que no se puede.
+    if (min_ha !== undefined && min_ha !== null && min_ha !== "") {
+      const m = Number(min_ha);
+      if (!Number.isFinite(m) || m < 0.1 || m > 5)
+        return res.status(400).json({ error: "El área mínima por zona tiene que ser un número entre 0,1 y 5 ha" });
+    }
     const fc = await presc.generar({
       slug, lote, fecha, indice, nombre,
       n: n_zonas, areaMinHa: min_ha, dosis, unidad, sentido,

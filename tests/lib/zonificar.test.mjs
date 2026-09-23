@@ -6,6 +6,7 @@ const {
   zonaUtmPorLon, latLonAUtm, utmALatLon,
   clasificarCuantiles, filtroMayoria, fundirChicas,
   marchingSquares, douglasPeucker, puntoEnAnillo, zonificar,
+  marcarJunctions, simplificarAnilloCompartido, areaFirmada, puntoInterior,
 } = z;
 
 // ── Helpers compartidos ─────────────────────────────────────
@@ -64,6 +65,96 @@ function featureContiene(feature, p) {
     if (!puntoEnAnillo(p, poly[0])) continue;
     let enHueco = false;
     for (let h = 1; h < poly.length; h++) if (puntoEnAnillo(p, poly[h])) { enHueco = true; break; }
+    if (!enHueco) return true;
+  }
+  return false;
+}
+
+// Cuántas features cubren cada píxel del raster, con una muestra por píxel
+// (offset pseudoaleatorio adentro del píxel para no caer justo sobre un
+// vértice ni sobre un segmento exactamente diagonal).
+//
+// En vez de un point-in-polygon por muestra y por feature (65.536 x 5 x todos
+// los anillos), se barre por filas: para cada feature y cada fila se calculan
+// una sola vez los cruces de TODOS sus anillos con esa línea y se recorren las
+// columnas con la regla par-impar. Los huecos salen gratis (van en la misma
+// lista de cruces, que es justamente lo que hace par-impar).
+function coberturaPorPixel(fc, bbox, ancho, alto, zona) {
+  const dx = (bbox.maxX - bbox.minX) / ancho, dy = (bbox.maxY - bbox.minY) / alto;
+  const aPixel = ([lon, lat]) => {
+    const u = latLonAUtm(lat, lon, zona);
+    return [(u.x - bbox.minX) / dx, (bbox.maxY - u.y) / dy];
+  };
+  const porFeature = fc.features.map(f => {
+    const anillos = [];
+    for (const poly of f.geometry.coordinates) for (const anillo of poly) anillos.push(anillo.map(aPixel));
+    return anillos;
+  });
+
+  const rand = lcg(4242);
+  const muestraY = new Float64Array(alto);
+  for (let y = 0; y < alto; y++) muestraY[y] = y + 0.2 + rand() * 0.6;
+  const muestraX = new Float64Array(ancho * alto);
+  for (let i = 0; i < muestraX.length; i++) muestraX[i] = (i % ancho) + 0.2 + rand() * 0.6;
+
+  const cuenta = new Uint8Array(ancho * alto);
+  const xs = [];
+  for (const anillos of porFeature) {
+    for (let y = 0; y < alto; y++) {
+      const sy = muestraY[y];
+      xs.length = 0;
+      for (const a of anillos) {
+        for (let i = 0, j = a.length - 2; i < a.length - 1; j = i++) {
+          const [xi, yi] = a[i], [xj, yj] = a[j];
+          if ((yi > sy) !== (yj > sy)) xs.push(xi + ((sy - yi) * (xj - xi)) / (yj - yi));
+        }
+      }
+      if (!xs.length) continue;
+      xs.sort((p, q) => p - q);
+      let k = 0;
+      for (let x = 0; x < ancho; x++) {
+        const sx = muestraX[y * ancho + x];
+        while (k < xs.length && xs[k] < sx) k++;
+        if (k % 2 === 1) cuenta[y * ancho + x]++;
+      }
+    }
+  }
+  let sinCobertura = 0, solapados = 0;
+  for (let i = 0; i < cuenta.length; i++) {
+    if (cuenta[i] === 0) sinCobertura++;
+    else if (cuenta[i] > 1) solapados++;
+  }
+  return { muestras: cuenta.length, sinCobertura, solapados };
+}
+
+// Vectoriza una grilla de CLASES igual que `zonificar`, pero quedándose en
+// espacio de píxeles: devuelve, por clase, la lista de {ext, huecos}.
+function vectorizarClases(g, ancho, alto, nClases, tol = 1) {
+  const esJ = marcarJunctions(g, ancho, alto);
+  const cache = new Map();
+  const porClase = [];
+  for (let c = 0; c < nClases; c++) {
+    const anillos = marchingSquares(g, ancho, alto, c)
+      .map(a => simplificarAnilloCompartido(a, tol, esJ, ancho, alto, cache))
+      .filter(Boolean);
+    const conArea = anillos.map(a => ({ a, area: areaFirmada(a) }));
+    const polys = conArea.filter(o => o.area > 0).sort((p, q) => p.area - q.area)
+      .map(e => ({ ext: e.a, huecos: [] }));
+    for (const h of conArea.filter(o => o.area < 0)) {
+      const p = puntoInterior(h.a) || h.a[0];
+      const dueno = polys.find(q => puntoEnAnillo(p, q.ext));
+      if (dueno) dueno.huecos.push(h.a);
+    }
+    porClase.push(polys);
+  }
+  return porClase;
+}
+
+function polysContienen(polys, p) {
+  for (const q of polys) {
+    if (!puntoEnAnillo(p, q.ext)) continue;
+    let enHueco = false;
+    for (const h of q.huecos) if (puntoEnAnillo(p, h)) { enHueco = true; break; }
     if (!enHueco) return true;
   }
   return false;
@@ -328,18 +419,20 @@ test("zonificar: n fuera de 2..5 (o no entero) es un error explícito", () => {
   for (const n of [2, 3, 4, 5]) assert.doesNotThrow(() => zonificar({ ...base, n }));
 });
 
-test("douglasPeucker: 15.000 puntos en escalera no desbordan la pila", () => {
+test("douglasPeucker: 8.000 puntos en escalera no desbordan la pila", () => {
   // Una escalera rectilínea (el borde típico de un raster fragmentado) empata
   // todas las distancias; con el desempate "gana el primero" la recursión se
   // parte de a un punto por vez y la versión recursiva reventaba alrededor de
-  // los 7.000 puntos. La versión iterativa tiene que aguantar mucho más.
+  // los 7.000 puntos. Con 8.000 ya se pasa de ese punto de quiebre, y como DP
+  // es O(n²) sobre una escalera, bajar de 15.000 a 8.000 le saca ~3 s al test
+  // sin perder lo que se quiere demostrar.
   const puntos = [];
   let x = 0, y = 0;
-  while (puntos.length < 15000) { puntos.push([x, y]); x++; puntos.push([x, y]); y++; }
-  const out = douglasPeucker(puntos.slice(0, 15000), 0.1);
-  assert.equal(out.length, 15000);                        // con tol 0,1 no se tira ningún vértice
+  while (puntos.length < 8000) { puntos.push([x, y]); x++; puntos.push([x, y]); y++; }
+  const out = douglasPeucker(puntos.slice(0, 8000), 0.1);
+  assert.equal(out.length, 8000);                         // con tol 0,1 no se tira ningún vértice
   assert.deepEqual(out[0], puntos[0]);
-  assert.deepEqual(out[out.length - 1], puntos[14999]);
+  assert.deepEqual(out[out.length - 1], puntos[7999]);
 });
 
 test("fundirChicas: itera hasta punto fijo y no deja componentes huérfanas", () => {
@@ -385,38 +478,135 @@ test("zonificar: raster 256x256 realista no deja manchas por debajo de areaMinHa
 test("zonificar: las zonas son una partición real del lote (sin solapes ni huecos)", () => {
   // Simplificar cada zona por separado desalineaba los bordes compartidos
   // (0,37 % de superficie solapada y 0,38 % sin cobertura). Con las cadenas de
-  // borde compartidas, cada punto del lote tiene que caer en EXACTAMENTE una
-  // feature.
+  // borde compartidas —y sin volver nunca al anillo crudo cuando todas las
+  // cadenas colapsan— cada punto del lote tiene que caer en EXACTAMENTE una
+  // feature, para cualquier `areaMinHa`. Se muestrea UN PUNTO POR PÍXEL
+  // (65.536 muestras sobre 256x256), no uno cada tres.
+  //
+  // Antes de este fix, con `areaMinHa = 0` daba 601/65.536 = 0,92 % de puntos
+  // en dos zonas a la vez, y 6/65.536 con 0,05.
   const ancho = 256, alto = 256, resolucion = 10;
   const datos = rasterRealista(ancho, alto, 20260924);
   const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * resolucion, maxY: 6200000 + alto * resolucion };
-  const n = 5, areaMinHa = 0.5;
-  const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n, areaMinHa });
-  assert.ok(fc.features.length >= 2, `hacen falta al menos 2 zonas para que el test signifique algo (hay ${fc.features.length})`);
+  const areaTotalHa = (ancho * resolucion * alto * resolucion) / 10000;
 
-  const dx = (bbox.maxX - bbox.minX) / ancho, dy = (bbox.maxY - bbox.minY) / alto;
-  const rand = lcg(4242);
-  let muestras = 0, sinCobertura = 0, solapados = 0;
-  for (let y = 0; y < alto; y += 3) {
-    for (let x = 0; x < ancho; x += 3) {
-      // Offset pseudoaleatorio dentro del píxel: evita caer justo sobre un
-      // vértice o sobre un segmento exactamente diagonal.
-      const px = x + 0.2 + rand() * 0.6, py = y + 0.2 + rand() * 0.6;
-      const { lat, lon } = utmALatLon(bbox.minX + px * dx, bbox.maxY - py * dy, 20, true);
+  for (const areaMinHa of [0, 0.05, 0.2, 0.5]) {
+    const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n: 5, areaMinHa });
+    assert.ok(fc.features.length >= 2, `areaMinHa=${areaMinHa}: hacen falta al menos 2 zonas (hay ${fc.features.length})`);
+
+    const { muestras, sinCobertura, solapados } = coberturaPorPixel(fc, bbox, ancho, alto, 20);
+    assert.ok(muestras >= 65536, `areaMinHa=${areaMinHa}: muestras insuficientes (${muestras})`);
+    assert.equal(sinCobertura, 0, `areaMinHa=${areaMinHa}: ${sinCobertura}/${muestras} puntos sin cobertura`);
+    assert.equal(solapados, 0, `areaMinHa=${areaMinHa}: ${solapados}/${muestras} puntos en más de una zona`);
+
+    // Ningún anillo degenerado: una cadena cerrada mandada a Douglas-Peucker
+    // devolvía un "spike" de ida y vuelta por el mismo segmento (área 0).
+    for (const f of fc.features) {
+      for (const poly of f.geometry.coordinates) {
+        for (const anillo of poly) {
+          assert.ok(anillo.length >= 4, `areaMinHa=${areaMinHa}: anillo de ${anillo.length} puntos en la zona ${f.properties.zona}`);
+          assert.deepEqual(anillo[0], anillo[anillo.length - 1], `areaMinHa=${areaMinHa}: anillo sin cerrar en la zona ${f.properties.zona}`);
+          const m2 = Math.abs(areaFirmada(anillo.map(([lon, lat]) => { const u = latLonAUtm(lat, lon, 20); return [u.x, u.y]; })));
+          assert.ok(m2 >= 1, `areaMinHa=${areaMinHa}: anillo de área ${m2.toFixed(4)} m² en la zona ${f.properties.zona}`);
+        }
+      }
+    }
+
+    // Y la suma de superficies sigue coincidiendo con el bbox.
+    const sumaHa = fc.features.reduce((s, f) => s + f.properties.ha, 0);
+    const diffPct = Math.abs(sumaHa - areaTotalHa) / areaTotalHa * 100;
+    assert.ok(diffPct <= 0.5, `areaMinHa=${areaMinHa}: suma de ha ${sumaHa} vs ${areaTotalHa} (${diffPct.toFixed(3)} %)`);
+  }
+});
+
+// ── Fix post-review 2 ───────────────────────────────────────
+
+test("zonificar: cuando todas las cadenas de un anillo colapsan, el anillo se descarta (no vuelve al contorno crudo)", () => {
+  // Reproducción mínima 9x9: un ajedrez 0/1 de 2x2 pegado a la esquina de la
+  // clase 0, con la clase 2 en su propio bloque. Los anillos de un solo píxel
+  // del ajedrez tienen TODAS sus cadenas entre junctions, y todas colapsan a
+  // sus dos extremos al simplificar. Devolviendo el contorno crudo (lo que
+  // hacía `salida.length >= 4 ? salida : anillo.slice()`), esos píxeles
+  // quedaban dentro de la zona 0 Y de la zona 1 a la vez.
+  const ancho = 9, alto = 9;
+  const g = new Uint8Array(ancho * alto).fill(1);                     // clase 1 alrededor
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) g[y * ancho + x] = 0;      // esquina 4x4
+  for (let y = 6; y <= 8; y++) for (let x = 6; x <= 8; x++) g[y * ancho + x] = 2;    // bloque clase 2
+  for (let y = 4; y <= 5; y++) for (let x = 4; x <= 5; x++) g[y * ancho + x] = (x + y) % 2 === 0 ? 0 : 1;
+
+  const porClase = vectorizarClases(g, ancho, alto, 3);
+  const malos = [];
+  for (let y = 0; y < alto; y++) {
+    for (let x = 0; x < ancho; x++) {
       let dentro = 0;
-      for (const f of fc.features) if (featureContiene(f, [lon, lat])) dentro++;
-      muestras++;
-      if (dentro === 0) sinCobertura++;
-      else if (dentro > 1) solapados++;
+      for (const polys of porClase) if (polysContienen(polys, [x + 0.5, y + 0.5])) dentro++;
+      if (dentro !== 1) malos.push(`(${x},${y}) en ${dentro} zonas`);
     }
   }
-  assert.ok(muestras >= 5000, `muestras insuficientes: ${muestras}`);
-  assert.equal(sinCobertura, 0, `${sinCobertura}/${muestras} puntos sin cobertura`);
-  assert.equal(solapados, 0, `${solapados}/${muestras} puntos en más de una zona`);
+  assert.deepEqual(malos, [], `cada centro de píxel tiene que caer en exactamente una zona: ${malos.join("; ")}`);
+});
 
-  // Y la suma de superficies sigue coincidiendo con el bbox.
-  const areaTotalHa = (ancho * resolucion * alto * resolucion) / 10000;
-  const sumaHa = fc.features.reduce((s, f) => s + f.properties.ha, 0);
-  const diffPct = Math.abs(sumaHa - areaTotalHa) / areaTotalHa * 100;
-  assert.ok(diffPct <= 0.5, `suma de ha ${sumaHa} vs ${areaTotalHa} (${diffPct.toFixed(3)} %)`);
+test("fundirChicas: la isla rodeada de nodata se descarta en vez de sobrevivir bajo el mínimo", () => {
+  // `services/ndvi_raster.js` enmascara lo que queda fuera del boundary y las
+  // nubes como nodata, así que aparecen islitas sin ningún 4-vecino de otra
+  // clase: no hay a quién fundirlas y antes sobrevivían por debajo del mínimo.
+  const ancho = 12, alto = 12;
+  const g = new Uint8Array(ancho * alto).fill(255);        // todo nodata
+  for (const [x, y] of [[1, 1], [2, 1], [1, 2]]) g[y * ancho + x] = 0;   // isla de 3 px
+  let bloque = 0;
+  for (let y = 5; y < 10 && bloque < 50; y++)                            // bloque de 50 px
+    for (let x = 1; x < 11 && bloque < 50; x++) { g[y * ancho + x] = 1; bloque++; }
+  assert.equal(bloque, 50);
+
+  const out = fundirChicas(g, ancho, alto, 20);
+  for (const [x, y] of [[1, 1], [2, 1], [1, 2]])
+    assert.equal(out[y * ancho + x], 255, `el píxel (${x},${y}) de la isla tendría que haber pasado a nodata`);
+  assert.deepEqual(tamanosComponentes(out, ancho, alto), [50], "tiene que quedar una sola componente, la del bloque");
+
+  // Y por la vía pública: una sola feature.
+  const datos = new Uint8Array(ancho * alto);
+  for (let i = 0; i < g.length; i++) datos[i] = g[i] === 255 ? 0 : (g[i] === 0 ? 40 : 200);
+  const bbox = { minX: 400000, minY: 6200000, maxX: 400000 + ancho * 10, maxY: 6200000 + alto * 10 };
+  const fc = zonificar({ datos, ancho, alto, bbox, zona: 20, n: 2, areaMinHa: 0.2 });   // 0,2 ha = 20 px
+  assert.equal(fc.features.length, 1, `tendría que quedar una sola feature (quedaron ${fc.features.length})`);
+});
+
+test("simplificarAnilloCompartido: una cadena cerrada no colapsa a un spike de área 0", () => {
+  // Grilla 7x7: bloque 3x3 de clase 1 y un píxel de clase 2 pegado a su
+  // esquina por la diagonal. El vértice (2,2) toca tres clases, así que es la
+  // ÚNICA junction del anillo del píxel: su cadena sale y vuelve al mismo
+  // vértice (primer punto === último). Mandada a `douglasPeucker` tal cual, DP
+  // se queda sólo con el vértice más lejano y devuelve [P, Q, P]: un spike de
+  // área 0 que después se descarta, y el píxel de clase 2 desaparece del mapa
+  // (y el hueco de la clase 0 queda con 9 px en vez de 10, desalineado del
+  // borde real). Yendo por `simplificarAnillo`, el anillo se conserva.
+  const ancho = 7, alto = 7;
+  const g = new Uint8Array(ancho * alto);                             // clase 0 de fondo
+  for (let y = 2; y <= 4; y++) for (let x = 2; x <= 4; x++) g[y * ancho + x] = 1;
+  g[1 * ancho + 1] = 2;
+
+  const porClase = vectorizarClases(g, ancho, alto, 3);
+  assert.equal(porClase[2].length, 1, "el píxel de clase 2 tiene que sobrevivir como polígono");
+  assert.equal(Math.abs(areaFirmada(porClase[2][0].ext)), 1, "y con área 1 px², no 0");
+
+  // Cada centro de píxel cae en exactamente una clase, y en la que le toca.
+  const malos = [];
+  for (let y = 0; y < alto; y++) {
+    for (let x = 0; x < ancho; x++) {
+      const dentro = [];
+      for (let c = 0; c < 3; c++) if (polysContienen(porClase[c], [x + 0.5, y + 0.5])) dentro.push(c);
+      if (dentro.length !== 1 || dentro[0] !== g[y * ancho + x]) malos.push(`(${x},${y}) esperaba ${g[y * ancho + x]} y dio [${dentro}]`);
+    }
+  }
+  assert.deepEqual(malos, [], malos.join("; "));
+});
+
+test("puntoInterior: no cae sobre una arista cuando el vértice de yMin tiene verticales de los dos lados", () => {
+  // Las dos aristas pegadas a (935,475) son verticales en x=935, así que la
+  // línea de barrido entre 475 y 478 las corta a las dos en el MISMO x:
+  // xs[0] === xs[1] y el punto medio queda justo sobre el borde, no adentro.
+  const a = [[935, 478], [935, 475], [935, 483], [945, 483], [945, 478], [935, 478]];
+  const p = puntoInterior(a);
+  assert.ok(p, "tiene que encontrar un punto interior");
+  assert.ok(puntoEnAnillo(p, a), `el punto ${JSON.stringify(p)} cayó sobre el borde, no adentro`);
 });
