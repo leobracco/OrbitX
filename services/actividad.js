@@ -45,7 +45,7 @@ function armarResumen({ temporada, rango, coberturas = [], maestros = [], device
 }
 
 async function cargarCoberturas(estabDB) {
-  // Solo los archivos de cobertura (uno por lote): contenido + ts. Índice ["tipo","es_lote","lote_nombre"].
+  // Solo los archivos de cobertura (uno por lote): contenido + ts. Índice ["tipo","subtipo","es_lote"].
   const r = await estabDB.find({ selector: { tipo: "aog_archivo", es_lote: true, subtipo: "sections_coverage" }, limit: 2000 });
   return (r.docs || []).map(d => ({ lote_nombre: d.lote_nombre, ts: d.ts || 0, stats: d.contenido ? calcularStats(d.contenido, null) : null }));
 }
@@ -58,10 +58,10 @@ async function resumenActividad(slug, { temporada } = {}) {
   const estabDB = db.getDB(slug), globalDB = db.getDB("global");
   const [coberturas, maestros, devs, lluv, alertas] = await Promise.all([
     cargarCoberturas(estabDB),
-    estabDB.find({ selector: { tipo: "lote_maestro" }, fields: ["nombre", "cultivo", "temporada"], limit: 2000 }).then(r => r.docs).catch(() => []),
-    globalDB.find({ selector: { tipo: "device", estab_slug: slug }, fields: ["device_id", "hostname", "ultimo_visto"], limit: 500 }).then(r => r.docs).catch(() => []),
-    estabDB.find({ selector: { tipo: "lluvia_registro" }, fields: ["fecha", "mm", "lote"], limit: 2000 }).then(r => r.docs).catch(() => []),
-    db.getAlertasActivas(slug).catch(() => []),
+    estabDB.find({ selector: { tipo: "lote_maestro" }, fields: ["nombre", "cultivo", "temporada"], limit: 2000 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
+    globalDB.find({ selector: { tipo: "device", estab_slug: slug }, fields: ["device_id", "hostname", "ultimo_visto"], limit: 500 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
+    estabDB.find({ selector: { tipo: "lluvia_registro" }, fields: ["fecha", "mm", "lote"], limit: 2000 }).then(r => r.docs).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
+    db.getAlertasActivas(slug).catch(e => { console.warn("[actividad] consulta secundaria falló:", e.message); return []; }),
   ]);
   const data = armarResumen({ temporada: temp, rango: rangoTemporada(temp), coberturas, maestros, devices: devs, lluvias: lluv, alertas });
   _cache.set(key, { ts: Date.now(), data });
