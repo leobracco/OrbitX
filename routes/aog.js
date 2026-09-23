@@ -182,6 +182,16 @@ router.post("/sync", deviceAuth, async (req, res) => {
         // Preservar la modalidad de la versión anterior (texto vs binario).
         if (typeof existing.contenido_base64 === "string") histDoc.contenido_base64 = existing.contenido_base64;
         else histDoc.contenido = existing.contenido;
+        // Sprint 2: stats al historial
+        // El doc que se archiva YA tiene sus stats calculadas de su propio
+        // sync: copiarlas cuesta cero y es lo que hace viable comparar
+        // temporadas (Pieza 2) sin reparsear los 11,1 GB de contenido
+        // historico de el_susto.
+        if (existing.stats) {
+          histDoc.stats     = existing.stats;
+          histDoc.stats_ver = existing.stats_ver;
+        }
+        // fin Sprint 2: stats al historial
         await estabDB.insert(histDoc).catch(() => {});
       }
     } catch {}
@@ -200,6 +210,16 @@ router.post("/sync", deviceAuth, async (req, res) => {
 
     console.log(`[AOG] ✓ ${deviceId} → ${ruta_rel}${esBinario ? " [bin "+contenido_base64.length+"b64]" : ""}`);
     res.json({ ok:true });
+
+    // Sprint 2: stats de cobertura precalculadas
+    // Va DESPUES de responder: el tractor no tiene que esperar el rasterizado
+    // y un fallo del calculo nunca rompe el sync. La cola es de concurrencia 1
+    // y relee el doc de CouchDB, asi que no retiene el contenido en memoria.
+    if ((subtipo || "") === "sections_coverage" && !esBinario) {
+      try { require("../services/cobertura_stats").encolarStats(estabSlug, docId); }
+      catch (e) { console.warn("[AOG/sync] encolarStats:", e.message); }
+    }
+    // fin Sprint 2: stats de cobertura precalculadas
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
