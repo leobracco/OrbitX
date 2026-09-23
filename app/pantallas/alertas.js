@@ -17,7 +17,9 @@ const COLOR_AVISO = { critico: "err", info: "info", ok: "ok" };
 
 function filaAviso(n) {
   const c = COLOR_AVISO[n.nivel] || "info";
-  return `<li class="fila"><span class="dot ${c}"></span>
+  // Misma opacidad que usa el panel (topbar.ejs / notificaciones.ejs) para
+  // distinguir de un vistazo lo ya leído de lo que falta.
+  return `<li class="fila" style="${n.leida ? "opacity:0.55" : ""}"><span class="dot ${c}"></span>
     <span class="txt"><b>${esc(n.titulo || "Aviso")}</b><span>${esc((n.cuerpo || "").slice(0, 90))}</span></span>
     <span class="val">${haceCuanto(n.ts)}</span></li>`;
 }
@@ -34,6 +36,10 @@ async function tarjetaPush() {
 
 export async function montar(ctx, root) {
   root.classList.add("scroll");
+  // Se mantiene entre llamadas de cargar() (el poll de 60 s): si falla la
+  // consulta a /no-leidas por estar sin red, el badge se queda con el último
+  // valor conocido en vez de aparentar "0 avisos sin leer" en falso.
+  let _ultimoNoLeidas = 0;
 
   function engancharBotonPush() {
     root.querySelector("#btn-push")?.addEventListener("click", async (ev) => {
@@ -61,9 +67,16 @@ export async function montar(ctx, root) {
     let avisos;
     try { avisos = await ctx.api.get("/api/notif-org/historial?limit=20"); } catch { avisos = { data: { items: [] } }; }
     const listaAvisos = avisos?.data?.items || [];
-    const noLeidas = listaAvisos.filter(n => !n.leida).length;
+    // El conteo del badge sale de /no-leidas (cuenta real sobre hasta 100
+    // avisos), no de esta página de 20 del historial: con más de 20 no leídos
+    // la página de 20 subestima el número. Sin red, se deja el último valor
+    // conocido (declarado arriba de cargar()) en vez de mostrar 0 en falso.
+    try {
+      const nl = await ctx.api.get("/api/notif-org/no-leidas");
+      _ultimoNoLeidas = nl?.data?.no_leidas ?? _ultimoNoLeidas;
+    } catch {}
     ctx.nav.setOffline(act.desdeCache, act.ts);
-    ctx.nav.setBadge("alertas", act.data.length + noLeidas);
+    ctx.nav.setBadge("alertas", act.data.length + _ultimoNoLeidas);
     const activasIds = new Set(act.data.map(a => a._id));
     const pasadas = hist.data.filter(a => !activasIds.has(a._id));
     root.innerHTML = `<div id="slot-push"></div>

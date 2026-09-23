@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import notis from "../../lib/notificaciones.js";
 
-const { armarNotificacion, contarNoLeidas, estaLeida, compactarLectura, mergearLecturas } = notis;
+const { armarNotificacion, urlSegura, contarNoLeidas, estaLeida, compactarLectura, mergearLecturas } = notis;
 
 test("armarNotificacion: forma completa del doc", () => {
   const n = armarNotificacion("nodo_caido", { titulo: "Equipo sin reportar", cuerpo: "PC-3 hace 20 min", url: "/app/#/equipos" }, 1700000000000);
@@ -26,6 +26,25 @@ test("armarNotificacion: sin titulo usa el evento y recorta lo largo", () => {
   const n = armarNotificacion("fin_tarea", { cuerpo: "x".repeat(5000) }, 1);
   assert.equal(n.titulo, "fin_tarea");
   assert.equal(n.cuerpo.length, 2000);
+});
+
+test("armarNotificacion: url insegura se guarda como null", () => {
+  const n = armarNotificacion("fin_tarea", { url: "javascript:alert(1)" }, 1);
+  assert.equal(n.url, null);
+});
+
+test("urlSegura: solo rutas relativas del propio sitio", () => {
+  assert.equal(urlSegura("/notificaciones"), "/notificaciones");
+  assert.equal(urlSegura("/app/#/equipos"), "/app/#/equipos");
+  assert.equal(urlSegura("//evil.com"), null);
+  assert.equal(urlSegura("javascript:alert(1)"), null);
+  assert.equal(urlSegura("https://x"), null);
+  assert.equal(urlSegura(null), null);
+  assert.equal(urlSegura(undefined), null);
+  assert.equal(urlSegura(123), null);
+  assert.equal(urlSegura(""), null);
+  assert.equal(urlSegura("/" + "a".repeat(300)), null); // 301 chars, supera el máximo
+  assert.equal(urlSegura("/" + "a".repeat(299)), "/" + "a".repeat(299)); // 300 chars, límite ok
 });
 
 test("estaLeida / contarNoLeidas con ts_hasta e ids sueltos", () => {

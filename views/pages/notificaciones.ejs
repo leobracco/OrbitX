@@ -24,6 +24,14 @@
 
 <script>
 function escAviso(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+// Defensa en profundidad: mismo criterio que urlSegura en lib/notificaciones.js
+// (el server ya filtra, pero no confiamos ciegamente al armar un href).
+function urlSeg(u) {
+  if (typeof u !== "string") return null;
+  if (!u.length || u.length > 300) return null;
+  if (!u.startsWith("/") || u.startsWith("//")) return null;
+  return u;
+}
 const TZ_AVISOS = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" };
 const COLOR_AVISO = { critico: "#E74C3E", info: "#9AA3AD", ok: "#A4BA3E" };
 const cabAvisos = () => ({ "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` });
@@ -37,7 +45,7 @@ function filaAviso(n) {
       <div style="font-size:12px;color:var(--muted2);line-height:1.6;white-space:pre-wrap">${escAviso(n.cuerpo || "")}</div>
       <div style="font-size:11px;color:var(--muted2);margin-top:4px">
         ${new Date(n.ts).toLocaleString("es-AR", TZ_AVISOS)} · ${escAviso(n.evento)}
-        ${n.url ? ` · <a href="${escAviso(n.url)}" style="color:var(--lime)">Ver</a>` : ""}
+        ${n.url ? ` · <a href="${escAviso(urlSeg(n.url) || "/notificaciones")}" style="color:var(--lime)">Ver</a>` : ""}
       </div>
     </div>
   </li>`;
@@ -71,6 +79,9 @@ async function marcarTodas() {
       body: JSON.stringify({ ts: Date.now() }),
     });
     cargar(true);
+    // Avisarle a la campanita del topbar que baje el badge, sin esperar su
+    // poll de 60 s (queda expuesta en window desde el bloque Sprint 2 del topbar).
+    window.refrescarBadge?.();
   } catch (e) { console.error(e); }
 }
 
