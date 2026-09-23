@@ -744,6 +744,19 @@ router.get("/mapa", async (req, res, next) => {
     if (!esTemporadaValida(req.query.temporada))
       return res.status(400).json({ error: "Temporada inválida (formato AAAA/AA)" });
     const rango = rangoTemporada(req.query.temporada);
+
+    // Mismo cache en memoria (60 s) que el /mapa de siempre, con la temporada
+    // adentro de la clave. Sin esto, cada movimiento del comparador bajaba y
+    // reparseaba el Sections.txt entero de la temporada (megas por lote) de
+    // forma sincrónica: dos paneles al lado sobre el mismo lote lo hacían dos
+    // veces seguidas.
+    const cacheKey = `temp::${miSlug || "sa"}::${slug}::${lote}::${req.query.temporada}`;
+    const cached = mapaCacheGet(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return res.json(mapaLite(cached, req));
+    }
+
     const estabDB = getEstabDB(slug);
 
     // Contorno y origen salen del estado vigente (no cambian por temporada).
@@ -777,7 +790,10 @@ router.get("/mapa", async (req, res, next) => {
       }
     }
 
-    res.json(mapaLite([{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }], req));
+    const salida = [{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }];
+    mapaCacheSet(cacheKey, salida);
+    res.set("X-Cache", "MISS");
+    res.json(mapaLite(salida, req));
   } catch (e) {
     console.error("[AOG/mapa temporada]", e);
     res.status(500).json({ error: e.message });
