@@ -79,6 +79,13 @@ router.post("/generar", ...guardW, async (req, res) => {
     const slug = orgDe(req);
     const { lote, fecha, indice, n_zonas, min_ha, dosis, unidad, sentido, nombre } = req.body || {};
     if (!lote) return res.status(400).json({ error: "Elegí un lote" });
+    // La cantidad de zonas se rechaza si viene fuera de rango en vez de
+    // recortarse: pedir 8 zonas y recibir 5 sin aviso es peor que un 400.
+    if (n_zonas !== undefined && n_zonas !== null && n_zonas !== "") {
+      const nz = Number(n_zonas);
+      if (!Number.isInteger(nz) || nz < 2 || nz > 5)
+        return res.status(400).json({ error: "La cantidad de zonas tiene que ser un número entero entre 2 y 5" });
+    }
     // El área mínima por zona se acota a [0,1 ; 5] ha. Si viene algo fuera de
     // rango o que no es número, se avisa en vez de recortarlo por lo bajo: el
     // que pidió 0,01 ha no quiere 0,1, quiere saber que no se puede.
