@@ -68,4 +68,4 @@ async function resumenActividad(slug, { temporada } = {}) {
   return data;
 }
 
-module.exports = { armarResumen, resumenActividad, ONLINE_MS };
+module.exports = { armarResumen, resumenActividad, cargarCoberturas, ONLINE_MS };
