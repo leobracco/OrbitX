@@ -161,6 +161,15 @@
   let _abierto = false;
   // Escapar texto que viene de la DB antes de pintarlo (título/cuerpo del aviso).
   function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+  // Defensa en profundidad: el server ya guarda solo rutas relativas propias
+  // (ver urlSegura en lib/notificaciones.js), pero no confiamos ciegamente
+  // en lo que viene de la DB al armar un href.
+  function urlSeg(u) {
+    if (typeof u !== "string") return null;
+    if (!u.length || u.length > 300) return null;
+    if (!u.startsWith("/") || u.startsWith("//")) return null;
+    return u;
+  }
 
   async function refrescarBadge() {
     try {
@@ -186,7 +195,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       const filas = (j.items || []).map(n => `
-        <a href="${esc(n.url || "/notificaciones")}" style="display:block;padding:10px 12px;border-bottom:1px solid var(--ap-border);
+        <a href="${esc(urlSeg(n.url) || "/notificaciones")}" style="display:block;padding:10px 12px;border-bottom:1px solid var(--ap-border);
            text-decoration:none;color:inherit;${n.leida ? "opacity:0.55" : ""}">
           <div style="display:flex;gap:8px;align-items:flex-start">
             <span style="width:7px;height:7px;border-radius:50%;background:${COLOR[n.nivel] || COLOR.info};margin-top:5px;flex-shrink:0"></span>
@@ -238,9 +247,20 @@
     }
   });
 
+  // Expuesta para que otras páginas (p.ej. /notificaciones, que corre en un
+  // <script> aparte del layout) puedan pedirle al topbar que se actualice
+  // apenas el usuario marca avisos como leídos ahí, sin esperar el poll.
+  window.refrescarBadge = refrescarBadge;
+
   document.addEventListener("DOMContentLoaded", () => {
     refrescarBadge();
     setInterval(refrescarBadge, 60000);
+  });
+
+  // Al volver de otra pestaña/app (mobile, minimizado) el badge puede estar
+  // desactualizado por más de 60 s: refrescar apenas la página vuelve a foco.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refrescarBadge();
   });
 })();
 </script>
