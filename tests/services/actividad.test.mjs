@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { armarResumen, firmaContornos, contornosCacheGet, contornosCacheSet, CONTORNOS_MS } from "../../services/actividad.js";
+import { armarResumen, firmaContornos, contornosCacheGet, contornosCacheSet, CONTORNOS_MS, contornoVigente } from "../../services/actividad.js";
 import { rangoTemporada } from "../../services/temporada.js";
 
 const rango = rangoTemporada("2025/26");
@@ -134,4 +134,19 @@ test("cache de contornos: vence a los 30 min", () => {
   contornosCacheSet("org-test-ttl", "1:1", mapa, ahora);
   assert.equal(contornosCacheGet("org-test-ttl", "1:1", ahora + CONTORNOS_MS - 1), mapa);
   assert.equal(contornosCacheGet("org-test-ttl", "1:1", ahora + CONTORNOS_MS), null);
+});
+
+// ── contorno precalculado (I13) — lógica pura de vigencia ────
+test("contornoVigente: true solo si contorno_hash coincide con hash_md5", () => {
+  assert.equal(contornoVigente({ hash_md5: "h1", contorno_hash: "h1", contorno_ha: 12.5 }), true);
+  assert.equal(contornoVigente({ hash_md5: "h1", contorno_hash: "h1", contorno_ha: null }), true); // parseo falló, pero es el resultado vigente para ESE contenido
+});
+
+test("contornoVigente: false si los hashes difieren, si falta alguno, o si no hay doc", () => {
+  assert.equal(contornoVigente({ hash_md5: "nuevo", contorno_hash: "viejo", contorno_ha: 1 }), false);
+  assert.equal(contornoVigente({ hash_md5: "h1", contorno_ha: 1 }), false);      // nunca se calculó (sin contorno_hash)
+  assert.equal(contornoVigente({ contorno_hash: "h1", contorno_ha: 1 }), false); // sin hash_md5, no se puede invalidar
+  assert.equal(contornoVigente({}), false);
+  assert.equal(contornoVigente(null), false);
+  assert.equal(contornoVigente(undefined), false);
 });

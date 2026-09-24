@@ -109,6 +109,23 @@ function contornosCacheSet(slug, firma, mapa, ahora = Date.now()) {
   limpiarCacheContornos(ahora);
 }
 
+// Pura: un doc de boundary_kml tiene el contorno confiable solo si se
+// calculó sobre el contenido actual (mismo criterio que statsVigentes: el
+// hash con el que se calculó tiene que coincidir con el hash del contenido
+// vigente). Si falta cualquiera de los dos hashes NO se confía.
+function contornoVigente(doc) {
+  if (!doc) return false;
+  if (!doc.hash_md5 || !doc.contorno_hash) return false;
+  return doc.contorno_hash === doc.hash_md5;
+}
+
+// Tope de boundary_kml sin contorno_ha precalculado que se bajan y parsean
+// en vivo en un mismo request. Sin tope, una org recién migrada (o con
+// lotes nuevos) reproduce el problema original (bajar y parsear los 2.000
+// KML); con tope, el resto queda precalculado solo en requests siguientes
+// (cada uno persiste lo que procesa) o vía el backfill (--contornos).
+const MAX_CONTORNOS_FALLBACK = 20;
+
 async function cargarContornos(estabDB, slug = null) {
   const porLote = new Map();
   try {
@@ -126,15 +143,47 @@ async function cargarContornos(estabDB, slug = null) {
       if (cacheado) return cacheado;
     }
 
+    // Sin "contenido": la mayoría de los boundary_kml ya tienen contorno_ha
+    // precalculado (Sprint 2, POST /api/aog/sync) y no hace falta bajarlos.
     const r = await estabDB.find({
       selector: { tipo: "aog_archivo", es_lote: true, subtipo: "boundary_kml" },
-      fields: ["lote_nombre", "contenido"],
+      fields: ["_id", "lote_nombre", "contorno_ha", "contorno_hash", "hash_md5", "ts"],
       limit: 2000,
     });
-    for (const d of r.docs || []) {
-      const ring = parseKML(d.contenido);
-      if (ring && d.lote_nombre) porLote.set(d.lote_nombre, Math.round(contornoM2(ring) / 100) / 100);
+    const docs = r.docs || [];
+    const faltan = [];
+    for (const d of docs) {
+      if (!d.lote_nombre) continue;
+      if (contornoVigente(d)) porLote.set(d.lote_nombre, d.contorno_ha ?? 0);
+      else faltan.push(d);
     }
+
+    // Los que no tienen contorno_ha vigente (docs viejos, de antes de esta
+    // pieza, o que cambiaron) se bajan de a uno y se parsean como antes.
+    // Se persiste el resultado para que la próxima vez ya esté.
+    for (const d of faltan.slice(0, MAX_CONTORNOS_FALLBACK)) {
+      try {
+        const full = await estabDB.get(d._id);
+        const ring = parseKML(full.contenido);
+        const ha = ring ? Math.round(contornoM2(ring) / 100) / 100 : null;
+        if (ring && full.lote_nombre) porLote.set(full.lote_nombre, ha);
+
+        // Best-effort: releer antes de escribir. Si el contenido cambió
+        // entre medio (otro sync llegó), se descarta y se reintenta solo
+        // en un request/backfill futuro con el dato fresco.
+        try {
+          const fresco = await estabDB.get(d._id);
+          if (fresco.hash_md5 === full.hash_md5) {
+            await estabDB.insert({ ...fresco, contorno_ha: ha, contorno_hash: full.hash_md5 });
+          }
+        } catch (e2) {
+          console.warn("[actividad] persistir contorno:", d._id, e2.message);
+        }
+      } catch (e) {
+        console.warn("[actividad] contorno fallback:", d._id, e.message);
+      }
+    }
+
     if (slug && firma !== null) contornosCacheSet(slug, firma, porLote);
   } catch (e) {
     console.warn("[actividad] contornos:", e.message);
@@ -199,7 +248,10 @@ async function resumenActividad(slug, { temporada } = {}) {
 }
 
 module.exports = {
-  armarResumen, resumenActividad, cargarCoberturas, separarPorStats, ONLINE_MS,
+  armarResumen, resumenActividad, cargarCoberturas, cargarContornos, separarPorStats, ONLINE_MS,
   // Expuestas para los tests puros del cache de contornos (sin CouchDB).
   firmaContornos, contornosCacheGet, contornosCacheSet, CONTORNOS_MS, CONTORNOS_MAX,
+  // Expuesta para los tests puros de contorno precalculado (I13) y para el
+  // backfill (--contornos), que reusa el mismo criterio de vigencia.
+  contornoVigente, MAX_CONTORNOS_FALLBACK,
 };
