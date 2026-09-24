@@ -206,6 +206,28 @@ router.post("/sync", deviceAuth, async (req, res) => {
     if (esBinario) docNuevo.contenido_base64 = contenido_base64;
     else docNuevo.contenido = contenido || "";
 
+    // Sprint 2: contorno precalculado
+    // El boundary_kml es el único subtipo que trae el contorno en WGS84 listo
+    // para medir (el subtipo "boundary" es Boundary.txt en coordenadas
+    // locales, necesita el origen del lote y no lo tenemos acá). Calcularlo
+    // es barato (un KML son unos KB, el parseo tarda ms) así que se hace
+    // sincrónico y ANTES de insertar — a diferencia de las stats de
+    // cobertura (raster, caro), esto no justifica una cola. Igual que las
+    // stats, un fallo del parseo nunca rompe el sync: contorno_ha queda null.
+    if (subtipo === "boundary_kml" && !esBinario) {
+      try {
+        const { parseKML, contornoM2 } = require("../services/aog_parser");
+        const ring = parseKML(docNuevo.contenido);
+        docNuevo.contorno_ha = ring ? Math.round(contornoM2(ring) / 100) / 100 : null;
+        docNuevo.contorno_hash = hash_md5 || null;
+      } catch (e) {
+        console.warn("[AOG/sync] contorno_ha:", e.message);
+        docNuevo.contorno_ha = null;
+        docNuevo.contorno_hash = hash_md5 || null;
+      }
+    }
+    // fin Sprint 2: contorno precalculado
+
     await _upsert(estabDB, docId, docNuevo);
 
     console.log(`[AOG] ✓ ${deviceId} → ${ruta_rel}${esBinario ? " [bin "+contenido_base64.length+"b64]" : ""}`);
