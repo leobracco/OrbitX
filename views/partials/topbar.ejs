@@ -21,6 +21,20 @@
       </div>
     </div>
 
+<%# Sprint 2: badge notificaciones %>
+    <div id="notif-selector" style="position:relative;display:flex;align-items:center;cursor:pointer;user-select:none;padding:4px 6px"
+      onclick="toggleNotifDropdown(event)" title="Avisos">
+      <span style="font-size:16px;line-height:1">🔔</span>
+      <span id="notif-badge" style="display:none;position:absolute;top:0;right:0;min-width:15px;height:15px;
+            border-radius:8px;background:var(--ap-red,#E74C3E);color:#fff;font-size:9px;line-height:15px;
+            text-align:center;padding:0 3px;font-weight:600">0</span>
+      <div id="notif-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:340px;max-height:60vh;overflow:auto;
+               background:var(--ap-card);border:1px solid var(--ap-border);border-radius:8px;
+               box-shadow:0 12px 32px rgba(0,0,0,0.5);z-index:120;text-align:left">
+      </div>
+    </div>
+<%# fin Sprint 2: badge notificaciones %>
     <span class="topbar-time" id="topbar-time"></span>
     <% if (typeof topbarActions !== 'undefined') { %>
       <%- topbarActions %>
@@ -30,8 +44,14 @@
 
 <script>
 (function () {
-  let _membs = [];
+  let _opciones = [];   // [{slug, sub}] — para SA son todas las orgs; para el resto, sus membresías
   let _orgActiva = "";
+  let _esSA = false;
+
+  // El nombre, el slug y el rol de una org son texto libre cargado por un
+  // humano: volcarlos crudos en innerHTML es XSS almacenado (cualquiera que
+  // pueda renombrar una org le inyecta script al topbar de todo el panel).
+  function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
 
   async function cargarOrgs() {
     try {
@@ -40,40 +60,61 @@
       });
       if (!r.ok) return;
       const u = await r.json();
-      _membs = u.memberships || [];
-      _orgActiva = u.prefs?.org_activa || _membs[0]?.orgSlug || "";
+      _esSA = u.rol_global === "superadmin";
+      _orgActiva = u.org_activa || "";
+
+      if (_esSA) {
+        // Superadmin: puede entrar a cualquier org de la plataforma
+        const ro = await fetch("/api/admin/orgs", {
+          headers: { "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` }
+        });
+        const orgs = ro.ok ? await ro.json() : [];
+        _opciones = orgs.map(o => ({ slug: o.slug, sub: o.nombre || o.slug }));
+      } else {
+        const membs = u.memberships || [];
+        if (!_orgActiva) _orgActiva = u.prefs?.org_activa || membs[0]?.orgSlug || "";
+        _opciones = membs.map(m => ({ slug: m.orgSlug, sub: m.rol }));
+      }
       pintar();
     } catch {}
   }
 
   function pintar() {
     const lbl = document.getElementById("org-actual");
-    const memb = _membs.find(m => m.orgSlug === _orgActiva);
-    if (lbl) lbl.textContent = memb?.orgSlug || _orgActiva || "—";
+    if (lbl) lbl.textContent = _orgActiva || (_esSA ? "Global" : "—");
 
     const dd = document.getElementById("org-dropdown");
     if (!dd) return;
-    if (!_membs.length) {
+    if (!_opciones.length && !_esSA) {
       dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Sin orgs disponibles</div>`;
       return;
     }
-    dd.innerHTML = _membs.map(m => {
-      const activa = m.orgSlug === _orgActiva;
+    const items = _esSA
+      ? [{ slug: "", sub: "todas las orgs", label: "Vista global" }, ..._opciones]
+      : _opciones;
+    // data-slug + listener en vez de onclick="cambiarOrg('…')": escapar para
+    // HTML no alcanza adentro de un atributo de evento, que es contexto de
+    // JavaScript (un slug con una comilla ya ejecutaba código).
+    dd.innerHTML = items.map(m => {
+      const activa = m.slug === _orgActiva;
       return `
-        <div onclick="cambiarOrg('${m.orgSlug.replace(/'/g, "\\'")}')"
+        <div data-slug="${esc(m.slug)}"
           style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--ap-border-soft);transition:background .1s;${activa ? 'background:var(--ap-green-dim)' : ''}"
           onmouseover="this.style.background='${activa ? 'var(--ap-green-dim)' : 'var(--ap-bg)'}'"
           onmouseout="this.style.background='${activa ? 'var(--ap-green-dim)' : 'transparent'}'">
           <div style="display:flex;align-items:center;gap:8px">
             ${activa ? '<span style="color:var(--ap-green);font-size:14px">●</span>' : '<span style="width:14px"></span>'}
             <div style="flex:1;min-width:0">
-              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${m.orgSlug}</div>
-              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${m.rol}</div>
+              <div style="font-size:13px;color:var(--ap-text);font-weight:${activa ? 600 : 500}">${esc(m.label || m.slug)}</div>
+              <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:0.5px">${esc(m.sub || "")}</div>
             </div>
           </div>
         </div>
       `;
     }).join("");
+    dd.querySelectorAll("div[data-slug]").forEach(el => {
+      el.addEventListener("click", () => cambiarOrg(el.dataset.slug || ""));
+    });
   }
 
   window.toggleOrgDropdown = function (e) {
@@ -117,3 +158,131 @@
   document.addEventListener("DOMContentLoaded", cargarOrgs);
 })();
 </script>
+
+<%# Sprint 2: badge notificaciones · script %>
+<script>
+(function () {
+  // Ojo: este partial se renderiza en TODAS las páginas del panel. Todo va
+  // envuelto en try/catch y con optional chaining: un error acá rompe el panel
+  // entero.
+  const TZ = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+  const tok = () => localStorage.getItem("orbitx_token") || "";
+  const cab = () => ({ "Authorization": `Bearer ${tok()}` });
+  const COLOR = { critico: "#E74C3E", info: "#9AA3AD", ok: "#A4BA3E" };
+  let _abierto = false;
+  // Escapar texto que viene de la DB antes de pintarlo (título/cuerpo del aviso).
+  function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+  // Defensa en profundidad: el server ya guarda solo rutas relativas propias
+  // (ver urlSegura en lib/notificaciones.js), pero no confiamos ciegamente
+  // en lo que viene de la DB al armar un href.
+  function urlSeg(u) {
+    if (typeof u !== "string") return null;
+    if (!u.length || u.length > 300) return null;
+    if (!u.startsWith("/") || u.startsWith("//") || u.includes("\\")) return null;
+    return u;
+  }
+
+  async function refrescarBadge() {
+    try {
+      const r = await fetch("/api/notif-org/no-leidas", { headers: cab() });
+      if (!r.ok) return;
+      const j = await r.json();
+      const b = document.getElementById("notif-badge");
+      if (!b) return;
+      // Ojo: el endpoint real devuelve { ok, no_leidas, hay_mas } (no { n }
+      // como asumía el brief original) — ver routes/notif_org.js.
+      const n = j.no_leidas || 0;
+      b.textContent = n > 99 ? "99+" : String(n);
+      b.style.display = n > 0 ? "block" : "none";
+    } catch {}
+  }
+
+  // El superadmin en vista global no tiene org activa: el endpoint contesta
+  // 400 "Sin org activa". Eso no es un error a mostrar en crudo, es un estado
+  // normal de la pantalla.
+  const SIN_ORG = /sin organizaci[oó]n activa|sin org activa/i;
+  function esSinOrg(status, msg) { return status === 400 && SIN_ORG.test(String(msg || "")); }
+
+  async function pintarLista() {
+    const dd = document.getElementById("notif-dropdown");
+    if (!dd) return;
+    dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Cargando…</div>`;
+    try {
+      const r = await fetch("/api/notif-org/historial?limit=20", { headers: cab() });
+      const j = await r.json();
+      if (esSinOrg(r.status, j.error)) {
+        dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">Elegí una organización para ver esto</div>`;
+        return;
+      }
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const filas = (j.items || []).map(n => `
+        <a href="${esc(urlSeg(n.url) || "/notificaciones")}" style="display:block;padding:10px 12px;border-bottom:1px solid var(--ap-border);
+           text-decoration:none;color:inherit;${n.leida ? "opacity:0.55" : ""}">
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <span style="width:7px;height:7px;border-radius:50%;background:${COLOR[n.nivel] || COLOR.info};margin-top:5px;flex-shrink:0"></span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600;color:var(--ap-text)">${esc(n.titulo)}</div>
+              <div style="font-size:11px;color:var(--ap-muted);line-height:1.5;white-space:pre-wrap">${esc((n.cuerpo || "").slice(0, 160))}</div>
+              <div style="font-size:10px;color:var(--ap-muted);margin-top:3px">${new Date(n.ts).toLocaleString("es-AR", TZ)}</div>
+            </div>
+          </div>
+        </a>`).join("");
+      dd.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--ap-border)">
+          <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ap-muted);flex:1">Avisos</span>
+          <button id="notif-marcar" style="background:none;border:none;color:var(--ap-green,#A4BA3E);cursor:pointer;font-size:11px">Marcar leídas</button>
+        </div>
+        ${filas || `<div style="padding:16px;color:var(--ap-muted);font-size:11px;text-align:center">Sin avisos todavía.</div>`}
+        <a href="/notificaciones" style="display:block;padding:10px;text-align:center;font-size:11px;color:var(--ap-muted);text-decoration:none">Ver todos</a>`;
+      dd.querySelector("#notif-marcar")?.addEventListener("click", async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        try {
+          await fetch("/api/notif-org/leidas", {
+            method: "POST",
+            headers: Object.assign(cab(), { "Content-Type": "application/json" }),
+            body: JSON.stringify({ ts: Date.now() }),
+          });
+          await refrescarBadge();
+          await pintarLista();
+        } catch {}
+      });
+    } catch (e) {
+      dd.innerHTML = `<div style="padding:14px;color:var(--ap-muted);font-size:11px;text-align:center">No se pudieron cargar los avisos.</div>`;
+    }
+  }
+
+  window.toggleNotifDropdown = function (ev) {
+    ev?.stopPropagation();
+    const dd = document.getElementById("notif-dropdown");
+    if (!dd) return;
+    _abierto = !_abierto;
+    dd.style.display = _abierto ? "block" : "none";
+    if (_abierto) pintarLista();
+  };
+
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#notif-selector")) {
+      const dd = document.getElementById("notif-dropdown");
+      if (dd) dd.style.display = "none";
+      _abierto = false;
+    }
+  });
+
+  // Expuesta para que otras páginas (p.ej. /notificaciones, que corre en un
+  // <script> aparte del layout) puedan pedirle al topbar que se actualice
+  // apenas el usuario marca avisos como leídos ahí, sin esperar el poll.
+  window.refrescarBadge = refrescarBadge;
+
+  document.addEventListener("DOMContentLoaded", () => {
+    refrescarBadge();
+    setInterval(refrescarBadge, 60000);
+  });
+
+  // Al volver de otra pestaña/app (mobile, minimizado) el badge puede estar
+  // desactualizado por más de 60 s: refrescar apenas la página vuelve a foco.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refrescarBadge();
+  });
+})();
+</script>
+<%# fin Sprint 2: badge notificaciones · script %>

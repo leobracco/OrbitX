@@ -73,30 +73,20 @@ async function deviceAuth(req, res, next) {
     let doc = await globalDB.get(`device_${deviceId}`).catch(() => null);
 
     if (!doc) {
-      // Auto-registro SOLO si vino con el MASTER_TOKEN.
-      // Sin master token, un dispositivo desconocido no se auto-registra:
-      // primero hay que crearlo desde el panel para evitar que cualquiera
-      // se registre con un token arbitrario.
-      if (token !== MASTER_TOKEN)
-        return res.status(401).json({ error: "Dispositivo no registrado" });
-
-      const now = Date.now();
-      await globalDB.insert({
-        _id:         `device_${deviceId}`,
-        tipo:        "device",
-        device_id:   deviceId,
-        nombre:      deviceId,
-        token,                          // queda con el master token, regenerar desde panel
-        estab_slug:  null,
-        bloqueado:   false,
-        hostname:    null, platform: null, mac: null, aog_path: null,
-        version:     null, ultimo_visto: null, online: false,
-        auto_registrado: true,
-        creado_por:  "auto",
-        created_at:  now, updated_at: now,
+      // AUTO-REGISTRO APAGADO (2026-09-20).
+      // Antes, cualquiera con el DEVICE_MASTER_TOKEN — un unico secreto
+      // compartido por toda la flota, filtrado el 2026-09-05 y nunca rotado —
+      // daba de alta un device_id inventado y quedaba autenticado como equipo.
+      // El alta ahora es SOLO por el flow de pairing por codigo
+      // (POST /api/devices/pair/init + /pair/claim desde el panel), que ya
+      // esta en produccion y entrega token propio por equipo.
+      // Al 2026-09-20 los 7 equipos registrados tienen token propio: ninguno
+      // dependia de este camino.
+      console.warn(`[Devices] Alta rechazada (auto-registro apagado): ${deviceId}`);
+      return res.status(401).json({
+        error: "Dispositivo no registrado",
+        detalle: "Vinculá la pantalla desde el panel con el código de vinculación",
       });
-      doc = await globalDB.get(`device_${deviceId}`);
-      console.log(`[Devices] Auto-registrado con master token: ${deviceId}`);
     } else if (doc.token !== token) {
       // Dispositivo existe pero el token no coincide.
       // Aceptamos master token solo si el doc todavía no tiene token propio (legacy).
@@ -261,6 +251,10 @@ router.get("/", noDevices, async (req, res) => {
       docs = all.rows.map(r => r.doc).filter(d => d.tipo === "device");
     }
 
+    // ?estab=<slug> (app móvil): un superadmin ve solo esa org. Sin el
+    // parámetro sigue viendo todas, que es lo que espera el panel.
+    const filtroEstab = typeof req.query.estab === "string" && req.query.estab ? req.query.estab : null;
+    if (esSA && filtroEstab) docs = docs.filter(d => d.estab_slug === filtroEstab);
     if (!esSA) {
       // Sin org activa, no devolver nada.
       if (!miSlug) return res.json([]);
@@ -651,7 +645,9 @@ router.get("/pair/status/:code", async (req, res) => {
   });
 });
 
-module.exports = { router, deviceAuth };
+// noDevices se exporta para que otros routers (ota) usen el mismo guard
+// en vez de reescribirlo.
+module.exports = { router, deviceAuth, noDevices };
 
 // ══════════════════════════════════════════════════════════
 //  DELETE /api/devices/:deviceId  — borrar dispositivo

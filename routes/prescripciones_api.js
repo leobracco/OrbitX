@@ -77,12 +77,22 @@ router.get("/pendientes", async (req, res) => {
     if (!slug) return res.json([]);
 
     const estabDB = db.getDB(slug);
+    // NO filtrar por subtipo: ésta es la ÚNICA ruta que PilotX usa para bajar
+    // todos sus `aog_descarga_pendiente`, no solo las prescripciones. Los lotes
+    // creados en OrbitX se encolan en routes/lotes_maestro.js con subtipo
+    // field_origin / boundary / boundary_kml y ruta_rel `Fields/<lote>/…`, y es
+    // PilotX quien rutea por `ruta_rel` (a Fields/ o a data/prescripciones).
+    // Filtrar por subtipo:"prescripcion" acá rompe la bajada de lotes al tractor.
+    // `fields`: el listado no lleva `contenido` (un GeoJSON de varios cientos de
+    // KB por doc, x50) — el tractor lo pide después por /pendientes/:id/contenido.
+    // Índice ["tipo","device_id","entregado"] (services/couchdb.js).
     const r = await estabDB.find({
       selector: {
         tipo: "aog_descarga_pendiente",
         device_id: deviceId,
         entregado: false
       },
+      fields: ["_id", "nombre", "ruta_rel", "subtipo", "producto", "ts"],
       limit: 50
     });
 
@@ -126,15 +136,18 @@ router.get("/pendientes/:id/contenido", async (req, res) => {
     if (doc.device_id !== deviceId)
       return res.status(403).json({ error: "No autorizado" });
 
-    // Marcar como entregado.
-    await estabDB.insert({ ...doc, entregado: true, entregado_at: Date.now() });
-
+    // Marcar como entregado DESPUÉS de responder: si la respuesta se pierde en
+    // el camino (el campo tiene la conexión que tiene), la prescripción sigue
+    // pendiente y el tractor la vuelve a pedir.
     res.json({
       nombre: doc.nombre,
       ruta_rel: doc.ruta_rel,
       contenido: doc.contenido,
       producto: doc.producto
     });
+
+    estabDB.insert({ ...doc, entregado: true, entregado_at: Date.now() })
+      .catch(e => console.warn("[prescripciones] marcar entregado:", e.message));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

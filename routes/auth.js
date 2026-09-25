@@ -73,6 +73,8 @@ router.get("/me", required, async (req, res) => {
     const { password_hash, reset_token, ...safe } = user;
     safe.memberships  = req.user.memberships;
     safe.rol_efectivo = req.user.rol;
+    safe.org_activa   = req.user.estabSlug || null; // org del token vigente
+
     res.json(safe);
   } catch { res.status(404).json({ error:"Usuario no encontrado" }); }
 });
@@ -80,9 +82,10 @@ router.get("/me", required, async (req, res) => {
 router.post("/cambiar-org", required, async (req, res) => {
   try {
     const { orgSlug } = req.body;
-    if (typeof orgSlug !== "string" || !orgSlug)
+    // orgSlug "" = vista global (solo superadmin, lo valida el service)
+    if (typeof orgSlug !== "string")
       return res.status(400).json({ error:"orgSlug requerido" });
-    const r = await svc.cambiarOrg(req.user.uid, orgSlug);
+    const r = await svc.cambiarOrg(req.user.uid, orgSlug || null);
     res.json(r);
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });
@@ -95,6 +98,44 @@ router.post("/push-token", required, async (req, res) => {
     await db.insert({ ...user, notificaciones:{...user.notificaciones, push_token:req.body.token, push_tokens:tokens}, updated_at:Date.now() });
     res.json({ ok:true });
   } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ── Web Push (app móvil) ────────────────────────────────
+// Guarda la suscripción completa {endpoint, keys} que necesita web-push.
+// Distinto de /push-token (strings de FCM/Expo), que se deja como está.
+router.get("/push-public-key", (req, res) => {
+  const { VAPID_PUBLIC_KEY, configurado } = require("../lib/push");
+  res.json({ key: configurado() ? VAPID_PUBLIC_KEY : null });
+});
+router.post("/push-subscribe", required, async (req, res) => {
+  try {
+    const sub = req.body?.subscription;
+    if (!sub || typeof sub.endpoint !== "string" || !sub.keys?.p256dh || !sub.keys?.auth)
+      return res.status(400).json({ error: "subscription inválida" });
+    const { endpointValido } = require("../lib/push");
+    if (!endpointValido(sub.endpoint))
+      return res.status(400).json({ error: "endpoint de push no permitido" });
+    if (!(typeof sub.keys.p256dh === "string" && sub.keys.p256dh.length <= 256 && typeof sub.keys.auth === "string" && sub.keys.auth.length <= 64))
+      return res.status(400).json({ error: "subscription inválida" });
+    const db   = req.app.locals.globalDB;
+    const user = await db.get(`usr_${req.user.uid}`);
+    const previas = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== sub.endpoint);
+    const push_subs = [...previas, { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, ua: String(req.headers["user-agent"] || "").slice(0, 120), ts: Date.now() }].slice(-5);
+    await db.insert({ ...user, notificaciones: { ...user.notificaciones, push_subs }, updated_at: Date.now() });
+    res.json({ ok: true, total: push_subs.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/push-unsubscribe", required, async (req, res) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (typeof endpoint !== "string")
+      return res.status(400).json({ error: "endpoint requerido" });
+    const db   = req.app.locals.globalDB;
+    const user = await db.get(`usr_${req.user.uid}`);
+    const push_subs = (user.notificaciones?.push_subs || []).filter(s => s.endpoint !== endpoint);
+    await db.insert({ ...user, notificaciones: { ...user.notificaciones, push_subs }, updated_at: Date.now() });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Password reset ────────────────────────────────────────────
@@ -116,6 +157,7 @@ router.post("/invitar", required, requirePermiso("usuarios","invite"), async (re
     const { email, nombre, rol, restricciones } = req.body;
     if (!email||!rol) return res.status(400).json({ error:"email y rol requeridos" });
     if (!ROLES[rol])  return res.status(400).json({ error:`Rol inválido: ${rol}` });
+    if (!req.user.estabSlug) return res.status(400).json({ error:"Sin establecimiento activo: entrá a una organización primero" });
     const r = await svc.crearInvitacion({
       emailDestino:email, nombreDestino:nombre||"",
       orgSlug:req.user.estabSlug, rolAsignado:rol,
@@ -129,9 +171,22 @@ router.post("/invitar", required, requirePermiso("usuarios","invite"), async (re
 router.get("/invitacion/:token", async (req, res) => {
   try {
     const inv = await svc.getInvitacion(req.params.token);
+    const ya_existe = await svc.emailTieneCuenta(inv.email_destino).catch(() => false);
     res.json({ orgNombre:inv.orgNombre, orgSlug:inv.orgSlug, rol:inv.rol_asignado,
                rol_label:ROLES[inv.rol_asignado]?.label, invitadoPor:inv.invitado_por_nombre,
-               emailDestino:inv.email_destino, expira_at:inv.expira_at });
+               emailDestino:inv.email_destino, expira_at:inv.expira_at, ya_existe });
+  } catch(e) { res.status(e.status||500).json({ error:e.message }); }
+});
+
+// Cancelar una invitación pendiente (owner/admin de la org, o superadmin)
+router.delete("/invitacion/:token", required, requirePermiso("usuarios","invite"), async (req, res) => {
+  try {
+    await svc.cancelarInvitacion(req.params.token, {
+      orgSlug:        req.user.estabSlug,
+      esSuperadmin:   req.user.rol_global === "superadmin",
+      ejecutadoPorUID:`usr_${req.user.uid}`,
+    });
+    res.json({ ok:true });
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });
 
@@ -148,9 +203,24 @@ router.post("/invitacion/:token/aceptar", async (req, res) => {
 
 router.get("/invitaciones-pendientes", required, requirePermiso("usuarios","invite"), async (req, res) => {
   try {
-    const db = req.app.locals.globalDB;
-    const r  = await db.view("auth","invitaciones_pendientes",{ key:req.user.estabSlug, include_docs:true, reduce:false });
-    res.json(r.rows.map(x=>x.doc).map(({token,...s})=>s));
+    // find() directo — la vista "auth/invitaciones_pendientes" (schema_auth.js)
+    // nunca se instaló en CouchDB y este endpoint devolvía 500.
+    const db   = req.app.locals.globalDB;
+    const r    = await db.find({ selector: { tipo:"invitacion", orgSlug:req.user.estabSlug, estado:"pendiente" }, limit: 100 });
+    const base = process.env.BASE_URL || "http://localhost:4000";
+    res.json(r.docs
+      .sort((a,b) => (b.created_at||0) - (a.created_at||0))
+      .map(d => ({
+        token:               d.token,
+        link:                `${base}/invitacion/${d.token}`,
+        email_destino:       d.email_destino,
+        nombre_destino:      d.nombre_destino,
+        rol_asignado:        d.rol_asignado,
+        invitado_por_nombre: d.invitado_por_nombre,
+        created_at:          d.created_at,
+        expira_at:           d.expira_at,
+        expirada:            Date.now() > d.expira_at,
+      })));
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
@@ -162,14 +232,14 @@ router.get("/equipo", required, requirePermiso("usuarios","read"), async (req, r
 
 router.patch("/equipo/:uid", required, requirePermiso("usuarios","write"), async (req, res) => {
   try {
-    await svc.actualizarMembresia(req.params.uid, req.user.estabSlug, req.body, `usr_${req.user.uid}`);
+    await svc.actualizarMembresia(req.params.uid, req.user.estabSlug, req.body, `usr_${req.user.uid}`, req.user.rol);
     res.json({ ok:true });
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });
 
 router.delete("/equipo/:uid", required, requirePermiso("usuarios","delete"), async (req, res) => {
   try {
-    await svc.revocarAcceso(req.params.uid, req.user.estabSlug, `usr_${req.user.uid}`);
+    await svc.revocarAcceso(req.params.uid, req.user.estabSlug, `usr_${req.user.uid}`, req.user.rol);
     res.json({ ok:true });
   } catch(e) { res.status(e.status||500).json({ error:e.message }); }
 });

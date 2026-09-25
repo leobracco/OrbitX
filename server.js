@@ -172,6 +172,16 @@ app.use("/flash", (req, res, next) => {
     return res.redirect("/login");
   }
 }, express.static(path.join(__dirname, "flash-app")));
+// ── App móvil (PWA) ───────────────────────────────────────
+// Se sirve como estático puro: sin build, el service worker maneja la
+// actualización. index.html y sw.js con no-cache para que la versión nueva
+// llegue apenas se despliega; el resto lo cachea el SW.
+app.use("/app", express.static(path.join(__dirname, "app"), {
+  setHeaders(res, filePath) {
+    if (/(index\.html|sw\.js|version\.json)$/.test(filePath))
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  },
+}));
 app.use(express.static(path.join(__dirname, "public")));
 app.use((req, _, next) => {
   req.io = io;
@@ -188,6 +198,11 @@ app.use("/api/lotes", auth.required, routeLotes);
 app.use("/api/alertas", auth.required, routeAlertas);
 app.use("/api/config", auth.required, routeConfig);
 app.use("/api/lotes-maestro", auth.required, routeLotesMaestro);
+// Sprint 2: prescripciones en CouchDB
+// Va ANTES del montaje viejo de /api/prescripciones: las rutas de acá (/docs,
+// /generar, /migrar) no chocan con /pendientes, que sigue con auth de device.
+app.use("/api/prescripciones", require("./routes/prescripciones"));
+// fin Sprint 2: prescripciones en CouchDB
 app.use("/api/integraciones", auth.required, routeIntegraciones);
 if (routeNDVI) app.use("/api/ndvi", auth.required, routeNDVI);
 // Tracking: POST position sin JWT (device auth), GET live/history con JWT.
@@ -203,6 +218,9 @@ app.use("/api/prescripciones", (req, res, next) => {
 app.use("/api/admin", auth.required, auth.adminOnly, routeAdmin);
 app.use("/api/config-sistema", auth.required, routeConfigSistema);
 app.use("/api/notif-org",      auth.required, routeNotifOrg);
+// Sprint 2: tokens de org
+app.use("/api/tokens-org", auth.required, auth.adminOnly, require("./routes/tokens_org"));
+// fin Sprint 2: tokens de org
 // Puente CRM (solo lectura, token de servicio propio — ver routes/crm.js).
 app.use("/api/crm", require("./routes/crm"));
 // AgrarIA local (PC del usuario): estado de solo lectura con deviceAuth, sin JWT.
@@ -211,6 +229,17 @@ app.use("/api/agraria",        auth.required, routeAgraria);
 // Grupos: JWT + guard superadmin interno (router.use(soloAdmin) en grupos.js).
 app.use("/api/grupos",         auth.required, routeGrupos);
 app.use("/api/lluvias",        auth.required, routeLluvias);
+// ── Sprint 1: actividad / reportes / releases ─────────────
+// noDevices: un token de equipo (PilotX) no tiene por qué leer la actividad ni los reportes de la org.
+const { noDevices: sinEquipos } = require("./routes/devices");
+app.use("/api/actividad", auth.required, sinEquipos, require("./routes/actividad"));
+app.use("/api/reportes", auth.required, sinEquipos, require("./routes/reportes"));
+app.use("/reportes", auth.required, sinEquipos, require("./routes/reportes"));
+app.use("/api/ota/publico", require("./routes/ota_publico")); // sin auth: catálogo curado + descargas con límite por IP
+app.get("/releases", (req, res) => res.redirect("/api/ota/publico/pagina"));
+// Toda la carpeta flash-app (índice, bootstrap, esp-web-tools y los productos): las páginas usan rutas relativas "../".
+app.use("/flash-publico", express.static(path.join(__dirname, "flash-app")));
+// ── fin Sprint 1 ──────────────────────────────────────────
 app.use("/", routeIce); // /api/ice/servers (público — necesario para clientes WebRTC sin login)
 app.use("/", routeCamaras); // /api/camaras/* — webhook MediaMTX + listado/playback
 // OTA: device endpoints (pendiente, firmware/*, resultado) usan headers X-Device-ID + X-Auth-Token.
@@ -243,7 +272,10 @@ app.use(
     const deDispositivo =
       (req.method === "GET"  && req.path === "/pendientes") ||
       (req.method === "POST" && req.path === "/resultado") ||
-      (req.method === "POST" && req.path === "/config-backup");
+      (req.method === "POST" && req.path === "/config-backup") ||
+      (req.method === "GET"  && req.path === "/chat/pendientes") ||
+      (req.method === "POST" && req.path === "/chat/mensaje") ||
+      (req.method === "POST" && req.path === "/chat/propuesta");
     if (deDispositivo) return next();
     return auth.required(req, res, next);
   },
@@ -311,6 +343,10 @@ cron.schedule(
         const res = await db.getResumenDiario(e.slug);
         if (!res) continue;
         const analisis = await agraria.analizarDia(res);
+// Sprint 1: notify-org (tras: const analisis = await agraria.analizarDia(res);)
+        if (!analisis) continue; // sin análisis (agrarIA caída o sin clave) no se manda nada
+        require("./lib/notify-org").notify(e.slug, "reporte_diario", { titulo: `Resumen diario · ${e.nombre || e.slug}`, cuerpo: (typeof analisis === "string" ? analisis : JSON.stringify(analisis)).slice(0, 1500) }).catch(err => console.warn("[notify/diario]", err.message));
+        // fin Sprint 1: notify-org
         io.to(`estab:${e.slug}`).emit("agraria:resumen_diario", {
           estab: e.nombre,
           analisis,
@@ -324,25 +360,94 @@ cron.schedule(
   { timezone: "America/Argentina/Cordoba" },
 );
 
-// Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
-const { runBackup } = require("./scripts/backup-couchdb");
-cron.schedule(
-  "0 3 * * *",
-  async () => {
-    try {
-      const s = await runBackup();
-      const nErr = Object.keys(s.errores).length;
-      console.log(
-        `[backup] ✓ ${Object.keys(s.dbs).length} DBs → ${s.dir}` +
-          (nErr ? ` · ${nErr} con error` : ""),
-      );
-      if (nErr) console.error("[backup]", s.errores);
-    } catch (e) {
-      console.error("[backup] ✗", e.message);
+// Equipos caídos → push a la org, cada 5 min. Umbral 15 min (no 2: un bache
+// de señal en el campo no merece notificación). Una vez por episodio: se
+// marca caido_notificado_ts en el device y no se repite hasta que vuelva a
+// reportar y se caiga de nuevo.
+cron.schedule("*/5 * * * *", async () => {
+  try {
+    const push = require("./lib/push");
+    if (!push.configurado()) return;
+    const globalDB = db.getDB("global");
+    const r = await globalDB.find({ selector: { tipo: "device", estab_slug: { $gt: null } }, limit: 500 });
+    const ahora = Date.now();
+    for (const d of push.seleccionarCaidos(r.docs, ahora)) {
+      try {
+        const min = Math.round((ahora - d.ultimo_visto) / 60000);
+        await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });
+// Sprint 1: notify-org (tras: await push.notificarOrg(d.estab_slug, { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min`, url: "/app/#/equipos" });)
+        await require("./lib/notify-org").notify(d.estab_slug, "nodo_caido", { titulo: "Equipo sin reportar", cuerpo: `${d.hostname || d.device_id} no reporta hace ${min} min` }).catch(e => console.warn("[notify/caido]", e.message));
+        // fin Sprint 1: notify-org
+        await globalDB.insert({ ...d, caido_notificado_ts: ahora });
+      } catch (e) { console.warn("[CRON/caidos]", d.device_id, e.message); }
     }
-  },
-  { timezone: "America/Argentina/Cordoba" },
-);
+  } catch (e) { console.error("[CRON/caidos]", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+// Sprint 2: retencion y limpieza
+// 03:40, antes del backup de las 03:00 del día siguiente y lejos del horario
+// de campo. Todo best-effort: si falla, se loguea y sigue.
+cron.schedule("40 3 * * *", async () => {
+  try {
+    const notis = require("./lib/notificaciones");
+    const estabs = await db.getEstablecimientos();
+    for (const e of estabs) {
+      try {
+        const n = await notis.purgar(e.slug, notis.RETENCION_DIAS);
+        if (n) console.log(`[CRON/retencion] ${e.slug}: ${n} avisos viejos borrados`);
+      } catch (err) { console.warn("[CRON/retencion]", e.slug, err.message); }
+      // Respirar entre orgs: el droplet es 1 vCPU con ~25 apps.
+      await new Promise(cb => setTimeout(cb, 500));
+    }
+  } catch (e) { console.error("[CRON/retencion]", e.message); }
+
+  try {
+    const { purgarCacheNDVI } = require("./routes/ndvi");
+    if (typeof purgarCacheNDVI === "function") await purgarCacheNDVI({ maxBytes: 200 * 1024 * 1024, maxDias: 30 });
+  } catch (e) { console.warn("[CRON/retencion] cache ndvi:", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+// fin Sprint 2: retencion y limpieza
+
+// Backup diario de CouchDB a las 03:00 (ver scripts/backup-couchdb.js).
+//
+// Se lanza como proceso HIJO, no acá adentro: el backup recorre bases de
+// varios GB y si algún día vuelve a inflarse, el OOM se lleva puesto un
+// proceso descartable y NO el servidor web. Incidente 2026-09-20: el backup
+// corría dentro de este proceso, el heap se iba a 750 MB - 1,6 GB y PM2
+// mataba OrbitX entero por --max-memory-restart, dejando 11 días de datos de
+// clientes sin respaldo.
+const { spawn } = require("child_process");
+const BACKUP_SCRIPT = require.resolve("./scripts/backup-couchdb");
+let backupCorriendo = false;
+
+function lanzarBackup() {
+  if (backupCorriendo) {
+    console.warn("[backup] ya hay una corrida en curso, se saltea esta");
+    return;
+  }
+  backupCorriendo = true;
+  const hijo = spawn(
+    process.execPath,
+    ["--max-old-space-size=384", BACKUP_SCRIPT],
+    { cwd: __dirname, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  // stdout/stderr del hijo van al log del padre (PM2 los junta ahí).
+  hijo.stdout.on("data", (b) => process.stdout.write(b));
+  hijo.stderr.on("data", (b) => process.stderr.write(b));
+  hijo.on("error", (e) => {
+    backupCorriendo = false;
+    console.error("[backup] ✗ no se pudo lanzar:", e.message);
+  });
+  hijo.on("close", (code, signal) => {
+    backupCorriendo = false;
+    if (signal) console.error(`[backup] ✗ terminado por señal ${signal}`);
+    else if (code !== 0) console.error(`[backup] ✗ salió con código ${code}`);
+    else console.log("[backup] ✓ corrida diaria terminada");
+  });
+}
+
+cron.schedule("0 3 * * *", lanzarBackup, {
+  timezone: "America/Argentina/Cordoba",
+});
 
 // ── Bootstrap ─────────────────────────────────────────────
 async function start() {

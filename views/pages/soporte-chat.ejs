@@ -1,0 +1,301 @@
+<%# pages/soporte-chat.ejs — chat de soporte con las pantallas PilotX %>
+
+<div class="page-header">
+  <div>
+    <h2>Chat de Soporte</h2>
+    <p>Conversaciones con las pantallas <span class="td-mono" style="color:var(--lime)">PilotX</span> en campo</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="sop-estado" style="font-size:11px;color:var(--muted2)">Cargando...</span>
+    <button class="btn btn-sm" onclick="cargarEquipos()">↻ Actualizar</button>
+  </div>
+</div>
+
+<style id="sop-css">
+  .sop-g2 { display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start; }
+  .sop-eq {
+    display:flex; flex-direction:column; gap:2px;
+    padding:10px 12px; border-radius:10px; cursor:pointer;
+    border:1px solid transparent; transition:background .12s,border-color .12s;
+  }
+  .sop-eq:hover { background:var(--surface2); }
+  .sop-eq.active { background:var(--surface2); border-color:var(--lime); }
+  .sop-eq-nombre { font-size:13px; font-weight:600; color:var(--text1); }
+  .sop-eq-id { font-size:11px; color:var(--muted2); font-family:var(--font-m); }
+  #sop-hilo {
+    display:flex; flex-direction:column; gap:10px;
+    height:520px; overflow-y:auto; padding:16px;
+    background:var(--surface2); border-radius:0 0 var(--radius) var(--radius);
+  }
+  .sop-msg { display:flex; flex-direction:column; max-width:78%; }
+  .sop-msg.izq { align-self:flex-start; align-items:flex-start; }
+  .sop-msg.der { align-self:flex-end; align-items:flex-end; }
+  .sop-burbuja {
+    padding:9px 13px; border-radius:14px; font-size:13px; line-height:1.45;
+    word-break:break-word; white-space:pre-wrap;
+  }
+  .sop-msg.izq .sop-burbuja { background:#2a2f24; color:var(--text1); border-bottom-left-radius:4px; }
+  .sop-msg.der .sop-burbuja { background:var(--lime); color:#101410; border-bottom-right-radius:4px; }
+  .sop-msg.bot .sop-burbuja { background:#243040; color:var(--text1); }
+  .sop-meta { font-size:10px; color:var(--muted2); margin-top:3px; font-family:var(--font-m); }
+  /* Toggle Bot IA en la cabecera del hilo */
+  .sop-bot-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:4px 10px; border-radius:20px; cursor:pointer;
+    border:1px solid var(--border); background:var(--surface2);
+    color:var(--muted2); font-size:11px; font-family:var(--font-m);
+    transition:border-color .12s,color .12s;
+  }
+  .sop-bot-btn:disabled { opacity:.6; cursor:default; }
+  .sop-bot-btn.on { border-color:var(--lime); color:var(--lime); }
+  .sop-bot-dot { width:8px; height:8px; border-radius:50%; background:var(--muted2); transition:background .12s; }
+  .sop-bot-btn.on .sop-bot-dot { background:var(--lime); }
+  /* Tarjeta de propuesta de configuración (mensaje tipo propuesta_config) */
+  .sop-prop {
+    margin-top:4px; padding:9px 11px; border-radius:12px;
+    background:var(--surface); border:1px solid var(--border); min-width:200px;
+  }
+  .sop-prop-titulo {
+    font-size:10px; font-weight:700; color:var(--muted2);
+    text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px;
+  }
+  .sop-prop-cambio { font-family:var(--font-m); font-size:12px; color:var(--text1); padding:2px 0; }
+  .sop-prop-cambio .k { color:var(--muted2); }
+  .sop-prop-cambio .old { color:#d88585; text-decoration:line-through; }
+  .sop-prop-cambio .new { color:var(--lime); }
+  .sop-prop-estado {
+    display:inline-block; margin-top:7px; padding:2px 9px; border-radius:10px;
+    font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+  }
+  .sop-prop-estado.pendiente { background:#3a3320; color:#d8bb63; }
+  .sop-prop-estado.aceptada  { background:#20351f; color:var(--lime); }
+  .sop-prop-estado.aplicada  { background:#1f2f3a; color:#63b3d8; }
+  .sop-prop-estado.rechazada { background:#3a2020; color:#d88585; }
+  .sop-input-row {
+    display:flex; gap:8px; padding:12px; border-top:1px solid var(--border);
+  }
+  .sop-input-row textarea {
+    flex:1; resize:none; height:42px; max-height:120px;
+    padding:10px 12px; background:var(--surface2); border:1px solid var(--border);
+    border-radius:10px; color:var(--text1); font-size:13px; font-family:inherit;
+  }
+  @media (max-width:768px) {
+    .sop-g2 { grid-template-columns:1fr; }
+    #sop-hilo { height:52vh; }
+  }
+</style>
+
+<div class="sop-g2">
+  <!-- Lista de equipos -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Equipos</span>
+      <span id="sop-count" style="font-size:11px;color:var(--muted2)">–</span>
+    </div>
+    <div style="padding:8px 10px">
+      <input type="text" id="sop-buscar" placeholder="Buscar equipo..." oninput="pintarEquipos()"
+        style="width:100%;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text1);font-size:12px"/>
+    </div>
+    <div id="sop-lista" style="max-height:520px;overflow-y:auto;padding:4px 8px 10px">
+      <div class="loading"><span class="spinner"></span></div>
+    </div>
+  </div>
+
+  <!-- Hilo de chat -->
+  <div class="card" style="display:flex;flex-direction:column">
+    <div class="card-head">
+      <span class="card-title" id="sop-titulo">Elegí un equipo</span>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button id="sop-bot-toggle" class="sop-bot-btn" style="display:none" onclick="toggleBot()" type="button">
+          <span class="sop-bot-dot"></span><span id="sop-bot-label">Bot IA: –</span>
+        </button>
+        <span id="sop-hilo-estado" style="font-size:11px;color:var(--muted2)"></span>
+      </div>
+    </div>
+
+    <div id="sop-hilo">
+      <div class="empty-state" style="margin:auto;text-align:center;color:var(--muted2)">
+        <p>Seleccioná un equipo de la lista para ver la conversación.</p>
+      </div>
+    </div>
+
+    <div class="sop-input-row">
+      <textarea id="sop-texto" placeholder="Escribí una respuesta..." disabled
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();enviar();}"></textarea>
+      <button class="btn btn-primary" id="sop-enviar" onclick="enviar()" disabled>Enviar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _equipos    = [];      // [{device_id, nombre}]
+let _sel        = null;    // device_id seleccionado
+let _selNombre  = "";
+let _pollTimer  = null;
+let _lastCount  = -1;      // para autoscroll solo si hay msgs nuevos
+let _botActivo  = false;   // estado del bot IA del equipo seleccionado
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+function fmtTs(ts) {
+  return ts ? new Date(ts).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : "";
+}
+
+// ── Lista de equipos ──────────────────────────────────────
+async function cargarEquipos() {
+  try {
+    const data = await Auth.get("/api/tracking/live");
+    _equipos = (Array.isArray(data) ? data : []).sort((a,b) =>
+      String(a.nombre||a.device_id).localeCompare(String(b.nombre||b.device_id)));
+    document.getElementById("sop-estado").textContent =
+      _equipos.length ? `${_equipos.length} equipo(s) activo(s)` : "Sin equipos activos";
+    pintarEquipos();
+  } catch (e) {
+    document.getElementById("sop-estado").textContent = "Error";
+    toast("✗ Error cargando equipos", e.message, "red");
+  }
+}
+
+function pintarEquipos() {
+  const cont = document.getElementById("sop-lista");
+  const q = (document.getElementById("sop-buscar").value || "").toLowerCase();
+  const lista = _equipos.filter(eq =>
+    !q || String(eq.nombre||"").toLowerCase().includes(q) || String(eq.device_id||"").toLowerCase().includes(q));
+  document.getElementById("sop-count").textContent = lista.length;
+  if (!lista.length) {
+    cont.innerHTML = `<div class="empty-state" style="padding:24px;text-align:center;color:var(--muted2)"><p>Sin equipos.</p></div>`;
+    return;
+  }
+  cont.innerHTML = lista.map(eq => `
+    <div class="sop-eq${eq.device_id === _sel ? " active" : ""}" onclick="abrirChat('${esc(eq.device_id)}', '${esc(eq.nombre||eq.device_id)}')">
+      <span class="sop-eq-nombre">${esc(eq.nombre || eq.device_id)}</span>
+      <span class="sop-eq-id">${esc(eq.device_id)}</span>
+    </div>`).join("");
+}
+
+// ── Abrir / pollear un hilo ───────────────────────────────
+function abrirChat(deviceId, nombre) {
+  _sel = deviceId;
+  _selNombre = nombre;
+  _lastCount = -1;
+  document.getElementById("sop-titulo").textContent = nombre;
+  document.getElementById("sop-texto").disabled = false;
+  document.getElementById("sop-enviar").disabled = false;
+  actualizarToggleBot(false);
+  document.getElementById("sop-bot-toggle").style.display = "inline-flex";
+  pintarEquipos();
+  document.getElementById("sop-hilo").innerHTML = `<div class="loading" style="margin:auto"><span class="spinner"></span></div>`;
+  refrescarHilo();
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(refrescarHilo, 4000);
+}
+
+async function refrescarHilo() {
+  if (!_sel) return;
+  try {
+    const data = await Auth.get("/api/soporte/chat/" + encodeURIComponent(_sel));
+    if (data.device_id !== _sel) return; // cambió de equipo mientras respondía
+    actualizarToggleBot(!!data.bot_activo);
+    pintarHilo(data.mensajes || []);
+    document.getElementById("sop-hilo-estado").textContent = "Actualizado " + fmtTs(Date.now());
+  } catch (e) {
+    document.getElementById("sop-hilo-estado").textContent = "Error al actualizar";
+  }
+}
+
+function pintarHilo(msgs) {
+  const cont = document.getElementById("sop-hilo");
+  if (!msgs.length) {
+    cont.innerHTML = `<div class="empty-state" style="margin:auto;text-align:center;color:var(--muted2)"><p>Todavía no hay mensajes con este equipo.</p></div>`;
+    _lastCount = 0;
+    return;
+  }
+  cont.innerHTML = msgs.map(m => {
+    const esOperario = m.rol === "operario";
+    const lado = esOperario ? "izq" : "der";
+    const botCls = m.rol === "bot" ? " bot" : "";
+    let quien = esOperario ? "Operario" : (m.rol === "bot" ? "Bot" : "Soporte");
+    let meta = fmtTs(m.ts);
+    if (!esOperario) {
+      const estado = m.leido ? "leído" : (m.entregado ? "entregado" : "enviado");
+      meta += " · " + estado;
+    }
+    const propuesta = (m.tipo === "propuesta_config" && m.payload) ? pintarPropuesta(m.payload) : "";
+    return `<div class="sop-msg ${lado}${botCls}">
+      ${m.texto ? `<div class="sop-burbuja">${esc(m.texto)}</div>` : ""}
+      ${propuesta}
+      <div class="sop-meta">${quien} · ${meta}</div>
+    </div>`;
+  }).join("");
+  // Autoscroll al fondo solo cuando llegan mensajes nuevos.
+  if (msgs.length !== _lastCount) {
+    cont.scrollTop = cont.scrollHeight;
+    _lastCount = msgs.length;
+  }
+}
+
+// Render de una propuesta_config: los cambios (clave: actual → nuevo) + estado.
+function pintarPropuesta(payload) {
+  const cambios = Array.isArray(payload.cambios) ? payload.cambios : [];
+  const estado  = payload.estado || "pendiente";
+  const estClass = ["pendiente","aceptada","rechazada","aplicada"].includes(estado) ? estado : "pendiente";
+  const filas = cambios.map(c => `
+    <div class="sop-prop-cambio">
+      <span class="k">${esc(c.clave)}:</span>
+      <span class="old">${esc(c.valor_actual)}</span>
+      <span>→</span>
+      <span class="new">${esc(c.valor_nuevo)}</span>
+    </div>`).join("");
+  return `<div class="sop-prop">
+    <div class="sop-prop-titulo">Propuesta de configuración</div>
+    ${filas || `<div class="sop-prop-cambio">(sin cambios)</div>`}
+    <span class="sop-prop-estado ${estClass}">${esc(estado)}</span>
+  </div>`;
+}
+
+// ── Toggle Bot IA ─────────────────────────────────────────
+function actualizarToggleBot(activo) {
+  _botActivo = !!activo;
+  const btn = document.getElementById("sop-bot-toggle");
+  const lbl = document.getElementById("sop-bot-label");
+  btn.classList.toggle("on", _botActivo);
+  lbl.textContent = "Bot IA: " + (_botActivo ? "activo" : "inactivo");
+}
+
+async function toggleBot() {
+  if (!_sel) return;
+  const nuevo = !_botActivo;
+  const btn = document.getElementById("sop-bot-toggle");
+  btn.disabled = true;
+  try {
+    await Auth.post("/api/soporte/chat/" + encodeURIComponent(_sel) + "/bot", { activo: nuevo });
+    actualizarToggleBot(nuevo);
+    toast(nuevo ? "✓ Bot IA activado" : "✓ Bot IA desactivado", _selNombre, "lime");
+  } catch (e) {
+    toast("✗ No se pudo cambiar el Bot IA", e.message, "red");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Enviar ────────────────────────────────────────────────
+async function enviar() {
+  const ta = document.getElementById("sop-texto");
+  const texto = ta.value.trim();
+  if (!_sel) return toast("✗ Elegí un equipo primero", "", "red");
+  if (!texto) return;
+  const btn = document.getElementById("sop-enviar");
+  btn.disabled = true;
+  try {
+    await Auth.post("/api/soporte/chat/enviar", { device_id: _sel, texto });
+    ta.value = "";
+    await refrescarHilo();
+  } catch (e) {
+    toast("✗ No se pudo enviar", e.message, "red");
+  } finally {
+    btn.disabled = false;
+    ta.focus();
+  }
+}
+
+cargarEquipos();
+</script>

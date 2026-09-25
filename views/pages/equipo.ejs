@@ -1,0 +1,244 @@
+<%# pages/equipo.ejs — miembros e invitaciones de la org activa %>
+
+<div class="page-header">
+  <div>
+    <h2>Equipo</h2>
+    <p>Miembros e invitaciones de <span class="td-mono" style="color:var(--lime)"><%= orgSlug %></span></p>
+  </div>
+  <button class="btn btn-primary" onclick="abrirInvitar()">+ Invitar</button>
+</div>
+
+<!-- Miembros -->
+<div class="card">
+  <div class="card-title">Miembros</div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Usuario</th><th>Rol</th><th>Último acceso</th><th></th></tr>
+      </thead>
+      <tbody id="tbody-miembros">
+        <tr><td colspan="4"><div class="loading">Cargando...</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Invitaciones pendientes -->
+<div class="card" style="margin-top:18px">
+  <div class="card-title">Invitaciones pendientes</div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Email</th><th>Rol</th><th>Invitó</th><th>Vence</th><th></th></tr>
+      </thead>
+      <tbody id="tbody-invs">
+        <tr><td colspan="5"><div class="loading">Cargando...</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal invitar -->
+<div class="modal-backdrop" id="modal-invitar">
+  <div class="modal" style="width:440px">
+    <div class="modal-title">Invitar al equipo</div>
+    <div class="modal-sub">Se manda un email con el link, y también podés copiarlo para pasarlo por WhatsApp.</div>
+
+    <div id="inv-form">
+      <div class="form-grid" style="grid-template-columns:1fr">
+        <div class="field"><label>Email</label>
+          <input type="email" id="inv-email" placeholder="persona@email.com"/>
+        </div>
+        <div class="field"><label>Nombre (opcional)</label>
+          <input type="text" id="inv-nombre" placeholder="Nombre y apellido"/>
+        </div>
+        <div class="field"><label>Rol</label>
+          <select id="inv-rol"></select>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-invitar')">Cancelar</button>
+        <button class="btn btn-primary" style="flex:1" id="inv-btn" onclick="enviarInvitacion()">Invitar</button>
+      </div>
+    </div>
+
+    <div id="inv-ok" style="display:none">
+      <p style="font-size:13px;color:var(--muted2);margin:14px 0 8px">✓ Invitación creada y email enviado. Link para compartir:</p>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="inv-link" readonly class="td-mono" style="flex:1;font-size:11px"/>
+        <button class="btn btn-sm btn-ghost" onclick="copiarLink()">Copiar</button>
+      </div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:14px" onclick="closeModal('modal-invitar')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal cambiar rol -->
+<div class="modal-backdrop" id="modal-rol">
+  <div class="modal" style="width:380px">
+    <div class="modal-title">Cambiar rol</div>
+    <div class="modal-sub" id="rol-quien">–</div>
+    <div class="field"><label>Nuevo rol</label>
+      <select id="rol-select"></select>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-rol')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="guardarRol()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const ROLES_INFO = <%- JSON.stringify(Object.fromEntries(Object.entries(roles).map(([k,v]) => [k, { label: v.label, color: v.color }]))) %>;
+const MI_UID = "usr_<%= user.uid %>";
+const MI_ROL = "<%= rol %>";
+const PUEDE_QUITAR = ["superadmin", "owner"].includes(MI_ROL); // permiso usuarios:delete
+
+let _rolesAsignables = [];   // [{rol, label, ...}] — los que mi rol puede asignar
+let _rolTarget = null;       // uid del miembro al que le cambio el rol
+
+function rolBadge(rol) {
+  const info = ROLES_INFO[rol] || { label: rol, color: "#888" };
+  return `<span class="badge" style="border-color:${info.color};color:${info.color}">${info.label}</span>`;
+}
+function fmtTs(ts) {
+  return ts ? new Date(ts).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : "–";
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+async function cargar() {
+  try {
+    const [miembros, invs, rolesDisp] = await Promise.all([
+      Auth.get("/api/auth/equipo"),
+      Auth.get("/api/auth/invitaciones-pendientes"),
+      Auth.get("/api/auth/roles-disponibles"),
+    ]);
+    _rolesAsignables = rolesDisp || [];
+    pintarMiembros(miembros || []);
+    pintarInvs(invs || []);
+    const opts = _rolesAsignables.map(r => `<option value="${r.rol}">${r.label}</option>`).join("");
+    document.getElementById("inv-rol").innerHTML = opts;
+    document.getElementById("rol-select").innerHTML = opts;
+  } catch (e) {
+    toast("✗ Error cargando equipo", e.message, "red");
+  }
+}
+
+function pintarMiembros(ms) {
+  const tb = document.getElementById("tbody-miembros");
+  if (!ms.length) {
+    tb.innerHTML = `<tr><td colspan="4"><div class="empty-state" style="padding:24px"><p>Sin miembros todavía.</p></div></td></tr>`;
+    return;
+  }
+  tb.innerHTML = ms.map(m => {
+    const soyYo = m.uid === MI_UID;
+    const puedoTocar = !soyYo && _rolesAsignables.some(r => r.rol === m.rol);
+    return `<tr>
+      <td>
+        <div class="td-main">${esc(m.nombre)}${soyYo ? ' <span class="td-dim">(vos)</span>' : ""}</div>
+        <div class="td-dim">${esc(m.email)}</div>
+      </td>
+      <td>${rolBadge(m.rol)}</td>
+      <td class="td-dim">${fmtTs(m.ultimo_login)}</td>
+      <td style="white-space:nowrap;text-align:right">
+        ${puedoTocar ? `<button class="btn btn-sm btn-ghost" onclick="abrirRol('${m.uid}', '${esc(m.nombre)}', '${m.rol}')">Rol</button>` : ""}
+        ${puedoTocar && PUEDE_QUITAR ? `<button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="quitar('${m.uid}', '${esc(m.nombre)}')">Quitar</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function pintarInvs(invs) {
+  const tb = document.getElementById("tbody-invs");
+  if (!invs.length) {
+    tb.innerHTML = `<tr><td colspan="5"><div class="empty-state" style="padding:24px"><p>No hay invitaciones pendientes.</p></div></td></tr>`;
+    return;
+  }
+  tb.innerHTML = invs.map(i => `<tr>
+    <td>
+      <div class="td-main">${esc(i.email_destino)}</div>
+      <div class="td-dim">${esc(i.nombre_destino || "")}</div>
+    </td>
+    <td>${rolBadge(i.rol_asignado)}</td>
+    <td class="td-dim">${esc(i.invitado_por_nombre || "–")}</td>
+    <td class="td-dim">${i.expirada ? '<span class="badge badge-red">Vencida</span>' : fmtTs(i.expira_at)}</td>
+    <td style="white-space:nowrap;text-align:right">
+      <button class="btn btn-sm btn-ghost" onclick="copiar('${i.link}')">Copiar link</button>
+      <button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="cancelarInv('${i.token}', '${esc(i.email_destino)}')">Cancelar</button>
+    </td>
+  </tr>`).join("");
+}
+
+// ── Invitar ───────────────────────────────────────────────
+function abrirInvitar() {
+  document.getElementById("inv-form").style.display = "";
+  document.getElementById("inv-ok").style.display = "none";
+  document.getElementById("inv-email").value = "";
+  document.getElementById("inv-nombre").value = "";
+  openModal("modal-invitar");
+}
+
+async function enviarInvitacion() {
+  const email = document.getElementById("inv-email").value.trim();
+  const nombre = document.getElementById("inv-nombre").value.trim();
+  const rol = document.getElementById("inv-rol").value;
+  if (!email) return toast("✗ Falta el email", "", "red");
+  const btn = document.getElementById("inv-btn");
+  btn.disabled = true;
+  try {
+    const r = await Auth.post("/api/auth/invitar", { email, nombre, rol });
+    document.getElementById("inv-form").style.display = "none";
+    document.getElementById("inv-ok").style.display = "";
+    document.getElementById("inv-link").value = r.link;
+    toast("✓ Invitación enviada", email, "lime");
+    cargar();
+  } catch (e) {
+    toast("✗ No se pudo invitar", e.message, "red");
+  } finally { btn.disabled = false; }
+}
+
+function copiar(texto) {
+  navigator.clipboard.writeText(texto)
+    .then(() => toast("✓ Link copiado", "", "lime"))
+    .catch(() => toast("✗ No se pudo copiar", "", "red"));
+}
+function copiarLink() { copiar(document.getElementById("inv-link").value); }
+
+async function cancelarInv(token, email) {
+  if (!confirm(`¿Cancelar la invitación a ${email}?`)) return;
+  try {
+    await Auth.del(`/api/auth/invitacion/${token}`);
+    toast("✓ Invitación cancelada", email, "lime");
+    cargar();
+  } catch (e) { toast("✗ Error", e.message, "red"); }
+}
+
+// ── Miembros ──────────────────────────────────────────────
+function abrirRol(uid, nombre, rolActual) {
+  _rolTarget = uid;
+  document.getElementById("rol-quien").textContent = nombre;
+  document.getElementById("rol-select").value = rolActual;
+  openModal("modal-rol");
+}
+
+async function guardarRol() {
+  const rol = document.getElementById("rol-select").value;
+  try {
+    await Auth.patch(`/api/auth/equipo/${_rolTarget.replace("usr_","")}`, { rol });
+    closeModal("modal-rol");
+    toast("✓ Rol actualizado", "", "lime");
+    cargar();
+  } catch (e) { toast("✗ Error", e.message, "red"); }
+}
+
+async function quitar(uid, nombre) {
+  if (!confirm(`¿Quitar a ${nombre} de la organización? Sus sesiones se cierran al instante.`)) return;
+  try {
+    await Auth.del(`/api/auth/equipo/${uid.replace("usr_","")}`);
+    toast("✓ Miembro quitado", nombre, "lime");
+    cargar();
+  } catch (e) { toast("✗ Error", e.message, "red"); }
+}
+
+cargar();
+</script>

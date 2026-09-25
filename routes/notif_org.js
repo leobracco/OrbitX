@@ -3,6 +3,14 @@
 
 const router = require("express").Router();
 const notif  = require("../lib/notify-org");
+const { noDevices: sinEquipos } = require("./devices");
+
+// Un token de equipo (PilotX en el tractor) entra por auth.required igual que
+// un humano, pero la config de avisos y el historial de la org son pantallas de
+// panel: no tiene por qué leerlas ni tocarlas. El guard va acá adentro y no en
+// el montaje de server.js porque ahí el `app.use` ya existe fuera de los
+// bloques Sprint 2 y colgarle otro middleware después no llegaría a correr.
+router.use(sinEquipos);
 
 // GET /api/notif-org — config actual de la org del usuario.
 router.get("/", async (req, res) => {
@@ -47,6 +55,64 @@ router.post("/test", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ── Historial de avisos (Sprint 2) ──────────────────────────
+const notis = require("../lib/notificaciones");
+
+function orgDe(req) {
+  const slug = req.user?.estabSlug;
+  if (!slug) { const e = new Error("Sin org activa"); e.status = 400; throw e; }
+  return slug;
+}
+
+// GET /api/notif-org/historial?limit=50&antes_de=<ts>
+// Paginación por cursor sobre ts descendente (nunca skip).
+router.get("/historial", async (req, res) => {
+  try {
+    const orgSlug = orgDe(req);
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const items = await notis.listar(orgSlug, { limit: limit + 1, antesDe: req.query.antes_de || null });
+    const hayMas = items.length > limit;
+    const pagina = hayMas ? items.slice(0, limit) : items;
+    const lectura = await notis.getLectura(orgSlug, req.user.uid);
+    res.json({
+      ok: true,
+      items: pagina.map(n => ({ ...n, leida: notis.estaLeida(n, lectura) })),
+      hay_mas: hayMas,
+      cursor: pagina.length ? pagina[pagina.length - 1].ts : null,
+      no_leidas: notis.contarNoLeidas(pagina, lectura),
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// GET /api/notif-org/no-leidas — barato, para el badge de la campanita.
+// Consulta propia (solo _id/ts, sin titulo/cuerpo) vía notis.noLeidas().
+router.get("/no-leidas", async (req, res) => {
+  try {
+    const orgSlug = orgDe(req);
+    const { no_leidas, hay_mas } = await notis.noLeidas(orgSlug, req.user.uid);
+    res.json({ ok: true, no_leidas, hay_mas });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// POST /api/notif-org/:id/leida
+router.post("/:id/leida", async (req, res) => {
+  try {
+    await notis.marcarUna(orgDe(req), req.user.uid, req.params.id, req.body?.ts);
+    res.json({ ok: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// POST /api/notif-org/leidas — marca todo lo anterior a `ts` (default: ahora).
+// El `ts` del body se clampea a "ahora": con un reloj adelantado (o un body
+// armado a mano) ts_hasta se iba al futuro y dejaba leídos de antemano todos
+// los avisos que todavía no existían. `ts_hasta` nunca baja (Math.max adentro).
+router.post("/leidas", async (req, res) => {
+  try {
+    await notis.marcarTodas(orgDe(req), req.user.uid, notis.clampTs(req.body?.ts));
+    res.json({ ok: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 module.exports = router;

@@ -1,15 +1,15 @@
-<%# pages/vehiculos.ejs — Configuración de vehículos AOG (lazy load) %>
+<%# pages/vehiculos.ejs — Config real de cada equipo (config_backup de PilotX) %>
 
 <div class="page-header">
   <div>
     <h2>Vehículos</h2>
-    <p>Configuración sincronizada desde PilotX</p>
+    <p>Configuración real de cada equipo, reportada por PilotX</p>
   </div>
   <div style="display:flex;gap:8px">
     <input type="text" id="veh-search" placeholder="Buscar por nombre, device, org…"
-      oninput="vehBuscar(this.value)"
+      oninput="vehFiltrar(this.value)"
       style="background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:7px 12px;border-radius:8px;font-size:13px;outline:none;width:240px"/>
-    <button class="btn" onclick="vehCargar(true)">↻</button>
+    <button class="btn" onclick="vehCargar()">↻</button>
   </div>
 </div>
 
@@ -17,118 +17,196 @@
 
 <div id="veh-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
 
-<div id="veh-mas" style="text-align:center;margin-top:16px;display:none">
-  <button class="btn" onclick="vehMas()">Cargar más →</button>
-</div>
+<!-- Modal config -->
+<div class="modal-backdrop" id="modal-cfg">
+  <div class="modal" style="width:720px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-title" id="cfg-titulo">–</div>
+    <div class="modal-sub" id="cfg-sub">–</div>
 
-<!-- Modal XML -->
-<div class="modal-backdrop" id="modal-xml">
-  <div class="modal" style="width:680px;max-height:88vh;display:flex;flex-direction:column">
-    <div class="modal-title" id="modal-xml-nombre">–</div>
-    <div class="modal-sub">Archivo XML de PilotX</div>
-    <pre id="modal-xml-content"
-      style="margin-top:14px;background:var(--ap-bg);border:1px solid var(--ap-border);border-radius:8px;padding:14px;font-family:monospace;font-size:11px;color:var(--ap-text);overflow:auto;flex:1;white-space:pre-wrap;word-break:break-all;min-height:120px">
-    </pre>
-    <button class="btn btn-ghost" style="width:100%;margin-top:14px;flex-shrink:0" onclick="closeModal('modal-xml')">Cerrar</button>
+    <div style="display:flex;gap:8px;align-items:center;margin:12px 0;flex-shrink:0">
+      <label style="font-size:11px;color:var(--ap-muted)">Versión</label>
+      <select id="cfg-version" onchange="cfgRenderVersion()" style="flex:1;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:6px 10px;border-radius:8px;font-size:12px"></select>
+      <button class="btn btn-sm btn-ghost" onclick="cfgToggleJson()" id="cfg-btn-json">Ver JSON</button>
+      <button class="btn btn-sm" onclick="cfgDescargar()">⬇ Descargar</button>
+    </div>
+
+    <div id="cfg-cuerpo" style="overflow:auto;flex:1;min-height:150px"></div>
+    <pre id="cfg-json" style="display:none;overflow:auto;flex:1;min-height:150px;background:var(--ap-bg);border:1px solid var(--ap-border);border-radius:8px;padding:12px;font-size:11px;color:var(--ap-text);white-space:pre-wrap;word-break:break-all"></pre>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:12px;flex-shrink:0" onclick="closeModal('modal-cfg')">Cerrar</button>
   </div>
 </div>
 
 <script>
-let _vehItems = [];
-let _vehSkip  = 0;
-let _vehLim   = 10;
-let _vehTotal = 0;
-let _vehQ     = "";
-let _vehTO    = null;
+let _cfgs = [];        // índice de equipos
+let _cfgDoc = null;    // doc completo del equipo abierto
+let _cfgQ = "";
 
-async function vehCargar(reset = true) {
-  if (reset) { _vehSkip = 0; _vehItems = []; document.getElementById("veh-grid").innerHTML = '<div class="loading"><span class="spinner"></span> Cargando…</div>'; }
-  try {
-    const params = new URLSearchParams({ limit: _vehLim, skip: _vehSkip });
-    if (_vehQ) params.set("q", _vehQ);
-    const r = await Auth.get(`/api/aog/vehiculos?${params}`);
-    const items = r.items || [];
-    _vehTotal = r.total || items.length;
-    _vehItems = reset ? items : _vehItems.concat(items);
-    renderVeh();
-  } catch (e) {
-    document.getElementById("veh-grid").innerHTML = `<div class="alert error show">${e.message}</div>`;
-  }
+const RE_SENSIBLE = /token|password|secret|clave|pass\b/i;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
-
-function renderVeh() {
-  const grid = document.getElementById("veh-grid");
-  document.getElementById("veh-status").textContent = `${_vehItems.length} de ${_vehTotal} vehículos`;
-
-  if (!_vehItems.length) {
-    grid.innerHTML = `<div class="empty-state"><span class="icon">🚜</span><p>${_vehQ ? "Sin resultados." : "No hay vehículos sincronizados todavía."}</p></div>`;
-    document.getElementById("veh-mas").style.display = "none";
-    return;
-  }
-
-  grid.innerHTML = _vehItems.map((v, vi) => `
-    <div class="card" style="display:flex;flex-direction:column">
-      <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--ap-border)">
-        <div style="width:38px;height:38px;border-radius:8px;background:var(--ap-green-dim);border:1px solid rgba(164,186,62,0.25);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🚜</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14px;font-weight:600;color:var(--ap-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.nombre || v.nombre_archivo)}</div>
-          <div style="font-size:11px;color:var(--ap-muted);margin-top:2px">${escapeHtml(v.estab_slug)} · ${escapeHtml(v.device_id || '–')} · ${fmtDate(v.ts)}</div>
-        </div>
-      </div>
-      <div style="padding:12px 16px;flex:1">
-        ${(v.grupos || []).slice(0, 3).map(g => `
-          <div style="margin-bottom:10px">
-            <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${escapeHtml(g.grupo)}</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-              ${(g.filas || []).map(f => `
-                <div style="display:flex;justify-content:space-between;align-items:center;background:var(--ap-bg);border-radius:6px;padding:5px 8px;gap:6px">
-                  <span style="font-size:11px;color:var(--ap-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(f.label)}</span>
-                  <span style="font-family:monospace;font-size:12px;color:var(--ap-green);flex-shrink:0">${typeof f.valor === 'number' ? f.valor.toLocaleString('es-AR', {maximumFractionDigits:3}) : escapeHtml(String(f.valor))}${f.unidad ? `<span style="color:var(--ap-muted);font-size:10px"> ${escapeHtml(f.unidad)}</span>` : ''}</span>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-      <div style="padding:0 16px 14px">
-        <button class="btn btn-ghost" style="width:100%;font-size:11px" onclick="vehVerXML(${vi})">Ver XML completo</button>
-      </div>
-    </div>
-  `).join("");
-
-  document.getElementById("veh-mas").style.display = (_vehItems.length < _vehTotal) ? "block" : "none";
-}
-
-async function vehMas() {
-  _vehSkip += _vehLim;
-  await vehCargar(false);
-}
-
-function vehBuscar(q) {
-  clearTimeout(_vehTO);
-  _vehTO = setTimeout(() => { _vehQ = q.trim(); vehCargar(true); }, 300);
-}
-
-async function vehVerXML(vi) {
-  const v = _vehItems[vi];
-  if (!v) return;
-  document.getElementById("modal-xml-nombre").textContent = v.nombre_archivo;
-  openModal("modal-xml");
-  try {
-    const d = await Auth.get('/api/aog/archivo?ruta=' + encodeURIComponent(v.ruta_rel));
-    document.getElementById('modal-xml-content').textContent = d.contenido || '(vacío)';
-  } catch (e) {
-    document.getElementById('modal-xml-content').textContent = 'Error: ' + e.message;
-  }
-}
-
-function fmtDate(ts) {
+function fmtTs(ts) {
   if (!ts) return "–";
   return new Date(ts).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", year:"2-digit", hour:"2-digit", minute:"2-digit" });
 }
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function hace(ts) {
+  if (!ts) return "nunca";
+  const min = Math.round((Date.now() - ts) / 60000);
+  if (min < 2) return "recién";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 48) return `hace ${h} h`;
+  return `hace ${Math.round(h / 24)} días`;
 }
 
-document.addEventListener("DOMContentLoaded", () => vehCargar(true));
+async function vehCargar() {
+  document.getElementById("veh-grid").innerHTML = '<div class="loading"><span class="spinner"></span> Cargando…</div>';
+  try {
+    _cfgs = await Auth.get("/api/soporte/config-backups");
+    vehRender();
+  } catch (e) {
+    document.getElementById("veh-grid").innerHTML = `<div class="alert error show">${esc(e.message)}</div>`;
+  }
+}
+
+function vehFiltrar(q) { _cfgQ = q.trim().toLowerCase(); vehRender(); }
+
+function vehRender() {
+  const grid = document.getElementById("veh-grid");
+  let lista = _cfgs;
+  if (_cfgQ) {
+    lista = lista.filter(c =>
+      (c.hostname || "").toLowerCase().includes(_cfgQ) ||
+      (c.device_id || "").toLowerCase().includes(_cfgQ) ||
+      (c.estab_slug || "").toLowerCase().includes(_cfgQ));
+  }
+  document.getElementById("veh-status").textContent =
+    `${lista.length} equipo${lista.length !== 1 ? "s" : ""} reportando configuración`;
+
+  if (!lista.length) {
+    grid.innerHTML = `<div class="empty-state"><span class="icon">🚜</span><p>${_cfgQ ? "Sin resultados." : "Ningún equipo reportó su configuración todavía.<br><span style='font-size:11px'>Las pantallas con PilotX la envían automáticamente.</span>"}</p></div>`;
+    return;
+  }
+
+  grid.innerHTML = lista.map(c => {
+    const viejo = !c.ultimo_visto || (Date.now() - c.ultimo_visto > 24 * 3600 * 1000);
+    return `
+    <div class="card" style="cursor:pointer" onclick="cfgAbrir('${esc(c.device_id)}')">
+      <div style="display:flex;align-items:center;gap:12px;padding:14px 16px">
+        <div style="width:38px;height:38px;border-radius:8px;background:var(--ap-green-dim);border:1px solid rgba(164,186,62,0.25);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🚜</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600;color:var(--ap-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.hostname || c.device_id)}</div>
+          <div style="font-size:11px;color:var(--ap-muted);margin-top:2px">${esc(c.estab_slug)} · ${esc(c.device_id)}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 16px 14px">
+        <span class="badge ${viejo ? "badge-red" : "badge-lime"}" style="font-size:9px">${viejo ? "⚠ " : "✓ "}config ${hace(c.ultimo_visto)}</span>
+        ${c.version_pilotx ? `<span class="badge badge-blue" style="font-size:9px">PilotX ${esc(c.version_pilotx)}</span>` : ""}
+        <span class="badge badge-gray" style="font-size:9px">${c.n_versiones} versión${c.n_versiones !== 1 ? "es" : ""}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ── Modal detalle ─────────────────────────────────────────
+async function cfgAbrir(deviceId) {
+  const idx = _cfgs.find(c => c.device_id === deviceId);
+  document.getElementById("cfg-titulo").textContent = idx?.hostname || deviceId;
+  document.getElementById("cfg-sub").textContent = `${idx?.estab_slug || ""} · ${deviceId} · visto ${hace(idx?.ultimo_visto)}`;
+  document.getElementById("cfg-cuerpo").innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  document.getElementById("cfg-json").style.display = "none";
+  document.getElementById("cfg-cuerpo").style.display = "block";
+  openModal("modal-cfg");
+  try {
+    _cfgDoc = await Auth.get(`/api/soporte/config-backup?device_id=${encodeURIComponent(deviceId)}&full=1`);
+    const sel = document.getElementById("cfg-version");
+    const vs  = _cfgDoc.versiones || [];
+    sel.innerHTML = vs.map((v, i) =>
+      `<option value="${i}" ${i === vs.length - 1 ? "selected" : ""}>${fmtTs(v.ts)}${v.version_pilotx ? " · PilotX " + esc(v.version_pilotx) : ""}${i === vs.length - 1 ? " (actual)" : ""}</option>`
+    ).join("");
+    cfgRenderVersion();
+  } catch (e) {
+    document.getElementById("cfg-cuerpo").innerHTML = `<div class="alert error show">${esc(e.message)}</div>`;
+  }
+}
+
+function cfgVersionActual() {
+  const i = parseInt(document.getElementById("cfg-version").value);
+  return (_cfgDoc?.versiones || [])[i] || null;
+}
+
+// Claves sensibles enmascaradas en pantalla (el JSON descargado va completo,
+// es el respaldo para restaurar).
+function maskVal(k, v) {
+  if (typeof v === "string" && v.length > 4 && RE_SENSIBLE.test(k))
+    return v.slice(0, 6) + "…";
+  return v;
+}
+
+function filaHtml(k, v) {
+  let mostrado;
+  if (v === null || v === undefined) mostrado = "–";
+  else if (Array.isArray(v)) mostrado = `[${v.length}]`;
+  else if (typeof v === "object") mostrado = "{…}";
+  else mostrado = String(maskVal(k, v));
+  return `<div style="display:flex;justify-content:space-between;align-items:center;background:var(--ap-bg);border-radius:6px;padding:5px 8px;gap:6px">
+    <span style="font-size:11px;color:var(--ap-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(k)}</span>
+    <span style="font-family:monospace;font-size:12px;color:var(--ap-green);flex-shrink:0;max-width:55%;overflow:hidden;text-overflow:ellipsis">${esc(mostrado)}</span>
+  </div>`;
+}
+
+function cfgRenderVersion() {
+  const v = cfgVersionActual();
+  const cuerpo = document.getElementById("cfg-cuerpo");
+  if (!v) { cuerpo.innerHTML = '<div class="td-dim">Sin datos</div>'; return; }
+
+  const cfg = v.config || {};
+  cuerpo.innerHTML = Object.entries(cfg).map(([archivo, contenido]) => {
+    let filas = "";
+    if (contenido && typeof contenido === "object" && !Array.isArray(contenido)) {
+      filas = Object.entries(contenido).map(([k, val]) => {
+        if (val && typeof val === "object" && !Array.isArray(val)) {
+          // un nivel más: subgrupo con sus escalares
+          const sub = Object.entries(val).map(([k2, v2]) => filaHtml(`${k}.${k2}`, v2)).join("");
+          return sub;
+        }
+        return filaHtml(k, val);
+      }).join("");
+    } else {
+      filas = filaHtml(archivo, contenido);
+    }
+    return `<div style="margin-bottom:14px">
+      <div style="font-size:10px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${esc(archivo)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${filas}</div>
+    </div>`;
+  }).join("") || '<div class="td-dim">Config vacía</div>';
+
+  // JSON crudo (con máscara también, por si queda abierto en una demo)
+  const json = document.getElementById("cfg-json");
+  json.textContent = JSON.stringify(v.config, (k, val) => maskVal(k, val), 2);
+}
+
+function cfgToggleJson() {
+  const json = document.getElementById("cfg-json");
+  const cuerpo = document.getElementById("cfg-cuerpo");
+  const abierto = json.style.display !== "none";
+  json.style.display = abierto ? "none" : "block";
+  cuerpo.style.display = abierto ? "block" : "none";
+  document.getElementById("cfg-btn-json").textContent = abierto ? "Ver JSON" : "Ver resumen";
+}
+
+function cfgDescargar() {
+  const v = cfgVersionActual();
+  if (!v || !_cfgDoc) return;
+  const blob = new Blob([JSON.stringify(v.config, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `config_${_cfgDoc.device_id}_${new Date(v.ts).toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.addEventListener("DOMContentLoaded", vehCargar);
 </script>

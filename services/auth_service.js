@@ -349,6 +349,14 @@ async function login(email, password, orgSlugSolicitada) {
 async function cambiarOrg(uid, orgSlug) {
   const memberships = await getMemberships(uid);
   const rolGlobal   = await getRolGlobal(uid);
+  // orgSlug vacío = "vista global" (token sin org). Solo tiene sentido para
+  // superadmin; el resto siempre opera dentro de una org.
+  if (!orgSlug) {
+    if (rolGlobal !== "superadmin")
+      throw { status: 403, message: "Sin acceso a esa organización" };
+    const token = await signJWT(uid, null, memberships);
+    return { token, orgSlug: null };
+  }
   const tieneAcceso = memberships.some(m => m.orgSlug === orgSlug);
   if (!tieneAcceso && rolGlobal !== "superadmin")
     throw { status: 403, message: "Sin acceso a esa organización" };
@@ -362,8 +370,10 @@ async function cambiarOrg(uid, orgSlug) {
 async function crearInvitacion({ emailDestino, nombreDestino, orgSlug, rolAsignado, restricciones, invitadoPorUID }) {
   const db = globalDB();
 
-  const memb         = await db.get(`memb_${invitadoPorUID.replace("usr_","")}_${orgSlug}`).catch(() => null);
-  const rolInvitador = memb?.rol || "viewer";
+  const memb      = await db.get(`memb_${invitadoPorUID.replace("usr_","")}_${orgSlug}`).catch(() => null);
+  const invitador = await db.get(invitadoPorUID).catch(() => null);
+  // Superadmin invita en cualquier org aunque no tenga membresía en ella.
+  const rolInvitador = invitador?.rol_global === "superadmin" ? "superadmin" : (memb?.rol || "viewer");
   if (!puedeInvitar(rolInvitador, rolAsignado))
     throw { status: 403, message: `El rol '${rolInvitador}' no puede invitar '${rolAsignado}'` };
 
@@ -371,8 +381,7 @@ async function crearInvitacion({ emailDestino, nombreDestino, orgSlug, rolAsigna
   const now   = Date.now();
   let orgNombre = orgSlug;
   try { const org = await db.get(`org_${orgSlug}`); orgNombre = org.nombre; } catch {}
-  let invitadorNombre = "";
-  try { const inv = await db.get(invitadoPorUID); invitadorNombre = inv.nombre; } catch {}
+  const invitadorNombre = invitador?.nombre || "";
 
   const expira_at = now + 48 * 60 * 60 * 1000;
   await db.insert({
@@ -417,13 +426,29 @@ async function getInvitacion(token) {
   return doc;
 }
 
-async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }, meta = {}) {
+async function aceptarInvitacion(token, { nombre, password }, meta = {}) {
   const db  = globalDB();
   const inv = await getInvitacion(token);
   const now = Date.now();
   let uid;
 
-  if (esNuevoUsuario !== false) {
+  // El servidor decide si el email ya tiene cuenta — no se confía en el
+  // cliente. O16: el camino "usuario existente" devolvía sesión iniciada sin
+  // verificar identidad; ahora exige la contraseña de esa cuenta.
+  const existente      = await findUser(db, inv.email_destino);
+  const esNuevoUsuario = !existente;
+
+  if (existente) {
+    if (!password)
+      throw { status: 401, message: "Ese email ya tiene cuenta en OrbitX: ingresá tu contraseña para unirte", ya_existe: true };
+    const ok = await bcrypt.compare(password, existente.password_hash);
+    if (!ok) throw { status: 401, message: "Contraseña incorrecta", ya_existe: true };
+    if (existente.activo === false || existente.bloqueado)
+      throw { status: 403, message: "Cuenta desactivada o bloqueada" };
+    uid = existente._id.replace("usr_", "");
+  } else {
+    if (!password || password.length < 8)
+      throw { status: 400, message: "La contraseña debe tener al menos 8 caracteres" };
     uid = slugify((nombre || "user").split(" ")[0]) + genToken(4);
     await db.insert({
       _id: `usr_${uid}`,
@@ -439,19 +464,19 @@ async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }, me
       ultimo_login: null, login_count: 0,
       created_at: now, updated_at: now
     });
-  } else {
-    const user = await findUser(db, inv.email_destino);
-    if (!user) throw { status: 404, message: "Usuario no encontrado" };
-    uid = user._id.replace("usr_", "");
   }
 
+  // Upsert: si el usuario fue miembro antes (membresía revocada) el doc ya
+  // existe y un insert plano tiraría conflicto.
+  const membPrev = await db.get(`memb_${uid}_${inv.orgSlug}`).catch(() => null);
   await db.insert({
     _id: `memb_${uid}_${inv.orgSlug}`,
+    ...(membPrev ? { _rev: membPrev._rev } : {}),
     tipo: "membresia",
     uid: `usr_${uid}`, orgSlug: inv.orgSlug, rol: inv.rol_asignado,
     restricciones: inv.restricciones,
     invitado_por: inv.invitado_por_uid, invitacion_id: inv._id,
-    activa: true, created_at: now, updated_at: now
+    activa: true, created_at: membPrev?.created_at || now, updated_at: now
   });
 
   await db.insert({ ...inv, estado: "aceptada", uid_aceptante: `usr_${uid}`, aceptada_at: now });
@@ -474,6 +499,23 @@ async function aceptarInvitacion(token, { nombre, password, esNuevoUsuario }, me
   const memberships = await getMemberships(uid);
   const jwtToken    = await signJWT(uid, inv.orgSlug, memberships);
   return { token: jwtToken, uid: `usr_${uid}`, orgSlug: inv.orgSlug };
+}
+
+async function cancelarInvitacion(token, { orgSlug, esSuperadmin, ejecutadoPorUID }) {
+  const db  = globalDB();
+  const doc = await db.get(`inv_${token}`).catch(() => null);
+  if (!doc) throw { status: 404, message: "Invitación no encontrada" };
+  if (!esSuperadmin && doc.orgSlug !== orgSlug)
+    throw { status: 403, message: "Sin acceso a esa invitación" };
+  if (doc.estado !== "pendiente")
+    throw { status: 400, message: `La invitación ya está ${doc.estado}` };
+  await db.insert({ ...doc, estado: "cancelada", cancelada_por: ejecutadoPorUID, cancelada_at: Date.now() });
+  await registrarAudit(doc.orgSlug, ejecutadoPorUID, "invitacion.cancelar", { email: doc.email_destino });
+}
+
+// ¿El email ya tiene cuenta en la plataforma? (para la landing de invitación)
+async function emailTieneCuenta(email) {
+  return !!(await findUser(globalDB(), email));
 }
 
 // ════════════════════════════════════════════════════════════
@@ -509,20 +551,31 @@ async function getMiembros(orgSlug) {
   });
 }
 
-async function actualizarMembresia(uid, orgSlug, { rol, restricciones }, ejecutadoPorUID) {
+// Un ejecutor no-superadmin solo puede administrar roles que podría invitar:
+// evita que un admin_org cambie/eche a un owner o ascienda a alguien a owner.
+function validarJerarquia(rolEjecutor, ...rolesAfectados) {
+  if (!rolEjecutor || rolEjecutor === "superadmin") return;
+  for (const r of rolesAfectados)
+    if (r && !puedeInvitar(rolEjecutor, r))
+      throw { status: 403, message: `El rol '${rolEjecutor}' no puede administrar el rol '${r}'` };
+}
+
+async function actualizarMembresia(uid, orgSlug, { rol, restricciones }, ejecutadoPorUID, rolEjecutor) {
   const db   = globalDB();
   const id   = `memb_${uid.replace("usr_","")}_${orgSlug}`;
   const memb = await db.get(id).catch(() => null);
   if (!memb) throw { status: 404, message: "Membresía no encontrada" };
+  validarJerarquia(rolEjecutor, memb.rol, rol);
   await db.insert({ ...memb, rol: rol || memb.rol, restricciones: restricciones || memb.restricciones, updated_at: Date.now() });
   await registrarAudit(orgSlug, ejecutadoPorUID, "membresia.actualizar", { uid, rol });
 }
 
-async function revocarAcceso(uid, orgSlug, ejecutadoPorUID) {
+async function revocarAcceso(uid, orgSlug, ejecutadoPorUID, rolEjecutor) {
   const db   = globalDB();
   const id   = `memb_${uid.replace("usr_","")}_${orgSlug}`;
   const memb = await db.get(id).catch(() => null);
   if (!memb) throw { status: 404, message: "Membresía no encontrada" };
+  validarJerarquia(rolEjecutor, memb.rol);
   await db.insert({ ...memb, activa: false, revocado_por: ejecutadoPorUID, revocado_at: Date.now(), updated_at: Date.now() });
   // O15 — matar los JWT vigentes del usuario: sin esto seguía operando en la
   // org revocada (con memberships embebidas) hasta que el token expirara (30d).
@@ -622,7 +675,7 @@ module.exports = {
   setDB, ensureIndexes,
   iniciarRegistro, verificarEmail, aprobarRegistro, rechazarRegistro, getRegistrosPendientes,
   login, cambiarOrg,
-  crearInvitacion, getInvitacion, aceptarInvitacion,
+  crearInvitacion, getInvitacion, aceptarInvitacion, cancelarInvitacion, emailTieneCuenta,
   getMiembros, actualizarMembresia, revocarAcceso,
   registrarAudit, getAuditLog,
   solicitarReset, confirmarReset

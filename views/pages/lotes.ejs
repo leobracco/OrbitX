@@ -91,6 +91,56 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- MODAL: editar lindero (boundary) del lote               -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-editar-lindero">
+  <div class="modal" style="width:860px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;padding:0">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--ap-border);display:flex;align-items:center;gap:12px">
+      <div class="modal-title" style="margin:0;flex:1">Editar lindero — <span id="el-lote">–</span></div>
+      <span id="el-ha" style="font-size:12px;color:var(--ap-muted)">0 ha</span>
+      <button class="btn btn-sm btn-ghost" onclick="cerrarLindero()">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 320px;gap:0;flex:1;overflow:hidden">
+      <div style="position:relative;background:#000">
+        <div id="el-mapa" style="height:100%;min-height:420px"></div>
+        <div style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.78);color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;line-height:1.6;pointer-events:none;max-width:280px">
+          ✋ Arrastrá un vértice para moverlo<br>
+          🖱 Click en el borde para agregar un punto<br>
+          ⌫ Click en un vértice para borrarlo<br>
+          ↺ "Redibujar" para empezar de cero
+        </div>
+      </div>
+      <div style="padding:18px;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--ap-border);overflow-y:auto">
+        <div id="el-alert" class="alert"></div>
+        <p style="font-size:12px;color:var(--ap-muted);line-height:1.5;margin:0">
+          Editá el perímetro del lote arrastrando los vértices, agregando puntos en el borde o borrándolos. También podés redibujarlo de cero.
+        </p>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-ghost" style="flex:1" onclick="elDeshacer()">↩ Deshacer</button>
+          <button class="btn btn-sm btn-ghost" style="flex:1" onclick="elRedibujarDeCero()">↺ Redibujar</button>
+        </div>
+        <div style="border-top:1px solid var(--ap-border);padding-top:12px;margin-top:6px">
+          <div style="font-size:11px;color:var(--ap-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Sincronizar al tractor</div>
+          <div class="field">
+            <label>Tractor destino</label>
+            <select id="el-device">
+              <option value="">— No sincronizar (solo cloud) —</option>
+            </select>
+          </div>
+          <p style="font-size:11px;color:var(--ap-muted);margin-top:6px;line-height:1.5">
+            Si elegís un tractor, OrbitX-Sync le baja el nuevo Boundary.txt + KML al toque. Si dejás "solo cloud", se actualiza en OrbitX sin tocar el tractor.
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:auto">
+          <button class="btn btn-ghost" onclick="cerrarLindero()">Cancelar</button>
+          <button class="btn btn-primary" id="el-btn-guardar" style="flex:1" onclick="elGuardar()">Guardar lindero</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- KPIs -->
 <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px" id="kpi-lotes">
   <div class="kpi lime"><div class="kpi-shine"></div><div class="kpi-label">Lotes totales</div><div class="kpi-val" id="kpi-total">–</div><div class="kpi-delta">sincronizados</div></div>
@@ -118,6 +168,7 @@
           <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap" id="ml-badges"></div>
         </div>
         <button class="btn btn-sm btn-ghost" onclick="abrirEditarLote()" title="Editar metadata">✏ Editar</button>
+        <button class="btn btn-sm btn-ghost" onclick="abrirEditarLindero()" title="Editar el lindero (boundary) del lote">✎ Lindero</button>
         <button class="btn btn-sm btn-primary" onclick="abrirAgregarCapa()" title="Agregar capa de info">+ Capa</button>
         <button class="btn btn-sm btn-ghost" onclick="analizarConIA()" title="Analizar con agrarIA">🌿 IA</button>
       </div>
@@ -1076,4 +1127,153 @@ async function clGuardar() {
     alert.textContent = e.message || "No pudimos guardar el lote";
   }
 }
+
+// ══════════════════════════════════════════════════════════
+//  Editar LINDERO (boundary) del lote — mapa Leaflet editable
+// ══════════════════════════════════════════════════════════
+let _elMapa=null, _elMarkers=[], _elPoly=null, _elPuntos=[];
+
+function _elHa(puntos){
+  if(puntos.length<3) return 0;
+  const meanLat=puntos.reduce((s,p)=>s+p[0],0)/puntos.length*Math.PI/180;
+  const mLon=111320*Math.cos(meanLat), mLat=110540;
+  let acc=0;
+  for(let i=0;i<puntos.length;i++){
+    const a=puntos[i], b=puntos[(i+1)%puntos.length];
+    acc+=(a[1]*mLon*b[0]*mLat - b[1]*mLon*a[0]*mLat);
+  }
+  return Math.abs(acc/2)/10000;
+}
+
+function cerrarLindero(){ closeModal('modal-editar-lindero'); if(_loteActual) abrirLote(encodeURIComponent(_loteActual)); }
+
+function abrirEditarLindero(){
+  const ctx=_contextoActual||{};
+  const gj=ctx.boundary_geojson;
+  let pts=[];
+  if(gj&&gj.coordinates&&gj.coordinates[0]){
+    pts=gj.coordinates[0].map(c=>[c[1],c[0]]); // [lon,lat] -> [lat,lng]
+  } else if(Array.isArray(ctx.boundary_latlon) && ctx.boundary_latlon.length>=3){
+    pts=ctx.boundary_latlon.map(p=>[p[0],p[1]]); // AOG ya viene [lat,lon]
+  }
+  if(pts.length>1){ const a=pts[0],b=pts[pts.length-1]; if(a[0]===b[0]&&a[1]===b[1]) pts.pop(); }
+  _elPuntos=pts;
+  document.getElementById('el-lote').textContent=_loteActual;
+  document.getElementById('el-alert').className='alert';
+  closeModal('modal-lote');
+  openModal('modal-editar-lindero');
+  cargarDevicesLindero();
+  setTimeout(()=>initMapaEditarLindero(),140);
+}
+
+async function cargarDevicesLindero(){
+  const sel=document.getElementById('el-device');
+  sel.innerHTML='<option value="">— No sincronizar (solo cloud) —</option>';
+  try{
+    const devs=await Auth.get('/api/devices');
+    (Array.isArray(devs)?devs:[]).forEach(d=>{
+      const op=document.createElement('option');
+      op.value=d.device_id;
+      op.textContent=`${d.nombre||d.device_id}${d.online?' · online':''}`;
+      sel.appendChild(op);
+    });
+  }catch{}
+}
+
+function initMapaEditarLindero(){
+  if(_elMapa){ _elMapa.invalidateSize(); elRedibujar(); elFit(); setTimeout(()=>{ if(_elMapa){_elMapa.invalidateSize(); elFit();} },220); return; }
+  _elMapa=L.map('el-mapa',{zoomControl:true, doubleClickZoom:false}).setView([-34.6,-60.0],6);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {attribution:'Esri',maxNativeZoom:17,maxZoom:22}).addTo(_elMapa);
+  const buscador=L.control({position:'topright'});
+  buscador.onAdd=()=>{const div=L.DomUtil.create('div');
+    div.innerHTML='<input id="el-buscar" placeholder="🔍 Buscar dirección…" style="background:rgba(0,0,0,0.8);border:1px solid #555;color:#fff;padding:7px 10px;border-radius:6px;font-size:12px;width:210px;outline:none"/>';
+    L.DomEvent.disableClickPropagation(div); return div;};
+  buscador.addTo(_elMapa);
+  setTimeout(()=>{const inp=document.getElementById('el-buscar'); if(!inp)return;
+    inp.addEventListener('keydown',async e=>{ if(e.key!=='Enter')return; const q=inp.value.trim(); if(!q)return;
+      try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`);
+      const j=await r.json(); if(j[0]) _elMapa.setView([parseFloat(j[0].lat),parseFloat(j[0].lon)],16);}catch{}});},100);
+  _elMapa.on('click',elOnMapClick);
+  elRedibujar();
+  setTimeout(()=>{ if(_elMapa){ _elMapa.invalidateSize(); elFit(); } },220);
+  setTimeout(()=>{ if(_elMapa){ _elMapa.invalidateSize(); elFit(); } },550);
+}
+
+function elFit(){ if(_elPuntos.length){ try{ _elMapa.fitBounds(L.latLngBounds(_elPuntos).pad(0.25)); }catch{} } }
+
+function elOnMapClick(e){
+  const p=[e.latlng.lat,e.latlng.lng];
+  if(_elPuntos.length<3){ _elPuntos.push(p); }
+  else { _elPuntos.splice(elNearestEdge(e.latlng),0,p); }
+  elRedibujar();
+}
+
+function elNearestEdge(latlng){
+  const cp=_elMapa.latLngToContainerPoint(latlng);
+  let best=1, bestD=Infinity;
+  for(let i=0;i<_elPuntos.length;i++){
+    const a=_elMapa.latLngToContainerPoint(_elPuntos[i]);
+    const b=_elMapa.latLngToContainerPoint(_elPuntos[(i+1)%_elPuntos.length]);
+    const d=_elDistSeg(cp,a,b);
+    if(d<bestD){ bestD=d; best=i+1; }
+  }
+  return best;
+}
+function _elDistSeg(p,a,b){
+  const dx=b.x-a.x, dy=b.y-a.y, l2=dx*dx+dy*dy;
+  let t=l2? ((p.x-a.x)*dx+(p.y-a.y)*dy)/l2 : 0; t=Math.max(0,Math.min(1,t));
+  return Math.hypot(p.x-(a.x+t*dx), p.y-(a.y+t*dy));
+}
+
+function elVtxIcon(first){
+  return L.divIcon({className:'', iconSize:[14,14], iconAnchor:[7,7],
+    html:`<div style="width:12px;height:12px;border-radius:50%;background:${first?'#A4BA3E':'#fff'};border:2px solid #A4BA3E;box-shadow:0 0 0 1px #000;cursor:move"></div>`});
+}
+
+function elDrawPolyOnly(){
+  if(_elPoly) _elPoly.setLatLngs(_elPuntos);
+  document.getElementById('el-ha').textContent=`${_elHa(_elPuntos).toFixed(2)} ha · ${_elPuntos.length} puntos`;
+}
+
+function elRedibujar(){
+  _elMarkers.forEach(m=>_elMapa.removeLayer(m)); _elMarkers=[];
+  if(_elPoly){ _elMapa.removeLayer(_elPoly); _elPoly=null; }
+  _elPuntos.forEach((p,i)=>{
+    const m=L.marker(p,{draggable:true, icon:elVtxIcon(i===0)}).addTo(_elMapa);
+    m.on('drag',()=>{ const ll=m.getLatLng(); _elPuntos[i]=[ll.lat,ll.lng]; elDrawPolyOnly(); });
+    m.on('dragend',()=>{ const ll=m.getLatLng(); _elPuntos[i]=[ll.lat,ll.lng]; elRedibujar(); });
+    m.on('click',ev=>{ L.DomEvent.stop(ev); elDeleteVertex(i); });
+    _elMarkers.push(m);
+  });
+  if(_elPuntos.length>=3){
+    _elPoly=L.polygon(_elPuntos,{color:'#A4BA3E',weight:2,fillColor:'#A4BA3E',fillOpacity:0.18}).addTo(_elMapa);
+  } else if(_elPuntos.length>=2){
+    _elPoly=L.polyline(_elPuntos,{color:'#A4BA3E',weight:2,dashArray:'4 6'}).addTo(_elMapa);
+  }
+  document.getElementById('el-ha').textContent=`${_elHa(_elPuntos).toFixed(2)} ha · ${_elPuntos.length} puntos`;
+}
+
+function elDeleteVertex(i){
+  if(_elPuntos.length<=3){ if(typeof toast==='function') toast('Mínimo 3 puntos','No se puede borrar más','red'); return; }
+  _elPuntos.splice(i,1); elRedibujar();
+}
+function elDeshacer(){ if(_elPuntos.length){ _elPuntos.pop(); elRedibujar(); } }
+function elRedibujarDeCero(){ _elPuntos=[]; elRedibujar(); }
+
+async function elGuardar(){
+  const alert=document.getElementById('el-alert'); alert.className='alert';
+  if(_elPuntos.length<3){ alert.className='alert error show'; alert.textContent='El lindero necesita al menos 3 puntos'; return; }
+  const device_id=document.getElementById('el-device').value;
+  const btn=document.getElementById('el-btn-guardar'); btn.disabled=true; const t0=btn.textContent; btn.textContent='Guardando…';
+  try{
+    const r=await Auth.put(`/api/lotes-maestro/${encodeURIComponent(_loteActual)}/boundary`,{ boundary:_elPuntos, device_id:device_id||null });
+    if(typeof toast==='function') toast('✓ Lindero actualizado', `${r.ha_calculadas} ha${r.encolados?` · enviado a ${r.device_id}`:' · solo cloud'}`,'lime');
+    closeModal('modal-editar-lindero');
+    await abrirLote(encodeURIComponent(_loteActual));
+    cargarLotes(true);
+  }catch(e){ alert.className='alert error show'; alert.textContent=e.message||'No pudimos guardar el lindero'; }
+  finally{ btn.disabled=false; btn.textContent=t0; }
+}
+
 </script>

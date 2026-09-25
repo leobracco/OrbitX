@@ -194,11 +194,24 @@ const ESTAB_INDEX_FIELDS = [
   ["tipo","lote_ref"], // capas por lote: {tipo:"lote_capa", lote_ref:{$in:…}}
   ["tipo","updated_at"], // lote_maestro ordenado/paginado por fecha
   ["tipo","fecha"], // lluvia_registro ordenado por fecha
+  ["tipo","ts_inicio"], // alertas: historial ordenado sin filtrar resuelta (Sprint 1)
+  ["tipo","temporada"], // lote_maestro por temporada: reportes y actividad (Sprint 1)
   ["tipo","subtipo"],
   ["tipo","subtipo","es_lote"],
   ["tipo","entregado"],
   ["tipo","doc_ref"],
   ["tipo","resuelta","ts_inicio"],
+  // Sprint 2 — Pieza 2: temporadas de cobertura de un lote desde aog_historial.
+  ["tipo","subtipo","lote_nombre","ts"],
+  // Sprint 2 — Pieza 1: prescripciones guardadas de un lote.
+  ["tipo","lote_nombre"],
+  // Sprint 2 — Tarea 9c (fix post-review):
+  // pendientes del tractor: {tipo:"aog_descarga_pendiente", device_id, entregado}.
+  ["tipo","device_id","entregado"],
+  // idempotencia de la migración de prescripciones: {tipo:"prescripcion", local_id}.
+  ["tipo","local_id"],
+  // boundary del lote por nombre: {tipo:"lote_maestro", nombre}.
+  ["tipo","nombre"],
 ];
 
 async function ensureEstabIndexes(slug) {
@@ -229,6 +242,10 @@ const GLOBAL_INDEX_FIELDS = [
   ["tipo","estab_slug","ts"],
   ["tipo","device_id"],
   ["tipo","producto","version"],
+  // Sprint 2 — Pieza 5: lookup de token_org por hash (obligatorio: sin este
+  // índice, validar un token es un full scan de toda la base de auth).
+  ["tipo","hash"],
+  ["tipo","org_slug"],
 ];
 async function ensureGlobalIndexes() {
   const db = getDB("global");
@@ -244,9 +261,11 @@ async function ensureGlobalIndexes() {
 
 // ── Establecimientos ─────────────────────────────────────────
 async function getEstablecimientos() {
+  // Los establecimientos viven como docs tipo "org" (el tipo "establecimiento"
+  // es legacy y está vacío en producción; el cron diario nunca encontraba nada).
   const db = getDB("global");
-  const r  = await db.find({ selector: { tipo: "establecimiento" } });
-  return r.docs;
+  const r  = await db.find({ selector: { tipo: "org" }, fields: ["_id","slug","nombre","activa"], limit: 500 });
+  return (r.docs || []).filter(o => o.activa !== false);
 }
 
 async function upsertEstablecimiento(data) {
@@ -332,9 +351,30 @@ async function getDensidadesPorLote(slug, loteId, limit=2000) {
 }
 
 // ── Alertas ──────────────────────────────────────────────────
+// Niveles "altos" que ameritan el hook alerta_critica de notify-org (además
+// del "CRITICO" que ya usa routes/sync.js). Normalizado sin tildes y en
+// minúscula para cubrir variantes ("Crítica", "ALTA", etc).
+const NIVELES_CRITICOS = ["critico", "critica", "alta"];
+function esNivelCritico(nivel) {
+  return NIVELES_CRITICOS.includes(String(nivel || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""));
+}
+
 async function insertAlerta(slug, data) {
   const id = `alert_${Date.now()}_${data.bajada_id||0}`;
-  return upsert(getDB(slug), id, { ...data, tipo:"alerta", synced_at:Date.now() });
+  const r  = await upsert(getDB(slug), id, { ...data, tipo:"alerta", synced_at:Date.now() });
+  // Push a la app móvil, best-effort: nunca bloquea ni falla el sync.
+  try {
+    const push = require("../lib/push");
+    if (push.configurado() && !data.resuelta)
+      push.notificarOrg(slug, { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta en el campo", url: "/app/#/alertas" })
+          .catch(e => console.warn("[push/alerta]", e.message));
+    // El hook alerta_critica es para avisos por mail/webhook de nivel alto: no
+    // spamear notify-org con cada advertencia menor, solo con las críticas.
+    if (!data.resuelta && esNivelCritico(data.nivel))
+      require("../lib/notify-org").notify(slug, "alerta_critica", { titulo: `Alerta ${data.nivel || ""}`.trim(), cuerpo: data.mensaje || "Nueva alerta" })
+          .catch(e => console.warn("[notify/alerta]", e.message));
+  } catch (e) { console.warn("[push/alerta]", e.message); }
+  return r;
 }
 
 async function getAlertasActivas(slug) {
@@ -408,5 +448,6 @@ module.exports = {
   insertAlerta, getAlertasActivas, resolverAlerta,
   getNodo, upsertNodo, getNodos,
   saveBackupAOG, getBackupsAOG,
-  procesarBatchSync, countPendingSync
+  procesarBatchSync, countPendingSync,
+  ESTAB_INDEX_FIELDS, GLOBAL_INDEX_FIELDS
 };

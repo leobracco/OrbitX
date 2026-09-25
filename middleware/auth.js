@@ -77,6 +77,52 @@ async function required(req, res, next) {
     ? header.slice(7)
     : (req.cookies?.orbitx_token || req.query?.token || null);
 
+  // Sprint 2: tokens de org
+  // Va ANTES de la rama de device para que un orbx_ nunca caiga en el camino
+  // del master token. Se acepta SOLO por el header Authorization: por ?token=
+  // la credencial queda en los logs de nginx, en el historial del browser y en
+  // el Referer, y un token de org es de larga vida y sin token_version.
+  const bearerRaw = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (bearerRaw.startsWith("orbx_")) {
+    const tokSrv = require("../services/tokens_org");
+    if (!tokSrv.esSoloLectura(req.method))
+      return res.status(403).json({ error: "Los tokens de organización son de solo lectura" });
+    if (tokSrv.rutaProhibida(req.originalUrl))
+      return res.status(403).json({ error: "Ese endpoint no está disponible para tokens de organización" });
+
+    let docTok;
+    try { docTok = await tokSrv.buscarPorToken(bearerRaw); }
+    catch (e) {
+      // Fail-CLOSED, al revés que el chequeo de revocación de JWT: si no
+      // podemos verificar, no pasa.
+      console.error("[auth.required/token-org]", e.message);
+      return res.status(503).json({ error: "No se pudo validar el token, probá de nuevo en un momento" });
+    }
+
+    const ev = tokSrv.evaluarToken(docTok, Date.now());
+    if (!ev.valido) {
+      if (ev.motivo === "revocado") return res.status(403).json({ error: "Token revocado" });
+      if (ev.motivo === "vencido")  return res.status(401).json({ error: "Token vencido" });
+      return res.status(401).json({ error: "Token de organización inválido" });
+    }
+
+    tokSrv.registrarUso(docTok, req.ip);
+    req.user = {
+      uid:         `tok_${docTok._id}`,
+      rol:         "viewer",
+      rol_global:  "viewer",
+      estabSlug:   docTok.org_slug,
+      memberships: [{ orgSlug: docTok.org_slug, rol: "viewer" }],
+      isDevice:    false,
+      isToken:     true,
+      scopes:      docTok.scopes || ["lectura"],
+    };
+    return next();
+  }
+  if (token && String(token).startsWith("orbx_"))
+    return res.status(401).json({ error: "El token de organización solo se acepta por el header Authorization" });
+  // fin Sprint 2: tokens de org
+
   if (!token && req.headers["x-device-id"]) {
     const deviceId = req.headers["x-device-id"];
     const sentTok  = req.headers["x-auth-token"];
@@ -166,19 +212,30 @@ function soloSuperadmin(req, res, next) {
   next();
 }
 
+// Sprint 2: recurso "prescripciones" — el agrónomo genera y edita prescripciones
+// (antes el router exigía lotes:write, que el agrónomo no tiene).
 const PERMS = {
-  superadmin: { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w","d"], dispositivos:["r","w","d"], audit_log:["r"] },
-  owner:      { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"] },
-  admin_org:  { usuarios:["r","w","i"],     lotes:["r","w"],     alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"] },
-  agronomo:   { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[] },
-  contratista:{ usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
-  operador:   { usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[] },
-  viewer:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:[],            audit_log:[] },
+  superadmin: { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w","d"], dispositivos:["r","w","d"], audit_log:["r"], prescripciones:["r","w","d"] },
+  owner:      { usuarios:["r","w","d","i"], lotes:["r","w","d"], alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"], prescripciones:["r","w","d"] },
+  admin_org:  { usuarios:["r","w","i"],     lotes:["r","w"],     alertas:["r","w"],     dispositivos:["r","w"],     audit_log:["r"], prescripciones:["r","w","d"] },
+  agronomo:   { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[],    prescripciones:["r","w"] },
+  contratista:{ usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  operador:   { usuarios:[],               lotes:["r"],          alertas:["r","w"],     dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  member:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:["r"],         audit_log:[],    prescripciones:["r"] },
+  viewer:     { usuarios:[],               lotes:["r"],          alertas:["r"],         dispositivos:[],            audit_log:[],    prescripciones:["r"] },
 };
 const AM = { read:"r", write:"w", delete:"d", invite:"i" };
 
 function requirePermiso(recurso, accion) {
   return (req, res, next) => {
+    // Sprint 2: tokens de org · requirePermiso
+    // Un token de organización solo lee. El guard va acá además del chequeo de
+    // método en `required` porque requirePermiso es el único punto por donde
+    // pasan los endpoints con permisos finos.
+    if (req.user?.isToken && accion !== "read" && accion !== "r") {
+      return res.status(403).json({ error: "Sin permiso", detalle: "los tokens de organización son de solo lectura" });
+    }
+    // fin Sprint 2: tokens de org · requirePermiso
     // O3 — Devices NUNCA pueden cruzar requirePermiso. Antes había un
     // bypass `if (isDevice) return next()` que daba a cualquier device
     // token acceso a /api/auth/invitar, /api/auth/equipo (CRUD usuarios)
@@ -206,4 +263,11 @@ function socketMiddleware(socket, next) {
   } catch { next(new Error("Token inválido")); }
 }
 
-module.exports = { required, adminOnly, soloSuperadmin, requirePermiso, socketMiddleware, signToken };
+// Sprint 2: tienePermiso — para rutas que aceptan ?estab= y tienen que evaluar
+// el rol del usuario en ESA org (req.user.rol mira solo la org activa del JWT).
+function tienePermiso(rol, recurso, accion) {
+  if (rol === "superadmin") return true;
+  const acc = AM[accion] || accion;
+  return (PERMS[rol]?.[recurso] || []).includes(acc);
+}
+module.exports = { required, adminOnly, soloSuperadmin, requirePermiso, socketMiddleware, signToken, tienePermiso };

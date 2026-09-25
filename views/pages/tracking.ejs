@@ -85,7 +85,13 @@
         <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#A4BA3E;display:inline-block"></span> En movimiento</div>
         <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#3C9EFF;display:inline-block"></span> Detenido</div>
         <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#555;display:inline-block"></span> Sin señal (>5min)</div>
-        <div style="display:flex;align-items:center;gap:6px"><span style="width:3px;height:10px;background:#FFB03C;display:inline-block;border-radius:2px"></span> Historial</div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:4px;background:#4285F4;display:inline-block;border-radius:2px"></span> Recorrido con piloto</div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:4px;display:inline-block;background:repeating-linear-gradient(90deg,#F4A742 0 3px,transparent 3px 6px);border-radius:2px"></span> Recorrido sin piloto</div>
+      </div>
+
+      <!-- Resumen del día (lo llena tracking-mapa.js al cargar historial) -->
+      <div id="trk-resumen"
+        style="display:none;position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.8);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 12px;z-index:1000;font-size:11px;color:#ccc;line-height:1.7">
       </div>
     </div>
   </div>

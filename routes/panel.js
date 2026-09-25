@@ -46,20 +46,30 @@ function requireSuperadmin(req, res, next) {
   next();
 }
 
+// Rol efectivo: superadmin global, si no el rol de la membresía en la org
+// activa. Los usuarios creados por invitación tienen rol_global "user", así
+// que mirar solo rol_global dejaba a owners/admin_org sin menú Admin.
+function rolEfectivo(req) {
+  const u = req.jwtUser || {};
+  if (u.rol_global === "superadmin") return "superadmin";
+  const slug = u.estabSlug || u.estab_slug;
+  const m = (u.memberships || []).find(m => m.orgSlug === slug);
+  return m?.rol || u.rol_global || "viewer";
+}
+
 function requireAdmin(req, res, next) {
-  const rol = req.jwtUser?.rol_global;
-  if (!["superadmin","owner","admin_org"].includes(rol)) return res.redirect("/dashboard");
+  if (!["superadmin","owner","admin_org"].includes(rolEfectivo(req))) return res.redirect("/dashboard");
   next();
 }
 
 function isSA(req) { return req.jwtUser?.rol_global === "superadmin"; }
 function isAdmin(req) {
-  return ["superadmin","owner","admin_org"].includes(req.jwtUser?.rol_global);
+  return ["superadmin","owner","admin_org"].includes(rolEfectivo(req));
 }
 
 // ── base EJS vars ─────────────────────────────────────────
 function base(req, extra = {}) {
-  const rol = req.jwtUser?.rol_global || "usuario";
+  const rol = rolEfectivo(req);
   return {
     user:       req.jwtUser,
     rol,
@@ -104,6 +114,7 @@ router.get("/invitacion/:token", async (req, res) => {
       invitadoPor:  inv.invitado_por_nombre,
       emailDestino: inv.email_destino,
       expira_at:    inv.expira_at,
+      ya_existe:    await svc.emailTieneCuenta(inv.email_destino).catch(() => false),
     };
   } catch (e) {
     error = e.message || "Invitación no válida";
@@ -145,9 +156,9 @@ router.get(["/", "/dashboard"], requireAuth, async (req, res) => {
                      .map(({ password_hash, reset_token, ...u })=>u).slice(0,5);
       stats.usuarios = docs.filter(d => d.tipo==="usuario" && d.activo!==false).length;
     } else if (Admin && miSlug) {
-      // Buscar usuarios del mismo estab
-      const membs = docs.filter(d => d.tipo==="membresia" && d.estab_slug===miSlug);
-      const uids  = new Set(membs.map(m => m.usuario_id));
+      // Buscar usuarios del mismo estab (docs membresia: campos orgSlug/uid)
+      const membs = docs.filter(d => d.tipo==="membresia" && d.orgSlug===miSlug && d.activa);
+      const uids  = new Set(membs.map(m => m.uid));
       usuarios = docs.filter(d => d.tipo==="usuario" && uids.has(d._id) && d.activo!==false)
                      .map(({ password_hash, reset_token, ...u })=>u).slice(0,5);
       stats.usuarios = usuarios.length;
@@ -194,6 +205,23 @@ router.get("/registros", requireAuth, requireSuperadmin, async (req, res) => {
 // ─────────────────────────────────────────────────────────
 // USUARIOS — solo superadmin
 // ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────
+// EQUIPO — miembros e invitaciones de la org activa
+// (owner/admin_org de la org; superadmin entra a la org con el selector)
+// ─────────────────────────────────────────────────────────
+router.get("/equipo", requireAuth, requireAdmin, async (req, res) => {
+  const db     = req.app.locals.globalDB;
+  const miSlug = req.jwtUser?.estabSlug || req.jwtUser?.estab_slug || null;
+  if (!miSlug) return res.redirect("/establecimientos"); // SA en vista global: elegir org primero
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", {
+    ...base(req, { regBadge }),
+    title:"Equipo", page:"equipo",
+    orgSlug: miSlug,
+    roles: require("../roles").ROLES
+  });
+});
+
 router.get("/usuarios", requireAuth, requireSuperadmin, async (req, res) => {
   const db = req.app.locals.globalDB;
   let usuarios = [];
@@ -377,12 +405,16 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
   try {
     const docs = await getAllDocs(db);
 
-    if (SA) {
+    if (miSlug) {
+      // Dentro de un establecimiento (superadmin que ENTRÓ a una org, o usuario de la org):
+      // sólo los dispositivos de ESE establecimiento (+ los sin asignar, para poder vincularlos).
+      dispositivos = docs.filter(d => d.tipo==="device" && (d.estab_slug===miSlug || !d.estab_slug));
+      // Para superadmin dejamos el listado completo de orgs (para poder reasignar); para el resto, sólo la suya.
+      establecimientos = docs.filter(d => d.tipo==="org" && (SA || d.slug===miSlug)).map(e => ({ slug:e.slug, nombre:e.nombre }));
+    } else if (SA) {
+      // Superadmin en vista GLOBAL (sin establecimiento seleccionado): todos los dispositivos.
       dispositivos = docs.filter(d => d.tipo==="device");
       establecimientos = docs.filter(d => d.tipo==="org").map(e => ({ slug:e.slug, nombre:e.nombre }));
-    } else if (miSlug) {
-      dispositivos = docs.filter(d => d.tipo==="device" && (d.estab_slug===miSlug || !d.estab_slug));
-      establecimientos = docs.filter(d => d.tipo==="org" && d.slug===miSlug).map(e => ({ slug:e.slug, nombre:e.nombre }));
     }
 
     dispositivos = dispositivos.map(d => ({
@@ -429,10 +461,12 @@ router.get("/camaras", requireAuth, async (req, res) => {
 
   try {
     const docs = await getAllDocs(db);
-    if (SA) {
-      dispositivos = docs.filter(d => d.tipo === "device");
-    } else if (miSlug) {
+    if (miSlug) {
+      // Dentro de un establecimiento: sólo los tractores de ESE establecimiento.
       dispositivos = docs.filter(d => d.tipo === "device" && d.estab_slug === miSlug);
+    } else if (SA) {
+      // Superadmin en vista global (sin establecimiento seleccionado): todos.
+      dispositivos = docs.filter(d => d.tipo === "device");
     }
     dispositivos = dispositivos
       .map(d => ({
@@ -724,6 +758,23 @@ router.get("/lluvias", requireAuth, async (req, res) => {
   const db = req.app.locals.globalDB;
   const regBadge = await getRegBadge(db).catch(() => 0);
   res.render("layout", { ...base(req, { regBadge }), title: "Lluvias", page: "lluvias" });
+});
+
+// Sprint 2: pagina de avisos
+router.get("/notificaciones", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Avisos", page: "notificaciones", activeNav: "/notificaciones" });
+});
+// fin Sprint 2: pagina de avisos
+
+// ─────────────────────────────────────────────────────────
+// SOPORTE — chat con las pantallas PilotX (datos vía /api/soporte/chat)
+// ─────────────────────────────────────────────────────────
+router.get("/soporte-chat", requireAuth, requireAdmin, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(() => 0);
+  res.render("layout", { ...base(req, { regBadge }), title: "Soporte", page: "soporte-chat" });
 });
 
 module.exports = router;

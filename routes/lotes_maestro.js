@@ -135,28 +135,22 @@ router.get("/", async (req, res) => {
       total = lista.length;
 
     } else {
-      // Modo sin búsqueda: usar VISTAS NATIVAS de CouchDB.
-      // 1) Lotes maestros ordenados por fecha desc, paginación nativa.
+      // Modo sin búsqueda: lista COMPLETA mergeada (maestros + lotes AOG) y
+      // paginación sobre el merge. Antes se paginaba solo sobre lote_maestro
+      // y los lotes AOG-sin-maestro se inyectaban únicamente cuando skip===0:
+      // en orgs donde casi todo viene del sync AOG (lo normal), la página 2
+      // volvía vacía y "Cargar 10 más" no hacía nada.
+
+      // 1) Todos los maestros (liviano: columnas de la vista, sin docs).
       const t0 = Date.now();
       let docsMaestros = [];
       try {
         const r = await estabDB.view("orbitx", "lotes_maestros_por_fecha", {
           descending: true,
-          limit, skip,
           include_docs: false,
           reduce: false,
         });
-        docsMaestros = (r.rows || []).map(row => ({
-          _id:          row.id,
-          nombre:       row.value.nombre,
-          cultivo:      row.value.cultivo,
-          temporada:    row.value.temporada,
-          ha_estimadas: row.value.ha_estimadas,
-          ha_calculadas:row.value.ha_calculadas,
-          tags:         row.value.tags,
-          origen:       row.value.origen,
-          updated_at:   row.value.updated_at,
-        }));
+        docsMaestros = (r.rows || []).map(row => ({ _id: row.id, ...row.value }));
       } catch (e) {
         // Fallback Mango si la vista no está construida todavía.
         console.warn("[lotes-maestro] view fallback:", e.message);
@@ -164,13 +158,13 @@ router.get("/", async (req, res) => {
           const r = await estabDB.find({
             selector: { tipo: "lote_maestro", updated_at: { $gte: 0 } },
             sort:     [{ updated_at: "desc" }],
-            limit, skip,
+            limit:    2000,
           });
           docsMaestros = r.docs;
         } catch {
           const fb = await findAll(estabDB, { tipo: "lote_maestro" }, 2000);
           fb.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-          docsMaestros = fb.slice(skip, skip + limit);
+          docsMaestros = fb;
         }
       }
       timings.maestros = Date.now() - t0;
@@ -182,66 +176,41 @@ router.get("/", async (req, res) => {
         tsUltimo: m.updated_at || 0,
       }));
 
-      // 2) Sumar lotes AOG sin maestro SOLO en la primera página, con vista group:1.
-      if (skip === 0) {
-        const t1 = Date.now();
-        let nombresAOG = [];
-        try {
-          const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
-            group_level: 1,
-          });
-          nombresAOG = (r.rows || []).map(row => row.key).filter(Boolean);
-        } catch (e) {
-          console.warn("[lotes-maestro] view AOG fallback:", e.message);
-        }
-        timings.aog_unicos = Date.now() - t1;
+      // 2) Flags AOG de TODOS los lotes en una sola llamada a la vista
+      //    (una fila liviana por archivo, sin docs).
+      const t1 = Date.now();
+      try {
+        const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", { reduce: false });
+        const flags = {};
+        (r.rows || []).forEach(row => {
+          const n = row.key;
+          if (!n) return;
+          const subtipo = row.value?.subtipo;
+          const ts      = row.value?.ts || 0;
+          if (!flags[n]) flags[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
+          if (subtipo === "boundary" || subtipo === "boundary_kml") flags[n].tiene_boundary = true;
+          if (subtipo === "sections_coverage")                       flags[n].tiene_sections = true;
+          if (subtipo === "field_origin")                            flags[n].tiene_origen   = true;
+          if (ts > flags[n].ts) flags[n].ts = ts;
+          flags[n].archivos++;
+        });
 
-        // 3) Para los lotes de la página + los AOG-sin-maestro, traer flags por vista.
+        // Flags para los maestros + lotes AOG sin maestro como filas propias.
         const yaMaestros = new Set(lista.map(x => x.nombre));
-        const aogSinMaestro = nombresAOG.filter(n => !yaMaestros.has(n)).slice(0, 100);
-        const todosNombres = [...lista.map(x => x.nombre), ...aogSinMaestro];
-
-        if (todosNombres.length) {
-          const t2 = Date.now();
-          try {
-            const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
-              keys: todosNombres,
-              reduce: false,
-            });
-            const flags = {};
-            (r.rows || []).forEach(row => {
-              const n = row.key;
-              const subtipo = row.value?.subtipo;
-              const ts      = row.value?.ts || 0;
-              if (!flags[n]) flags[n] = { tiene_boundary: false, tiene_sections: false, tiene_origen: false, ts: 0, archivos: 0 };
-              if (subtipo === "boundary" || subtipo === "boundary_kml") flags[n].tiene_boundary = true;
-              if (subtipo === "sections_coverage")                       flags[n].tiene_sections = true;
-              if (subtipo === "field_origin")                            flags[n].tiene_origen   = true;
-              if (ts > flags[n].ts) flags[n].ts = ts;
-              flags[n].archivos++;
-            });
-
-            // Asignar flags a la lista.
-            lista.forEach(it => { if (flags[it.nombre]) it.aog = flags[it.nombre]; });
-
-            // Sumar lotes AOG sin maestro.
-            for (const nombre of aogSinMaestro) {
-              const aog = flags[nombre];
-              if (aog) lista.push({ nombre, m: null, aog, tsUltimo: aog.ts || 0 });
-            }
-            lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
-          } catch (e) { console.warn("[lotes-maestro] view flags:", e.message); }
-          timings.aog_flags = Date.now() - t2;
+        lista.forEach(it => { if (flags[it.nombre]) it.aog = flags[it.nombre]; });
+        for (const [nombre, aog] of Object.entries(flags)) {
+          if (!yaMaestros.has(nombre))
+            lista.push({ nombre, m: null, aog, tsUltimo: aog.ts || 0 });
         }
-      }
+      } catch (e) { console.warn("[lotes-maestro] view AOG:", e.message); }
+      timings.aog_flags = Date.now() - t1;
 
-      total = null;  // se usa hayMas
+      lista.sort((a, b) => b.tsUltimo - a.tsUltimo);
+      total = lista.length;
     }
 
-    const hayMas = q
-      ? (skip + limit < lista.length)
-      : (lista.length >= limit); // si vino lleno, asumimos que hay más
-    const pagina = q ? lista.slice(skip, skip + limit) : lista.slice(0, limit);
+    const hayMas = skip + limit < lista.length;
+    const pagina = lista.slice(skip, skip + limit);
 
     timings.total = Date.now() - tStart;
 
@@ -370,6 +339,8 @@ router.get("/:nombre/contexto", async (req, res) => {
       contexto.ha_estimadas = m.ha_estimadas;
       contexto.tags        = m.tags;
       contexto.notas       = m.notas;
+      contexto.boundary_geojson = m.boundary_geojson || null;
+      contexto.origen      = m.origen || null;
     } catch {}
 
     // 2. AOG — boundary, sections, origen
@@ -377,6 +348,7 @@ router.get("/:nombre/contexto", async (req, res) => {
     if (aogDocs.length) {
       const { parseLote } = require("../services/aog_parser");
       const parsed = parseLote(aogDocs);
+      contexto.boundary_latlon = Array.isArray(parsed.boundary) ? parsed.boundary : null;
       const st = parsed.stats || {};
       contexto.capas.aog = {
         tiene_boundary:  !!parsed.boundary,
@@ -440,6 +412,19 @@ router.get("/:nombre/contexto", async (req, res) => {
         });
       });
       contexto.capas.externas = porSubtipo;
+
+      // Sprint 2: contexto solo-metadata
+      // Con dos paneles, mandar contenido_texto + base64 de todas las capas
+      // inline significa bajar todo dos veces. ?meta=1 devuelve la misma
+      // estructura sin el contenido.
+      if (req.query.meta === "1") {
+        for (const sub of Object.keys(contexto.capas.externas)) {
+          contexto.capas.externas[sub] = contexto.capas.externas[sub].map(
+            ({ contenido_texto, base64, ...resto }) => ({ ...resto, tiene_contenido: !!(contenido_texto || base64) })
+          );
+        }
+      }
+      // fin Sprint 2: contexto solo-metadata
     }
 
     // Marcas de ingeniero ("de aca hasta aca se sembro X a Y sem/m"): van
@@ -1068,3 +1053,106 @@ router.post("/shp-to-geojson", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+
+// ══════════════════════════════════════════════════════════
+//  PUT /api/lotes-maestro/:nombre/boundary
+//  Modifica el LINDERO (boundary) de un lote existente. Regenera los
+//  archivos AOG (Field/Boundary.txt + KML) y, si se pasa device_id,
+//  los re-encola para descarga al device (sincronizar al tractor).
+//  Body: { boundary: [[lat,lon],...], device_id? }
+//  Sin device_id → sólo actualiza el cloud (no sincroniza al tractor).
+// ══════════════════════════════════════════════════════════
+router.put("/:nombre/boundary", async (req, res) => {
+  try {
+    const aogWriter = require("../lib/aog_writer");
+    const jwtUser = req.jwtUser || req.user;
+    const slug    = jwtUser?.estabSlug || jwtUser?.estab_slug;
+    if (!slug) return res.status(400).json({ error: "Sin establecimiento" });
+
+    const nombre = decodeURIComponent(req.params.nombre);
+    const { boundary, device_id } = req.body || {};
+    if (!Array.isArray(boundary) || boundary.length < 3)
+      return res.status(400).json({ error: "El lindero necesita al menos 3 puntos" });
+
+    const ring = boundary.map(p => {
+      if (Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number") return [p[0], p[1]];
+      if (p && typeof p.lat === "number" && typeof p.lon === "number") return [p.lat, p.lon];
+      if (p && typeof p.lat === "number" && typeof p.lng === "number") return [p.lat, p.lng];
+      throw new Error("Punto invalido en el lindero");
+    });
+
+    const estabDB = getDB(slug);
+    let m;
+    try { m = await estabDB.get(loteId(nombre)); }
+    catch { return res.status(404).json({ error: "Lote no encontrado" }); }
+
+    // Conservar el origen existente (referencia del plano AOG). Si no hay, centroide.
+    const orig = (m.origen && typeof m.origen.lat === "number" && typeof m.origen.lon === "number")
+      ? m.origen : aogWriter.centroide(ring);
+
+    const ha          = aogWriter.calcularHectareas(ring);
+    const fieldTxt    = aogWriter.generarFieldTxt({ nombre, origen: orig });
+    const boundaryTxt = aogWriter.generarBoundaryTxt({ rings: [ring] });
+    const kml         = aogWriter.generarKML({ nombre, ring });
+
+    const now     = Date.now();
+    const safeRel = nombre.replace(/[\/:*?"<>|]/g, "_");
+
+    // 1) Actualizar el doc lote_maestro SIN pisar la metadata (upsert sobrescribe → merge manual).
+    const { _id, _rev, ...rest } = m;
+    await upsert(estabDB, loteId(nombre), {
+      ...rest,
+      origen:           orig,
+      ha_calculadas:    Number(ha.toFixed(2)),
+      boundary_geojson: { type: "Polygon", coordinates: [ring.map(([lat, lon]) => [lon, lat]).concat([[ring[0][1], ring[0][0]]])] },
+      updated_at:       now,
+      lindero_editado_desde: "orbitx",
+    });
+
+    // 2) Regenerar los aog_archivo (mismos docId → overwrite del contenido).
+    const archivos = [
+      { subtipo: "field_origin", ruta_rel: `Fields/${safeRel}/Field.txt`,    nombre: "Field.txt",    contenido: fieldTxt },
+      { subtipo: "boundary",     ruta_rel: `Fields/${safeRel}/Boundary.txt`, nombre: "Boundary.txt", contenido: boundaryTxt },
+      { subtipo: "boundary_kml", ruta_rel: `Fields/${safeRel}/boundary.kml`, nombre: "boundary.kml", contenido: kml },
+    ];
+    for (const a of archivos) {
+      const docId = `aog_${slug}_${a.ruta_rel.replace(/[/\:*?"<>|]/g, "_")}`.slice(0, 200);
+      await upsert(estabDB, docId, {
+        tipo: "aog_archivo", ruta_rel: a.ruta_rel, nombre: a.nombre, subtipo: a.subtipo,
+        es_lote: true, lote_nombre: nombre, contenido: a.contenido,
+        tamano: Buffer.byteLength(a.contenido, "utf8"), ts: now,
+        creado_desde: "orbitx", synced_at: null,
+      });
+    }
+
+    // 3) Sincronizar al device sólo si se indicó uno.
+    let encolados = 0;
+    if (device_id) {
+      const globalDB = db.getDB("global");
+      const dev = await globalDB.get(`device_${device_id}`).catch(() => null);
+      const esSA = jwtUser?.rol_global === "superadmin";
+      if (!dev) return res.status(404).json({ error: "Dispositivo no encontrado" });
+      if (!esSA && dev.estab_slug !== slug)
+        return res.status(403).json({ error: "Ese tractor no es de tu organizacion" });
+      for (const a of archivos) {
+        await estabDB.insert({
+          _id:       `aog_descarga_${slug}_${now}_${a.subtipo}`,
+          tipo:      "aog_descarga_pendiente",
+          ruta_rel:  a.ruta_rel, nombre: a.nombre, subtipo: a.subtipo, contenido: a.contenido,
+          device_id, entregado: false, ts: now,
+          origen_creacion: "lindero_editado_orbitx", lote_nombre: nombre,
+        });
+        encolados++;
+      }
+      if (req.io) req.io.to(`maquina:${device_id}`).emit("lote:actualizado", { nombre, ts: now });
+    }
+
+    cacheInvalidate(slug);
+    res.json({ ok: true, lote: nombre, ha_calculadas: Number(ha.toFixed(2)), origen: orig, archivos: archivos.length, encolados, device_id: device_id || null });
+  } catch (e) {
+    console.error("[lotes-maestro/boundary]", e.message);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+

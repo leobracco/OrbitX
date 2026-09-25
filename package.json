@@ -1,7 +1,9 @@
 {
   "scripts": {
     "backup": "node scripts/backup-couchdb.js",
-    "restore": "node scripts/restore-couchdb.js"
+    "restore": "node scripts/restore-couchdb.js",
+    "app:version": "node scripts/app-version.js",
+    "test": "node --test tests/**/*.test.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -12,8 +14,9 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "nano": "^11.0.4",
-    "nodemailer": "^6.9.16",
     "node-cron": "^4.2.1",
-    "socket.io": "^4.8.3"
+    "nodemailer": "^6.9.16",
+    "socket.io": "^4.8.3",
+    "web-push": "^3.6.7"
   }
 }

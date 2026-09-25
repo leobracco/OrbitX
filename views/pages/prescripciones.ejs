@@ -296,6 +296,64 @@
   </div>
 </div>
 
+<!-- ── Generar desde NDVI ─────────────────────────────── -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-head">
+    <span class="card-title">Generar desde NDVI</span>
+    <span id="gen-estado" style="font-size:11px;color:var(--muted2)"></span>
+  </div>
+  <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div style="flex:1;min-width:160px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Lote</label>
+      <select id="gen-lote" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"></select>
+    </div>
+    <div style="min-width:150px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Fecha del satélite</label>
+      <select id="gen-fecha" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option value="">Mejor de los últimos 30 días</option>
+      </select>
+    </div>
+    <div style="width:90px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Zonas</label>
+      <select id="gen-zonas" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option>2</option><option selected>3</option><option>4</option><option>5</option>
+      </select>
+    </div>
+    <div style="min-width:200px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Criterio</label>
+      <select id="gen-sentido" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px">
+        <option value="mas_donde_menos">Más insumo donde hay menos vigor</option>
+        <option value="mas_donde_mas">Más insumo donde hay más vigor</option>
+      </select>
+    </div>
+    <div style="width:100px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Dosis mín.</label>
+      <input id="gen-dmin" type="number" value="60" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+    </div>
+    <div style="width:100px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);display:block;margin-bottom:4px">Dosis máx.</label>
+      <input id="gen-dmax" type="number" value="120" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+    </div>
+    <button class="btn btn-lime" onclick="generarDesdeNDVI(false)">Ver zonas</button>
+    <button class="btn btn-ghost" onclick="generarDesdeNDVI(true)">Generar y guardar</button>
+  </div>
+  <div class="card-body" id="gen-zonas-tabla" style="display:none;border-top:1px solid var(--border)">
+    <table style="width:100%;font-size:12px">
+      <thead><tr><th style="text-align:left">Zona</th><th style="text-align:left">NDVI medio</th><th style="text-align:left">ha</th><th style="text-align:left">Dosis</th></tr></thead>
+      <tbody id="gen-zonas-body"></tbody>
+    </table>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <input id="gen-nombre" placeholder="Nombre de la prescripción"
+        style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-size:12px"/>
+      <button class="btn btn-lime" onclick="guardarZonasEditadas()">Guardar con estas dosis</button>
+    </div>
+  </div>
+  <div class="card-body" id="gen-nube" style="display:none;border-top:1px solid var(--border)">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);margin-bottom:8px">Guardadas en la nube</div>
+    <div id="gen-nube-lista" style="display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+</div>
+
 <!-- Leaflet + Leaflet.draw -->
 <link rel="stylesheet" href="/lib/leaflet/leaflet.min.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
@@ -373,6 +431,26 @@ const PALETA = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#06B6D4','#84
                 '#EC4899','#14B8A6','#A78BFA','#FB923C','#34D399','#60A5FA','#FCD34D'];
 
 const UNIT_LBL = { sem_m:'sem/m', sem_ha:'sem/ha', sem_10m:'sem/10m', kg_ha:'kg/ha', l_ha:'l/ha', g_m:'g/m' };
+
+// Escapa cualquier texto antes de volcarlo en innerHTML. Vive acá arriba y no
+// al lado de su primer uso: lo usan tanto la parte vieja (localStorage) como
+// la nueva (nube), y todo el <script> es un solo bloque.
+function escHTML(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Vista global del superadmin: sin org activa la API contesta 400 y mostrar
+// el error crudo asusta. Es un estado normal de la pantalla.
+const SIN_ORG_PRESC = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgPresc = (status, msg) => status === 400 && SIN_ORG_PRESC.test(String(msg || ""));
+
+// PALETA es un array finito: si `zona` viene 0, null o no numérica, el índice
+// da -1 o NaN y el color salía `undefined` (celda/polígono sin color).
+function colorZona(zona) {
+  const n = Number(zona);
+  const i = Number.isFinite(n) && n >= 1 ? (n - 1) % PALETA.length : 0;
+  return PALETA[i] || PALETA[0];
+}
 
 // ── Init mapa ─────────────────────────────────────────────
 function initMapa() {
@@ -719,15 +797,22 @@ function abrirGuardadas() {
 function renderGuardadas() {
   const lista = JSON.parse(localStorage.getItem('orbitx_presc')||'[]');
   const div   = document.getElementById('lista-guardadas');
-  if (!lista.length) {
+  // Lo que ya migró a la nube se lista en "Guardadas en la nube": mostrarlo
+  // también acá era el mismo ítem dos veces. Se filtra por `local_id` (el `id`
+  // del localStorage) pero se conserva el índice original: cargar/enviar/
+  // borrar/exportar reabren el array completo por índice.
+  const visibles = lista
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => !_localIdsNube.has(String(p.id)));
+  if (!visibles.length) {
     div.innerHTML='<div class="empty-state" style="padding:30px"><span class="icon">📋</span><p>Sin prescripciones guardadas</p></div>';
     return;
   }
-  div.innerHTML = lista.map((p,i) => `
+  div.innerHTML = visibles.map(({ p, i }) => `
     <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)">
       <div style="flex:1">
-        <div class="td-main">${p.nombre}</div>
-        <div class="td-dim">${p.fecha} · ${p.zonas} zonas</div>
+        <div class="td-main">${escHTML(p.nombre)}</div>
+        <div class="td-dim">${escHTML(p.fecha)} · ${escHTML(p.zonas)} zonas</div>
       </div>
       <button class="btn btn-sm btn-lime-outline" onclick="cargarGuardada(${i})">Cargar</button>
       <button class="btn btn-sm btn-lime-outline" onclick="abrirEnviar(${i})" title="Enviar a tractor">📡</button>
@@ -1358,11 +1443,13 @@ async function abrirEnviar(i) {
       sel.innerHTML = '<option value="">No hay tractores registrados</option>';
       return;
     }
+    // El nombre del tractor lo carga el usuario: sin escapar, un "<" ahí
+    // rompía el <select> y con un poco más de mala fe inyectaba HTML.
     sel.innerHTML = tractores.map(t =>
-      `<option value="${t.device_id}">${t.nombre} ${t.online ? '🟢' : '⚫'}</option>`
+      `<option value="${escHTML(t.device_id)}">${escHTML(t.nombre)} ${t.online ? '🟢' : '⚫'}</option>`
     ).join('');
   } catch (e) {
-    sel.innerHTML = '<option value="">Error: ' + e.message + '</option>';
+    sel.innerHTML = '<option value="">Error: ' + escHTML(e.message) + '</option>';
   }
 }
 
@@ -1420,6 +1507,255 @@ async function confirmarEnviar() {
   }
 }
 
+// ── Generar desde NDVI ────────────────────────────────────
+const AUTH_H = () => ({ "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}`, "Content-Type": "application/json" });
+let _genLayers = [];
+let _genFC = null;      // última FeatureCollection generada (para guardar con dosis editadas)
+let _genLote = "";
+
+async function cargarLotesGen() {
+  try {
+    const r = await fetch("/api/aog/lotes-mapa", { headers: AUTH_H() });
+    const lotes = r.ok ? await r.json() : [];
+    const sel = document.getElementById("gen-lote");
+    // escHTML: el nombre del lote lo escribe el usuario y viene de la API —
+    // sin escapar, un lote llamado `<img onerror=…>` ejecuta script en el panel.
+    sel.innerHTML = lotes.filter(l => l.tiene_boundary)
+        .map(l => `<option value="${escHTML(l.nombre)}">${escHTML(l.nombre)}</option>`).join("")
+      || `<option value="">— sin lotes con contorno —</option>`;
+    sel.addEventListener("change", cargarFechasGen);
+    cargarFechasGen();
+  } catch (e) { console.warn("[gen] lotes:", e.message); }
+}
+
+async function cargarFechasGen() {
+  const lote = document.getElementById("gen-lote").value;
+  const sel = document.getElementById("gen-fecha");
+  sel.innerHTML = `<option value="">Mejor de los últimos 30 días</option>`;
+  if (!lote) return;
+  try {
+    const rm = await fetch(`/api/aog/mapa?lote=${encodeURIComponent(lote)}&lite=1`, { headers: AUTH_H() });
+    const lotes = rm.ok ? await rm.json() : [];
+    const b = lotes[0]?.boundary;
+    if (!b || b.length < 3) return;
+    const lats = b.map(p => p[0]), lons = b.map(p => p[1]);
+    const bbox = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)].join(",");
+    const rf = await fetch(`/api/ndvi/fechas-disponibles?bbox=${bbox}&dias=90`, { headers: AUTH_H() });
+    const j = rf.ok ? await rf.json() : { fechas: [] };
+    // La nubosidad decide: zonificar sobre una imagen nublada da una
+    // prescripción agronómicamente peligrosa.
+    for (const f of (j.fechas || []).slice(0, 30)) {
+      const op = document.createElement("option");
+      op.value = f.fecha;
+      op.textContent = `${f.fecha} · ${f.cloud_cover}% nubes`;
+      sel.appendChild(op);
+    }
+  } catch (e) { console.warn("[gen] fechas:", e.message); }
+}
+
+async function generarDesdeNDVI(guardar) {
+  const est = document.getElementById("gen-estado");
+  const lote = document.getElementById("gen-lote").value;
+  if (!lote) { est.textContent = "Elegí un lote"; return; }
+  est.textContent = "Pidiendo la imagen y armando las zonas…";
+  try {
+    const body = {
+      lote,
+      fecha:   document.getElementById("gen-fecha").value || null,
+      indice:  "ndvi",
+      n_zonas: Number(document.getElementById("gen-zonas").value),
+      min_ha:  0.5,
+      sentido: document.getElementById("gen-sentido").value,
+      unidad:  "kg_ha",
+      dosis:   { min: Number(document.getElementById("gen-dmin").value), max: Number(document.getElementById("gen-dmax").value) },
+      nombre:  `${lote} · NDVI`,
+    };
+    const r = await fetch(`/api/prescripciones/generar${guardar ? "?guardar=1" : ""}`, {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    // Superadmin en vista global: no hay org donde generar ni guardar.
+    if (esSinOrgPresc(r.status, j.error)) { est.textContent = "Elegí una organización para ver esto"; return; }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    _genFC = j.geojson;
+    _genLote = lote;
+    pintarZonasGeneradas(j.geojson);
+    pintarTablaZonas(j.geojson, lote);
+    est.textContent = guardar ? "✓ Guardada en la nube" : `✓ ${j.geojson.features.length} zonas · previsualización`;
+    if (guardar) cargarPrescServidor();
+  } catch (e) {
+    est.textContent = "✗ " + e.message;
+  }
+}
+
+// La dosis precargada es una propuesta: el agrónomo la edita zona por zona
+// antes de guardar.
+function pintarTablaZonas(fc, lote) {
+  const cont = document.getElementById("gen-zonas-tabla");
+  const body = document.getElementById("gen-zonas-body");
+  // Todo lo que sale del GeoJSON pasa por escHTML: el nombre y la unidad de
+  // cada zona son texto libre (llegan de una prescripción importada o editada).
+  body.innerHTML = fc.features.map(f => `
+    <tr>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorZona(f.properties.zona)};margin-right:6px"></span>${escHTML(f.properties.nombre)}</td>
+      <td>${escHTML(f.properties.ndvi_medio ?? "–")}</td>
+      <td>${escHTML(f.properties.ha)}</td>
+      <td><input type="number" step="0.1" value="${escHTML(f.properties.dosis ?? "")}" data-zona="${escHTML(f.properties.zona)}"
+           style="width:90px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"/>
+          <span style="color:var(--muted2)">${escHTML(f.properties.unidad || "")}</span></td>
+    </tr>`).join("");
+  document.getElementById("gen-nombre").value = `${lote} · NDVI`;
+  cont.style.display = "block";
+}
+
+async function guardarZonasEditadas() {
+  const est = document.getElementById("gen-estado");
+  if (!_genFC) { est.textContent = "Generá las zonas primero"; return; }
+  const inputs = document.querySelectorAll("#gen-zonas-body input[data-zona]");
+  const porZona = {};
+  inputs.forEach(i => { porZona[Number(i.dataset.zona)] = i.value === "" ? null : Number(i.value); });
+  const fc = {
+    ..._genFC,
+    features: _genFC.features.map(f => ({ ...f, properties: { ...f.properties, dosis: porZona[f.properties.zona] ?? f.properties.dosis } })),
+  };
+  try {
+    const r = await fetch("/api/prescripciones/docs", {
+      method: "POST", headers: AUTH_H(),
+      body: JSON.stringify({
+        nombre: document.getElementById("gen-nombre").value || `${_genLote} · NDVI`,
+        lote_nombre: _genLote, origen: "ndvi", estado: "lista",
+        geojson: fc, fuente: _genFC.properties?.fuente || null,
+      }),
+    });
+    const j = await r.json();
+    if (esSinOrgPresc(r.status, j.error)) { est.textContent = "Elegí una organización para ver esto"; return; }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    est.textContent = "✓ Guardada con las dosis editadas";
+    cargarPrescServidor();
+  } catch (e) { est.textContent = "✗ " + e.message; }
+}
+
+function pintarZonasGeneradas(fc) {
+  if (!mapaL) initMapa();
+  _genLayers.forEach(l => mapaL.removeLayer(l));
+  _genLayers = [];
+  const capa = L.geoJSON(fc, {
+    style: (f) => ({ color: colorZona(f.properties.zona), weight: 2, fillOpacity: 0.45 }),
+    // bindPopup con string interpola HTML: sin escHTML, el nombre de una zona
+    // importada puede meter script en el popup de Leaflet.
+    onEachFeature: (f, l) => l.bindPopup(
+      `<b>${escHTML(f.properties.nombre)}</b><br>NDVI medio: ${escHTML(f.properties.ndvi_medio ?? "–")}<br>${escHTML(f.properties.ha)} ha<br>Dosis: ${escHTML(f.properties.dosis ?? "–")} ${escHTML(f.properties.unidad || "")}`),
+  }).addTo(mapaL);
+  _genLayers.push(capa);
+  try { mapaL.fitBounds(capa.getBounds()); } catch {}
+}
+
+// ── Prescripciones guardadas en la nube + migración única ──
+let _tractoresNube = [];
+// local_id de todo lo que ya vive en la nube: la lista local de "guardadas"
+// no vuelve a mostrar lo migrado (si no, el usuario ve todo duplicado).
+let _localIdsNube = new Set();
+
+async function cargarPrescServidor() {
+  try {
+    const r = await fetch("/api/prescripciones/docs", { headers: AUTH_H() });
+    const j = await r.json().catch(() => ({}));
+    const cont = document.getElementById("gen-nube");
+    const lista = document.getElementById("gen-nube-lista");
+    if (!cont || !lista) return;
+    if (esSinOrgPresc(r.status, j.error)) {
+      lista.innerHTML = `<div style="font-size:12px;color:var(--muted2)">Elegí una organización para ver esto</div>`;
+      cont.style.display = "block";
+      return;
+    }
+    if (!r.ok) return;
+    const items = j.items || [];
+    // Se recuerda SIEMPRE, aunque la lista venga vacía: es lo que evita que
+    // renderGuardadas() vuelva a mostrar lo que ya está en la nube.
+    _localIdsNube = new Set(items.map(d => String(d.local_id)).filter(v => v && v !== "null" && v !== "undefined"));
+    if (!items.length) { cont.style.display = "none"; return; }
+
+    if (!_tractoresNube.length) {
+      try {
+        const rt = await fetch("/api/prescripciones/tractores", { headers: AUTH_H() });
+        if (rt.ok) _tractoresNube = await rt.json();
+      } catch { _tractoresNube = []; }
+    }
+    const opciones = _tractoresNube.length
+      ? _tractoresNube.map(t => `<option value="${escHTML(t.device_id)}">${escHTML(t.nombre)}${t.online ? " ·  en línea" : ""}</option>`).join("")
+      : `<option value="">— sin tractores —</option>`;
+
+    lista.innerHTML = items.map(d => `
+      <div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:1">${escHTML(d.nombre)}</span>
+        <span style="color:var(--muted2)">${escHTML(d.lote_nombre || "—")}</span>
+        <span style="color:var(--muted2)">${escHTML(d.origen)} · ${escHTML(d.estado)}</span>
+        <select data-tractor-de="${escHTML(d._id)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:11px">${opciones}</select>
+        <button class="btn btn-sm btn-ghost" data-enviar-id="${escHTML(d._id)}" title="Enviar al tractor">📡</button>
+      </div>`).join("");
+    // data-id + listener en vez de onclick="…('${id}')": escapar para HTML no
+    // alcanza dentro de un atributo de evento, que es contexto de JavaScript.
+    // El <select> se busca por el DOM (closest/querySelector) y no armando un
+    // selector CSS con el id adentro.
+    lista.querySelectorAll("button[data-enviar-id]").forEach(b => {
+      b.addEventListener("click", () => {
+        const sel = b.closest("div")?.querySelector("select[data-tractor-de]");
+        enviarPrescNube(b.dataset.enviarId, sel);
+      });
+    });
+    cont.style.display = "block";
+  } catch (e) { console.warn("[presc] listar:", e.message); }
+}
+
+async function enviarPrescNube(id, selEl) {
+  const est = document.getElementById("gen-estado");
+  const device_id = selEl?.value;
+  if (!device_id) { est.textContent = "No hay tractor destino"; return; }
+  est.textContent = "Enviando al tractor…";
+  try {
+    const r = await fetch(`/api/prescripciones/docs/${encodeURIComponent(id)}/enviar`, {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify({ device_id }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    est.textContent = "✓ " + j.mensaje;
+    cargarPrescServidor();
+  } catch (e) { est.textContent = "✗ " + e.message; }
+}
+
+// La migración es ÚNICA: se corría en cada carga de la pantalla y, aunque el
+// server es idempotente por `local_id`, el viaje entero (con el GeoJSON de
+// cada prescripción adentro) se repetía siempre y la lista local seguía
+// mostrando duplicado lo que ya estaba en la nube. El flag guarda el timestamp
+// de la migración exitosa.
+const FLAG_MIGRADO = "orbitx_presc_migrado";
+
+async function migrarPrescLocales() {
+  if (localStorage.getItem(FLAG_MIGRADO)) return;
+  let locales = [];
+  try { locales = JSON.parse(localStorage.getItem("orbitx_presc") || "[]"); } catch { return; }
+  if (!locales.length) {
+    // Nada que subir: se marca igual, para no reintentar en cada carga.
+    try { localStorage.setItem(FLAG_MIGRADO, String(Date.now())); } catch {}
+    return;
+  }
+  try {
+    const r = await fetch("/api/prescripciones/migrar", {
+      method: "POST", headers: AUTH_H(), body: JSON.stringify({ locales }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    // Solo se marca si el server confirmó: un 400 por "sin org activa" o un
+    // 500 no pueden dejar las prescripciones locales sin subir para siempre.
+    try { localStorage.setItem(FLAG_MIGRADO, String(Date.now())); } catch {}
+    if (j.creados) toast("✓ Prescripciones subidas", `${j.creados} pasaron a la nube`, "lime");
+  } catch (e) { console.warn("[presc] migrar:", e.message); }
+}
+
 // ── Init ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => { initMapa(); });
+document.addEventListener('DOMContentLoaded', () => {
+  initMapa();
+  cargarLotesGen();
+  migrarPrescLocales().then(cargarPrescServidor);
+});
 </script>

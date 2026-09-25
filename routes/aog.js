@@ -182,6 +182,16 @@ router.post("/sync", deviceAuth, async (req, res) => {
         // Preservar la modalidad de la versión anterior (texto vs binario).
         if (typeof existing.contenido_base64 === "string") histDoc.contenido_base64 = existing.contenido_base64;
         else histDoc.contenido = existing.contenido;
+        // Sprint 2: stats al historial
+        // El doc que se archiva YA tiene sus stats calculadas de su propio
+        // sync: copiarlas cuesta cero y es lo que hace viable comparar
+        // temporadas (Pieza 2) sin reparsear los 11,1 GB de contenido
+        // historico de el_susto.
+        if (existing.stats) {
+          histDoc.stats     = existing.stats;
+          histDoc.stats_ver = existing.stats_ver;
+        }
+        // fin Sprint 2: stats al historial
         await estabDB.insert(histDoc).catch(() => {});
       }
     } catch {}
@@ -200,6 +210,16 @@ router.post("/sync", deviceAuth, async (req, res) => {
 
     console.log(`[AOG] ✓ ${deviceId} → ${ruta_rel}${esBinario ? " [bin "+contenido_base64.length+"b64]" : ""}`);
     res.json({ ok:true });
+
+    // Sprint 2: stats de cobertura precalculadas
+    // Va DESPUES de responder: el tractor no tiene que esperar el rasterizado
+    // y un fallo del calculo nunca rompe el sync. La cola es de concurrencia 1
+    // y relee el doc de CouchDB, asi que no retiene el contenido en memoria.
+    if ((subtipo || "") === "sections_coverage" && !esBinario) {
+      try { require("../services/cobertura_stats").encolarStats(estabSlug, docId); }
+      catch (e) { console.warn("[AOG/sync] encolarStats:", e.message); }
+    }
+    // fin Sprint 2: stats de cobertura precalculadas
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
@@ -637,6 +657,179 @@ function mapaCacheGet(k) {
 }
 function mapaCacheSet(k, data) { _mapaCache.set(k, { data, ts: Date.now() }); }
 
+// ?lite=1 (app móvil): la misma respuesta sin las pasadas de siembra
+// (`sections`), que para una org entera pueden pesar decenas de MB.
+function mapaLite(lotes, req) {
+  return req.query.lite ? lotes.map(({ sections, ...l }) => l) : lotes;
+}
+
+// Sprint 2: comparador por temporada
+// Este handler se registra ANTES del /mapa de siempre y solo actúa cuando se
+// pide una temporada; si no, hace next() y todo sigue igual.
+
+// Misma resolución de docs de lote que el /mapa de siempre: vista nativa por
+// nombre y, si no devuelve nada (archivos viejos sin `es_lote`/`lote_nombre`),
+// fallback a Mango + clasificarLote()/extraerLoteDeRuta(). Un find directo por
+// { es_lote:true, lote_nombre } se salteaba esos lotes y los devolvía vacíos.
+async function docsDeLoteSprint2(slug, lote) {
+  const estabDB = getEstabDB(slug);
+  try { await db.ensureDesignOnOrg(slug); }
+  catch (e) { console.warn("[AOG/temporada] ensureDesignOnOrg:", e.message); }
+
+  let docs = [];
+  try {
+    const r = await estabDB.view("orbitx", "lotes_aog_por_nombre", {
+      key: lote, reduce: false, include_docs: true,
+    });
+    docs = (r.rows || []).map(row => row.doc).filter(Boolean);
+  } catch (e) {
+    console.warn("[AOG/temporada] vista lotes_aog_por_nombre:", e.message);
+  }
+  if (!docs.length) {
+    const todos = await _findAll(estabDB, { tipo: "aog_archivo" });
+    docs = todos.filter(d => {
+      const cls = clasificarLote(d);
+      return cls && cls.nombre === lote;
+    });
+  }
+  return docs.map(d => ({ ...d, lote_nombre: d.lote_nombre || extraerLoteDeRuta(d.ruta_rel), es_lote: true }));
+}
+
+// find con `fields` y SIN `sort`: el índice ["tipo","subtipo","lote_nombre","ts"]
+// no tiene a `ts` de prefijo, así que un sort:[{ts:"desc"}] Mango lo puede
+// rechazar (y el error terminaba disfrazado de "no hay datos"). Se pagina con
+// bookmark hasta agotar — una sola página con limit N devolvía los N primeros
+// que encontró, no los más nuevos — y el máximo por `ts` se elige en JS.
+async function findPaginadoSprint2(estabDB, selector, fields, porPagina = 200, maxDocs = 4000) {
+  const docs = [];
+  let bookmark = null;
+  while (docs.length < maxDocs) {
+    const q = { selector, fields, limit: porPagina };
+    if (bookmark) q.bookmark = bookmark;
+    const r = await estabDB.find(q);
+    const pagina = r.docs || [];
+    docs.push(...pagina);
+    if (pagina.length < porPagina || !r.bookmark) break;
+    bookmark = r.bookmark;
+  }
+  return docs;
+}
+
+const masNuevoPorTs = (docs) => (docs || []).reduce(
+  (mejor, d) => (!mejor || (Number(d.ts) || 0) > (Number(mejor.ts) || 0) ? d : mejor), null);
+
+// Piso de búsqueda: 6 temporadas hacia atrás desde la actual. Sin acotar el
+// rango de `ts`, el selector barría todo el historial del lote.
+function pisoMsSprint2() {
+  const { temporadaActual } = require("../services/temporada");
+  const anio = Math.max(2015, Number(temporadaActual().slice(0, 4)) - 6);
+  return Date.parse(`${anio}-09-01T00:00:00-03:00`);
+}
+
+router.get("/mapa", async (req, res, next) => {
+  if (!req.query.temporada) return next();
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+    const slug    = req.query.estab || miSlug;
+    const lote    = req.query.lote ? decodeURIComponent(req.query.lote) : null;
+    if (!slug) return res.status(400).json({ error: "Sin organización activa" });
+    if (!lote) return res.status(400).json({ error: "Pasá ?lote= junto con ?temporada=" });
+    if (req.query.estab && !isSA && req.query.estab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+
+    const { rangoTemporada, esTemporadaValida } = require("../services/temporada");
+    if (!esTemporadaValida(req.query.temporada))
+      return res.status(400).json({ error: "Temporada inválida (formato AAAA/AA)" });
+    const rango = rangoTemporada(req.query.temporada);
+
+    // Mismo cache en memoria (60 s) que el /mapa de siempre, con la temporada
+    // adentro de la clave. Sin esto, cada movimiento del comparador bajaba y
+    // reparseaba el Sections.txt entero de la temporada (megas por lote) de
+    // forma sincrónica: dos paneles al lado sobre el mismo lote lo hacían dos
+    // veces seguidas.
+    const cacheKey = `temp::${miSlug || "sa"}::${slug}::${lote}::${req.query.temporada}`;
+    const cached = mapaCacheGet(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return res.json(mapaLite(cached, req));
+    }
+
+    const estabDB = getEstabDB(slug);
+
+    // Contorno y origen salen del estado vigente (no cambian por temporada).
+    const base   = await docsDeLoteSprint2(slug, lote);
+    const parsed = parseLote(base.filter(d => d.subtipo !== "sections_coverage"));
+
+    // El snapshot de cobertura más nuevo dentro de la temporada pedida.
+    // Solo _id/ts/stats: el `contenido` se baja después, y de uno solo.
+    const hist = await findPaginadoSprint2(estabDB, {
+      tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote,
+      ts: { $gte: rango.desdeMs, $lte: rango.hastaMs },
+    }, ["_id", "ts", "stats"]);
+
+    let sections = null, stats = null, ts_ultimo = parsed.ts_ultimo || 0;
+    const meta = masNuevoPorTs(hist);
+    // El doc vigente también cuenta si cae en la temporada: en la temporada
+    // actual suele ser MÁS nuevo que cualquier snapshot del historial (cada
+    // sync archiva el anterior), y es el que tiene las stats al día.
+    const vig = base.find(d => d.subtipo === "sections_coverage");
+    const vigEnRango = vig && vig.ts >= rango.desdeMs && vig.ts <= rango.hastaMs;
+    const { parseSections } = require("../services/aog_parser");
+    if (vigEnRango && (!meta || (vig.ts || 0) >= (meta.ts || 0))) {
+      sections  = parsed.origen ? parseSections(vig.contenido, parsed.origen) : null;
+      stats     = vig.stats || null;
+      ts_ultimo = vig.ts;
+    } else if (meta) {
+      const doc = await estabDB.get(meta._id);
+      sections  = parsed.origen ? parseSections(doc.contenido, parsed.origen) : null;
+      stats     = doc.stats || null;
+      ts_ultimo = doc.ts || ts_ultimo;
+    }
+
+    const salida = [{ ...parsed, sections, stats, ts_ultimo, temporada: req.query.temporada, estab_slug: slug }];
+    mapaCacheSet(cacheKey, salida);
+    res.set("X-Cache", "MISS");
+    res.json(mapaLite(salida, req));
+  } catch (e) {
+    console.error("[AOG/mapa temporada]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/aog/lotes/:nombre/temporadas — sale de finds con `fields`: gracias
+// a las stats copiadas al historial (Pieza 0) no baja un byte de contenido.
+router.get("/lotes/:nombre/temporadas", async (req, res) => {
+  try {
+    const jwtUser = req.jwtUser || req.user;
+    const isSA    = jwtUser?.rol_global === "superadmin";
+    const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+    const slug    = req.query.estab || miSlug;
+    if (!slug) return res.status(400).json({ error: "Sin organización activa" });
+    if (req.query.estab && !isSA && req.query.estab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+
+    const lote    = decodeURIComponent(req.params.nombre);
+    const estabDB = getEstabDB(slug);
+    const campos  = ["_id", "ts", "stats"];
+    const piso    = pisoMsSprint2();
+
+    const [hist, vig] = await Promise.all([
+      findPaginadoSprint2(estabDB, { tipo: "aog_historial", subtipo: "sections_coverage", lote_nombre: lote, ts: { $gte: piso } }, campos),
+      findPaginadoSprint2(estabDB, { tipo: "aog_archivo",   subtipo: "sections_coverage", lote_nombre: lote, ts: { $gt: 0 } }, campos, 5, 5),
+    ]);
+    const { derivarTemporadasDeHistorial } = require("../services/temporadas_lote");
+    res.json({ ok: true, lote, temporadas: derivarTemporadasDeHistorial([...hist, ...vig]) });
+  } catch (e) {
+    console.error("[AOG/temporadas]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+// fin Sprint 2: comparador por temporada
+
 router.get("/mapa", async (req, res) => {
   try {
     const jwtUser = req.jwtUser || req.user;
@@ -645,12 +838,20 @@ router.get("/mapa", async (req, res) => {
     const filtroEstab = req.query.estab;
     const filtroLote  = req.query.lote ? decodeURIComponent(req.query.lote) : null;
 
+    // ?estab= solo para superadmin, la propia org o una membresía —
+    // sin esto cualquier usuario logueado leía los mapas de otra org.
+    if (filtroEstab && filtroEstab !== "unassigned" && !isSA &&
+        filtroEstab !== miSlug &&
+        !(jwtUser?.memberships || []).some(m => m.orgSlug === filtroEstab)) {
+      return res.status(403).json({ error: "Sin acceso a esa organización" });
+    }
+
     // Cache key — incluye filtros y user para no leakear entre orgs.
     const cacheKey = `${miSlug || "sa"}::${filtroEstab || ""}::${filtroLote || ""}`;
     const cached = mapaCacheGet(cacheKey);
     if (cached) {
       res.set("X-Cache", "HIT");
-      return res.json(cached);
+      return res.json(mapaLite(cached, req));
     }
 
     // Armar lista de slugs
@@ -731,7 +932,7 @@ router.get("/mapa", async (req, res) => {
 
     mapaCacheSet(cacheKey, lotesParsed);
     res.set("X-Cache", "MISS");
-    res.json(lotesParsed);
+    res.json(mapaLite(lotesParsed, req));
   } catch(e) {
     console.error("[AOG/mapa]", e.message);
     res.status(500).json({ error: e.message });

@@ -48,11 +48,18 @@
               <%= e.activa !== false ? 'Activa' : 'Inactiva' %>
             </span>
           </td>
-          <td>
+          <td style="white-space:nowrap">
             <button class="btn btn-sm btn-ghost"
               onclick="verDetalle('<%= e.slug %>', '<%= e.nombre %>')">
-              Ver →
+              Ver
             </button>
+            <% if (isSA) { %>
+            <button class="btn btn-sm btn-primary"
+              onclick="entrarOrg('<%= e.slug %>')"
+              title="Cambiar a esta organización y abrir su dashboard">
+              Entrar →
+            </button>
+            <% } %>
           </td>
         </tr>
         <% }) %>
@@ -75,6 +82,25 @@
 </div>
 
 <script>
+// Cambia la org activa (reemite el token) y abre el dashboard de esa org
+async function entrarOrg(slug) {
+  try {
+    const r = await fetch("/api/auth/cambiar-org", {
+      method:  "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}`
+      },
+      body: JSON.stringify({ orgSlug: slug }),
+    });
+    const j = await r.json();
+    if (!r.ok) { alert(j.error || "No se pudo cambiar de organización"); return; }
+    localStorage.setItem("orbitx_token", j.token);
+    document.cookie = `orbitx_token=${j.token};path=/;max-age=${30 * 24 * 3600};SameSite=Strict`;
+    window.location.href = "/dashboard";
+  } catch (e) { console.error(e); }
+}
+
 async function verDetalle(slug, nombre) {
   document.getElementById('modal-e-nombre').textContent = nombre;
   document.getElementById('modal-e-slug').textContent   = `orbitx_${slug}`;

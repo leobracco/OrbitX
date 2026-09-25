@@ -125,6 +125,31 @@
   </div>
 </div>
 
+<!-- ── Tokens de acceso por organización ──────────────── -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-head">
+    <span class="card-title">Tokens de acceso</span>
+    <button class="btn btn-sm btn-primary" onclick="crearToken()">Crear token</button>
+  </div>
+  <div class="card-body">
+    <p style="font-size:12px;color:var(--ap-muted);margin-bottom:14px;line-height:1.6">
+      Un token deja que una herramienta de afuera (un panel de tu asesor, una planilla, un tablero)
+      lea los datos de esta organización. Son de <b>solo lectura</b>: no pueden cargar ni borrar nada.
+      Se mandan en el header <code>Authorization: Bearer orbx_…</code>. El token completo se muestra
+      una sola vez; si se pierde, revocalo y creá otro.
+    </p>
+    <div id="tok-nuevo" style="display:none;background:rgba(164,186,62,0.10);border:1px solid var(--ap-green);
+         border-radius:8px;padding:12px;margin-bottom:12px">
+      <div style="font-size:11px;color:var(--ap-muted);margin-bottom:6px">Copialo ahora — no se puede volver a ver:</div>
+      <code id="tok-valor" style="display:block;word-break:break-all;font-size:12px;color:var(--ap-text)"></code>
+    </div>
+    <table class="tabla" style="width:100%;font-size:12px">
+      <thead><tr><th>Nombre</th><th>Prefijo</th><th>Vence</th><th>Último uso</th><th></th></tr></thead>
+      <tbody id="tok-lista"><tr><td colspan="5" class="td-dim">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <style>
 .switch { position:relative; display:inline-block; width:36px; height:20px; }
 .switch input { display:none; }
@@ -327,6 +352,81 @@ async function probarNotif() {
   }
 }
 
+// ── Tokens de acceso ─────────────────────────────────────
+const TZ_AR = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric" };
+const fechaAR = (ts) => ts ? new Date(ts).toLocaleDateString("es-AR", TZ_AR) : "—";
+
+// Escapa para volcar en innerHTML: t.nombre es texto libre del usuario (XSS
+// almacenado si se inyecta tal cual). t.prefijo es server-generated pero se
+// escapa igual, por las dudas.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+let _tokens = [];   // cache en memoria: revocarToken busca el nombre acá, nunca lo interpola en el onclick
+
+// El superadmin en vista global no tiene org activa y la API contesta 400
+// "Sin organización activa". No es un error a mostrar en crudo: es un estado
+// normal de la pantalla (los tokens son siempre de UNA organización).
+const SIN_ORG_INT = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgInt = (status, msg) => status === 400 && SIN_ORG_INT.test(String(msg || ""));
+
+async function cargarTokens() {
+  const tb = document.getElementById("tok-lista");
+  try {
+    const r = await fetch("/api/tokens-org", { headers: auth() });
+    const j = await r.json();
+    if (esSinOrgInt(r.status, j.error)) {
+      tb.innerHTML = `<tr><td colspan="5" class="td-dim">Elegí una organización para ver esto</td></tr>`;
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    _tokens = j.tokens || [];
+    const filas = _tokens.map(t => `
+      <tr style="${t.revocado ? "opacity:0.45" : ""}">
+        <td>${esc(t.nombre)}</td>
+        <td><code>${esc(t.prefijo)}…</code></td>
+        <td>${t.revocado ? "revocado" : fechaAR(t.vence_ts)}</td>
+        <td class="td-dim">${fechaAR(t.ultimo_uso_ts)}${t.usos ? ` · ${t.usos} usos` : ""}</td>
+        <td>${t.revocado ? "" : `<button class="btn btn-sm" onclick="revocarToken('${esc(t._id)}')">Revocar</button>`}</td>
+      </tr>`).join("");
+    tb.innerHTML = filas || `<tr><td colspan="5" class="td-dim">Todavía no creaste ningún token.</td></tr>`;
+  } catch (e) {
+    tb.innerHTML = `<tr><td colspan="5" class="td-dim">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function crearToken() {
+  const nombre = prompt("¿Para qué es este token? (por ejemplo: Tablero del asesor)");
+  if (!nombre) return;
+  const dias = Number(prompt("¿Cuántos días vale? (máximo 365)", "90")) || 90;
+  try {
+    const r = await fetch("/api/tokens-org", {
+      method: "POST",
+      headers: auth({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ nombre, dias }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    document.getElementById("tok-valor").textContent = j.token;
+    document.getElementById("tok-nuevo").style.display = "block";
+    showAlert("Token creado — copialo ahora, no se vuelve a mostrar", "success");
+    cargarTokens();
+  } catch (e) { showAlert("✗ " + e.message, "error"); }
+}
+
+async function revocarToken(id) {
+  const nombre = _tokens.find(t => t._id === id)?.nombre || "este token";
+  if (!confirm(`¿Revocar "${nombre}"? Lo que lo esté usando deja de andar al toque.`)) return;
+  try {
+    const r = await fetch(`/api/tokens-org/${id}/revocar`, { method: "POST", headers: auth() });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    showAlert("Token revocado", "success");
+    cargarTokens();
+  } catch (e) { showAlert("✗ " + e.message, "error"); }
+}
+
 function showAlert(msg, tipo) {
   const a = document.getElementById("alert-int");
   a.textContent = msg;
@@ -334,5 +434,5 @@ function showAlert(msg, tipo) {
   if (tipo !== "error") setTimeout(() => a.classList.remove("show"), 4000);
 }
 
-document.addEventListener("DOMContentLoaded", () => { cargarNotif(); cargarOM(); });
+document.addEventListener("DOMContentLoaded", () => { cargarNotif(); cargarOM(); cargarTokens(); });
 </script>

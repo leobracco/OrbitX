@@ -1,0 +1,98 @@
+<%# pages/notificaciones.ejs — Historial de avisos de la organización %>
+
+<div class="page-header">
+  <div>
+    <h2>Avisos</h2>
+    <p>Todo lo que OrbitX te notificó, aunque no tuvieras canales prendidos</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn btn-ghost" onclick="marcarTodas()">Marcar todas como leídas</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body" style="padding:0">
+    <ul id="notif-lista" style="list-style:none;margin:0;padding:0">
+      <li style="padding:16px;color:var(--muted2);font-size:12px">Cargando…</li>
+    </ul>
+  </div>
+</div>
+
+<div style="text-align:center;margin-top:14px">
+  <button id="notif-mas" class="btn btn-ghost" style="display:none" onclick="cargarMas()">Cargar más</button>
+</div>
+
+<script>
+function escAviso(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+// Defensa en profundidad: mismo criterio que urlSegura en lib/notificaciones.js
+// (el server ya filtra, pero no confiamos ciegamente al armar un href).
+function urlSeg(u) {
+  if (typeof u !== "string") return null;
+  if (!u.length || u.length > 300) return null;
+  if (!u.startsWith("/") || u.startsWith("//") || u.includes("\\")) return null;
+  return u;
+}
+const TZ_AVISOS = { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" };
+const COLOR_AVISO = { critico: "#E74C3E", info: "#9AA3AD", ok: "#A4BA3E" };
+const cabAvisos = () => ({ "Authorization": `Bearer ${localStorage.getItem("orbitx_token") || ""}` });
+let _cursor = null;
+// Vista global del superadmin (sin org activa): el endpoint contesta 400
+// "Sin org activa". Es un estado normal de la pantalla, no un error crudo.
+const SIN_ORG_AVISOS = /sin organizaci[oó]n activa|sin org activa/i;
+const esSinOrgAvisos = (status, msg) => status === 400 && SIN_ORG_AVISOS.test(String(msg || ""));
+
+function filaAviso(n) {
+  return `<li style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);${n.leida ? "opacity:0.55" : ""}">
+    <span style="width:8px;height:8px;border-radius:50%;background:${COLOR_AVISO[n.nivel] || COLOR_AVISO.info};margin-top:6px;flex-shrink:0"></span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13px;font-weight:600">${escAviso(n.titulo)}</div>
+      <div style="font-size:12px;color:var(--muted2);line-height:1.6;white-space:pre-wrap">${escAviso(n.cuerpo || "")}</div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:4px">
+        ${new Date(n.ts).toLocaleString("es-AR", TZ_AVISOS)} · ${escAviso(n.evento)}
+        ${n.url ? ` · <a href="${escAviso(urlSeg(n.url) || "/notificaciones")}" style="color:var(--lime)">Ver</a>` : ""}
+      </div>
+    </div>
+  </li>`;
+}
+
+async function cargar(reset) {
+  const ul = document.getElementById("notif-lista");
+  if (reset) { _cursor = null; ul.innerHTML = ""; }
+  try {
+    const qs = _cursor ? `?limit=50&antes_de=${_cursor}` : "?limit=50";
+    const r = await fetch(`/api/notif-org/historial${qs}`, { headers: cabAvisos() });
+    const j = await r.json();
+    if (esSinOrgAvisos(r.status, j.error)) {
+      ul.innerHTML = `<li style="padding:16px;color:var(--muted2);font-size:12px">Elegí una organización para ver esto</li>`;
+      document.getElementById("notif-mas").style.display = "none";
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const html = (j.items || []).map(filaAviso).join("");
+    if (!html && !_cursor) ul.innerHTML = `<li style="padding:16px;color:var(--muted2);font-size:12px">Todavía no hay avisos.</li>`;
+    else ul.insertAdjacentHTML("beforeend", html);
+    _cursor = j.cursor;
+    document.getElementById("notif-mas").style.display = j.hay_mas ? "inline-block" : "none";
+  } catch (e) {
+    ul.innerHTML = `<li style="padding:16px;color:var(--muted2);font-size:12px">Error: ${escAviso(e.message)}</li>`;
+  }
+}
+
+function cargarMas() { cargar(false); }
+
+async function marcarTodas() {
+  try {
+    await fetch("/api/notif-org/leidas", {
+      method: "POST",
+      headers: Object.assign(cabAvisos(), { "Content-Type": "application/json" }),
+      body: JSON.stringify({ ts: Date.now() }),
+    });
+    cargar(true);
+    // Avisarle a la campanita del topbar que baje el badge, sin esperar su
+    // poll de 60 s (queda expuesta en window desde el bloque Sprint 2 del topbar).
+    window.refrescarBadge?.();
+  } catch (e) { console.error(e); }
+}
+
+document.addEventListener("DOMContentLoaded", () => cargar(true));
+</script>

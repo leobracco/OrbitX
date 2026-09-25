@@ -3,14 +3,15 @@
 
 let mapa = null;
 let markers = {};          // device_id → L.marker
-let capaHistorial = null;  // L.polyline del historial
+let capasHistorial = [];   // todas las capas del historial (líneas + markers)
 let selectedDevice = null;
 let refreshTimer = null;
 
 const COLOR_MOVING  = "#A4BA3E";
 const COLOR_STOPPED = "#3C9EFF";
 const COLOR_OFFLINE = "#555";
-const COLOR_TRAIL   = "#FFB03C";
+const COLOR_RUTA        = "#4285F4"; // azul Google Maps — tramos con lote/piloto
+const COLOR_SIN_PILOTO  = "#F4A742"; // naranja punteado — tramos sin piloto
 
 // ── Init ─────────────────────────────────────────────────
 function initMapa() {
@@ -102,8 +103,15 @@ async function cargarLive() {
                 ? `<span class="badge badge-lime" style="font-size:9px">${d.speed.toFixed(1)} km/h</span>`
                 : '<span class="badge badge-gray" style="font-size:9px">Detenido</span>'}
               ${d.field ? `<span class="badge badge-teal" style="font-size:9px">${d.field}</span>` : ""}
+              ${moving && !d.field ? '<span class="badge badge-amber" style="font-size:9px">sin piloto</span>' : ""}
               ${modBadges.join("")}
             </div>
+            ${d.autosteer != null ? `
+            <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">
+              <span class="badge ${d.autosteer ? "badge-lime" : "badge-gray"}" style="font-size:9px">${d.autosteer ? "⌖ piloto ON" : "piloto OFF"}</span>
+              ${d.xte != null && Math.abs(d.xte) < 100 ? `<span class="badge ${Math.abs(d.xte)<0.05?"badge-lime":Math.abs(d.xte)<0.2?"badge-amber":"badge-red"}" style="font-size:9px">línea ${(d.xte*100).toFixed(0)} cm</span>` : ""}
+              ${d.steer_angle != null ? `<span class="badge badge-blue" style="font-size:9px">${d.steer_angle.toFixed(1)}° dir</span>` : ""}
+            </div>` : ""}
           </div>
           <div class="td-dim" style="font-size:10px;text-align:right;white-space:nowrap">
             ${d.age_sec < 60 ? "hace " + d.age_sec + "s" : "hace " + Math.round(d.age_sec/60) + "min"}
@@ -181,6 +189,62 @@ function seleccionarDevice(deviceId) {
 }
 
 // ── Historial ────────────────────────────────────────────
+// Corta el recorrido en segmentos homogéneos: cambia el estado piloto
+// (field abierto o no) o hay un gap de señal > 5 min → segmento nuevo.
+// El primer punto del segmento repite el último del anterior para que la
+// línea no quede cortada (salvo gap real).
+function segmentosHistorial(points) {
+  const GAP_MS = 5 * 60 * 1000;
+  const segs = [];
+  let cur = null;
+  for (const p of points) {
+    const sinPiloto = !p.field;
+    const prev = cur ? cur.pts[cur.pts.length - 1] : null;
+    const hayGap = prev && (p.ts - prev.ts > GAP_MS);
+    if (!cur || cur.sinPiloto !== sinPiloto || hayGap) {
+      cur = { sinPiloto, pts: (prev && !hayGap) ? [prev, p] : [p] };
+      segs.push(cur);
+    } else {
+      cur.pts.push(p);
+    }
+  }
+  return segs.filter(s => s.pts.length > 1);
+}
+
+// Pin de fin estilo Google Maps (gota roja con punto blanco).
+function pinFinIcon() {
+  return L.divIcon({
+    html: `<svg width="26" height="36" viewBox="0 0 26 36" xmlns="http://www.w3.org/2000/svg">
+      <path d="M13 0C5.8 0 0 5.8 0 13c0 9.6 13 23 13 23s13-13.4 13-23C26 5.8 20.2 0 13 0z" fill="#EA4335" stroke="#fff" stroke-width="1.5"/>
+      <circle cx="13" cy="13" r="4.5" fill="#fff"/>
+    </svg>`,
+    iconSize: [26, 36], iconAnchor: [13, 34], className: "",
+  });
+}
+
+// Tooltip sobre la ruta: velocidad, hora y lote del punto más cercano al cursor.
+function tooltipRutaHandler(seg) {
+  return function (e) {
+    let best = seg.pts[0], bestD = Infinity;
+    for (const p of seg.pts) {
+      const d = Math.abs(p.lat - e.latlng.lat) + Math.abs(p.lon - e.latlng.lng);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    const hora = new Date(best.ts).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+    this.setTooltipContent(`<div style="font-size:11px;color:#ccc">
+      <b style="color:#fff">${(best.speed || 0).toFixed(1)} km/h</b> · ${hora}<br>
+      ${best.field
+        ? `<span style="color:${COLOR_RUTA}">${best.field}</span>`
+        : `<span style="color:${COLOR_SIN_PILOTO}">Sin piloto</span>`}
+    </div>`);
+  };
+}
+
+function fmtMin(min) {
+  const m = Math.round(min);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
+}
+
 async function cargarHistorial() {
   if (!selectedDevice) return;
   const fecha = document.getElementById("trk-fecha").value;
@@ -195,27 +259,43 @@ async function cargarHistorial() {
       return;
     }
 
-    const latlngs = data.points.map(p => [p.lat, p.lon]);
+    // Segmentos con casing blanco (estilo ruta de Google Maps):
+    // con piloto = azul sólido · sin piloto = naranja punteado.
+    const segs = segmentosHistorial(data.points);
+    for (const seg of segs) {
+      const latlngs = seg.pts.map(p => [p.lat, p.lon]);
+      const casing = L.polyline(latlngs, { color: "#fff", weight: 7, opacity: 0.85, interactive: false }).addTo(mapa);
+      const linea = L.polyline(latlngs, seg.sinPiloto
+        ? { color: COLOR_SIN_PILOTO, weight: 4, opacity: 0.95, dashArray: "1 9", lineCap: "round" }
+        : { color: COLOR_RUTA, weight: 4, opacity: 0.95 }
+      ).addTo(mapa);
+      linea.bindTooltip("", { sticky: true, opacity: 1, direction: "top", offset: [0, -8] });
+      linea.on("mousemove", tooltipRutaHandler(seg));
+      capasHistorial.push(casing, linea);
+    }
 
-    // Polyline del recorrido
-    capaHistorial = L.polyline(latlngs, {
-      color: COLOR_TRAIL,
-      weight: 3,
-      opacity: 0.8,
-      dashArray: "6 4",
-    }).addTo(mapa);
+    // Inicio (punto verde) y fin (pin rojo).
+    const first = data.points[0], last = data.points[data.points.length - 1];
+    const mIni = L.circleMarker([first.lat, first.lon], {
+      radius: 6, fillColor: "#00C853", fillOpacity: 1, color: "#fff", weight: 2,
+    }).addTo(mapa).bindTooltip(`<b style="color:#0f0">Inicio</b><br>${new Date(first.ts).toLocaleTimeString("es-AR")}`, { opacity: 1 });
+    const mFin = L.marker([last.lat, last.lon], { icon: pinFinIcon() })
+      .addTo(mapa).bindTooltip(`<b style="color:#f44">Fin</b><br>${new Date(last.ts).toLocaleTimeString("es-AR")}`, { opacity: 1, direction: "top", offset: [0, -34] });
+    capasHistorial.push(mIni, mFin);
 
-    // Marcador de inicio y fin
-    L.circleMarker(latlngs[0], {
-      radius: 6, fillColor: "#00e676", fillOpacity: 1, color: "#fff", weight: 2,
-    }).addTo(mapa).bindTooltip(`<b style="color:#0f0">Inicio</b><br>${new Date(data.points[0].ts).toLocaleTimeString("es-AR")}`, { opacity: 1 });
+    // Resumen del día (viene calculado del server).
+    const r = data.resumen;
+    const boxResumen = document.getElementById("trk-resumen");
+    if (r && boxResumen) {
+      boxResumen.innerHTML = `
+        <b style="color:#fff">${r.km_total.toFixed(1)} km</b> recorridos
+        · <span style="color:${COLOR_SIN_PILOTO}">${r.km_sin_piloto.toFixed(1)} km sin piloto</span><br>
+        <span style="color:#999">En movimiento: ${fmtMin(r.min_mov_con_piloto)} con piloto · ${fmtMin(r.min_mov_sin_piloto)} sin piloto</span>`;
+      boxResumen.style.display = "block";
+    }
 
-    const last = data.points[data.points.length - 1];
-    L.circleMarker(latlngs[latlngs.length - 1], {
-      radius: 6, fillColor: "#ff1744", fillOpacity: 1, color: "#fff", weight: 2,
-    }).addTo(mapa).bindTooltip(`<b style="color:#f44">Fin</b><br>${new Date(last.ts).toLocaleTimeString("es-AR")}`, { opacity: 1 });
-
-    mapa.fitBounds(capaHistorial.getBounds(), { padding: [40, 40] });
+    const grupo = L.featureGroup(capasHistorial);
+    mapa.fitBounds(grupo.getBounds(), { padding: [40, 40] });
     document.getElementById("btn-limpiar-historial").style.display = "inline-flex";
     document.getElementById("mapa-titulo").textContent = `Recorrido ${fecha} · ${data.points.length} puntos`;
 
@@ -226,16 +306,10 @@ async function cargarHistorial() {
 }
 
 function limpiarHistorial() {
-  if (capaHistorial) {
-    mapa.removeLayer(capaHistorial);
-    capaHistorial = null;
-  }
-  // Quitar circle markers del historial (inicio/fin)
-  mapa.eachLayer(l => {
-    if (l instanceof L.CircleMarker && l !== markers[selectedDevice]) {
-      mapa.removeLayer(l);
-    }
-  });
+  for (const capa of capasHistorial) mapa.removeLayer(capa);
+  capasHistorial = [];
+  const boxResumen = document.getElementById("trk-resumen");
+  if (boxResumen) boxResumen.style.display = "none";
   document.getElementById("btn-limpiar-historial").style.display = "none";
   document.getElementById("mapa-titulo").textContent = "Mapa en vivo";
 }

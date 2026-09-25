@@ -1,0 +1,180 @@
+<%
+// releases.ejs — página pública de descargas. Sin JS de negocio: todo
+// server-rendered. Nunca usar el tag EJS sin escape con datos (changelog,
+// version, etc vienen de firmware subido por superadmin, pero igual se
+// escapan siempre con el tag que sí escapa).
+function fmtFecha(ts) {
+  if (!ts) return "–";
+  return new Date(ts).toLocaleString("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+function fmtMB(bytes) {
+  if (!bytes) return "–";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+const PRODUCTOS_ORDEN = Object.keys(productos);
+%>
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Software y firmware de Agro Parallel</title>
+<link rel="icon" type="image/png" href="/img/brand/favicon.png">
+<link rel="stylesheet" href="/css/variables.css">
+<style>
+  body { overflow: auto; padding: 28px 16px 48px; }
+  .hoja { max-width: 860px; margin: 0 auto; }
+
+  header.top { margin-bottom: 26px; }
+  header.top h1 { font-size: 22px; font-weight: 700; color: var(--ap-text); margin-bottom: 6px; }
+  header.top p { font-size: 13px; color: var(--ap-muted); }
+
+  section.producto {
+    background: var(--ap-card); border: 1px solid var(--ap-border);
+    border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 16px;
+    overflow-x: auto;
+  }
+  section.producto h2 {
+    font-size: 16px; font-weight: 700; color: var(--ap-text);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  }
+  .badge-ultima {
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+    padding: 2px 8px; border-radius: 20px;
+    background: var(--ap-green-dim); color: var(--ap-green); border: 1px solid rgba(164,186,62,0.25);
+  }
+
+  .vacio { font-size: 13px; color: var(--ap-muted-2); padding: 6px 0; }
+
+  .version-actual {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;
+    padding: 12px 0; border-bottom: 1px solid var(--ap-border-soft);
+  }
+  .version-info { flex: 1; min-width: 220px; }
+  .version-info .num { font-size: 15px; font-weight: 700; color: var(--ap-text); }
+  .version-info .meta { font-size: 12px; color: var(--ap-muted); margin-top: 2px; }
+  .version-info .changelog {
+    font-size: 12.5px; color: var(--ap-muted); margin-top: 8px;
+    white-space: pre-line; max-width: 520px;
+  }
+  .version-info .hash { font-size: 11px; color: var(--ap-muted-2); margin-top: 8px; }
+  .version-info .hash code {
+    font-family: var(--ap-font-mono); background: var(--ap-bg); padding: 2px 6px;
+    border-radius: 4px; word-break: break-all;
+  }
+
+  .acciones { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .btn-descargar, .btn-flashear {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+    padding: 8px 14px; border-radius: 8px; text-decoration: none; white-space: nowrap;
+    font-family: var(--ap-font); border: 1px solid transparent;
+  }
+  .btn-descargar { background: var(--ap-green); color: #121618; }
+  .btn-descargar:hover { background: var(--ap-green-2); }
+  .btn-flashear {
+    background: transparent; color: var(--ap-blue); border-color: rgba(60,158,255,0.35);
+  }
+  .btn-flashear:hover { background: var(--ap-blue-dim); }
+
+  details.anteriores { margin-top: 10px; }
+  details.anteriores summary {
+    cursor: pointer; font-size: 12.5px; color: var(--ap-muted); padding: 8px 0; list-style: none;
+  }
+  details.anteriores summary::-webkit-details-marker { display: none; }
+  details.anteriores summary::before { content: "▸ "; }
+  details.anteriores[open] summary::before { content: "▾ "; }
+
+  .tabla-wrap { overflow-x: auto; }
+  table.viejas { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  table.viejas th {
+    text-align: left; padding: 6px 8px; color: var(--ap-muted-2); font-weight: 600;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--ap-border);
+  }
+  table.viejas td {
+    padding: 6px 8px; color: var(--ap-text); border-bottom: 1px solid var(--ap-border-soft);
+    white-space: nowrap;
+  }
+  table.viejas td.hash code { font-family: var(--ap-font-mono); font-size: 11px; color: var(--ap-muted); }
+  table.viejas a { color: var(--ap-green); text-decoration: none; font-weight: 600; }
+  table.viejas a:hover { text-decoration: underline; }
+
+  footer.pie { margin-top: 24px; text-align: center; font-size: 11.5px; color: var(--ap-muted-2); }
+</style>
+</head>
+<body>
+<div class="hoja">
+
+  <header class="top">
+    <h1>Software y firmware de Agro Parallel</h1>
+    <p>Descargas públicas de firmware para los módulos de campo de Agro Parallel. Verificá siempre el hash SHA-256 antes de flashear.</p>
+  </header>
+
+  <% PRODUCTOS_ORDEN.forEach(function (producto) { %>
+    <% const versiones = productos[producto] || []; %>
+    <% const slug = producto.toLowerCase(); %>
+    <% const tieneFlash = flasheables.includes(slug); %>
+    <% const tieneFlash7 = producto === "QuantiX" && flasheables.includes("quantix7"); %>
+    <section class="producto">
+      <h2><%= producto %><% if (versiones.length) { %><span class="badge-ultima">v<%= versiones[0].version %></span><% } %></h2>
+
+      <% if (!versiones.length) { %>
+        <p class="vacio">Todavía no hay versiones publicadas para <%= producto %>.</p>
+      <% } else { %>
+        <% const ultima = versiones[0]; %>
+        <% const anteriores = versiones.slice(1); %>
+        <div class="version-actual">
+          <div class="version-info">
+            <div class="num">Versión <%= ultima.version %></div>
+            <div class="meta"><%= fmtFecha(ultima.ts) %> · <%= fmtMB(ultima.tamano_bytes) %></div>
+            <% if (ultima.changelog) { %>
+              <div class="changelog"><%= ultima.changelog %></div>
+            <% } %>
+            <div class="hash">SHA-256: <code><%= ultima.hash_sha256 %></code></div>
+          </div>
+          <div class="acciones">
+            <a class="btn-descargar" href="/api/ota/publico/firmware/<%= encodeURIComponent(producto) %>/<%= encodeURIComponent(ultima.version) %>">⬇ Descargar</a>
+            <% if (tieneFlash) { %>
+              <a class="btn-flashear" href="/flash-publico/<%= slug %>/">⚡ Flashear por USB desde el navegador</a>
+            <% } %>
+            <% if (tieneFlash7) { %>
+              <a class="btn-flashear" href="/flash-publico/quantix7/">⚡ QuantiX 7 motores</a>
+            <% } %>
+          </div>
+        </div>
+
+        <% if (anteriores.length) { %>
+          <details class="anteriores">
+            <summary>Versiones anteriores (<%= anteriores.length %>)</summary>
+            <div class="tabla-wrap">
+              <table class="viejas">
+                <thead>
+                  <tr><th>Versión</th><th>Fecha</th><th>Tamaño</th><th>SHA-256</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <% anteriores.forEach(function (v) { %>
+                    <tr>
+                      <td>v<%= v.version %></td>
+                      <td><%= fmtFecha(v.ts) %></td>
+                      <td><%= fmtMB(v.tamano_bytes) %></td>
+                      <td class="hash"><code><%= v.hash_sha256 %></code></td>
+                      <td><a href="/api/ota/publico/firmware/<%= encodeURIComponent(producto) %>/<%= encodeURIComponent(v.version) %>">Descargar</a></td>
+                    </tr>
+                  <% }) %>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        <% } %>
+      <% } %>
+    </section>
+  <% }) %>
+
+  <footer class="pie">Los binarios se verifican por SHA-256 antes de flashear · Agro Parallel</footer>
+</div>
+</body>
+</html>

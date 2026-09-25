@@ -36,13 +36,20 @@ router.post("/position", async (req, res) => {
     const slug = deviceDoc.estab_slug;
     if (!slug) return res.status(400).json({ error: "Sin establecimiento asignado" });
 
-    const { lat, lon, heading, speed, field, modules } = req.body;
+    const { lat, lon, heading, speed, field, modules,
+            xte, steer_angle, fix, autosteer, reverse } = req.body;
     const now  = Date.now();
     const _lat = parseFloat(lat) || 0;
     const _lon = parseFloat(lon) || 0;
     const _hdg = parseFloat(heading) || 0;
     const _spd = parseFloat(speed) || 0;
     const _fld = field || "";
+    // Telemetría de guiado (opcional; equipos viejos no la mandan → null)
+    const _xte   = Number.isFinite(+xte) ? +xte : null;
+    const _steer = Number.isFinite(+steer_angle) ? +steer_angle : null;
+    const _fix   = Number.isFinite(+fix) ? +fix : null;
+    const _auto  = autosteer === undefined ? null : !!autosteer;
+    const _rev   = reverse === undefined ? null : !!reverse;
 
     // 1. Actualizar posición live del device (upsert con retry 409 — O11).
     const liveId = `tracking_live_${deviceId}`;
@@ -57,6 +64,7 @@ router.post("/position", async (req, res) => {
           estab_slug: slug,
           lat: _lat, lon: _lon, heading: _hdg, speed: _spd,
           field: _fld, modules: modules || {},
+          xte: _xte, steer_angle: _steer, fix: _fix, autosteer: _auto, reverse: _rev,
           ts: now, online: true,
         });
         break;
@@ -161,6 +169,8 @@ router.get("/live", async (req, res) => {
       lat: doc.lat, lon: doc.lon,
       heading: doc.heading, speed: doc.speed,
       field: doc.field, modules: doc.modules,
+      xte: doc.xte, steer_angle: doc.steer_angle, fix: doc.fix,
+      autosteer: doc.autosteer, reverse: doc.reverse,
       ts: doc.ts,
       age_sec: Math.round((Date.now() - doc.ts) / 1000)
     }));
@@ -213,19 +223,49 @@ router.get("/history/:deviceId", async (req, res) => {
     for (const b of bucketRes.docs) {
       if (Array.isArray(b.points)) {
         for (const p of b.points) {
-          allPoints.push({ lat: p.lat, lon: p.lon, heading: p.heading, speed: p.speed, ts: p.ts });
+          allPoints.push({ lat: p.lat, lon: p.lon, heading: p.heading, speed: p.speed, field: p.field || "", ts: p.ts });
         }
       }
     }
     for (const d of pointRes.docs) {
-      allPoints.push({ lat: d.lat, lon: d.lon, heading: d.heading, speed: d.speed, ts: d.ts });
+      allPoints.push({ lat: d.lat, lon: d.lon, heading: d.heading, speed: d.speed, field: d.field || "", ts: d.ts });
     }
     allPoints.sort((a, b) => a.ts - b.ts);
+
+    // Resumen del día. "Sin piloto" = punto sin lote abierto (field vacío):
+    // la pantalla postea siempre, con o sin lote, así que el estado se deriva
+    // acá sin tocar PilotX. Gaps > 5 min = pérdida de señal (no suman), y
+    // segmentos > 3 km entre puntos consecutivos = salto de GPS (descartado).
+    const GAP_MS = 5 * 60 * 1000;
+    const hav = (a, b) => {
+      const dLat = (b.lat - a.lat) * Math.PI / 180;
+      const dLon = (b.lon - a.lon) * Math.PI / 180;
+      const s = Math.sin(dLat / 2) ** 2 +
+        Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return 2 * 6371000 * Math.asin(Math.sqrt(s));
+    };
+    const resumen = { km_total: 0, km_sin_piloto: 0, min_mov_con_piloto: 0, min_mov_sin_piloto: 0 };
+    for (let i = 1; i < allPoints.length; i++) {
+      const a = allPoints[i - 1], p = allPoints[i];
+      const dtMs = p.ts - a.ts;
+      if (dtMs <= 0 || dtMs > GAP_MS) continue;
+      const dist = hav(a, p);
+      if (dist > 3000) continue;
+      const sinPiloto = !p.field;
+      resumen.km_total += dist / 1000;
+      if (sinPiloto) resumen.km_sin_piloto += dist / 1000;
+      if ((p.speed || 0) > 0.5) {
+        if (sinPiloto) resumen.min_mov_sin_piloto += dtMs / 60000;
+        else           resumen.min_mov_con_piloto += dtMs / 60000;
+      }
+    }
+    for (const k of Object.keys(resumen)) resumen[k] = Math.round(resumen[k] * 10) / 10;
 
     res.json({
       device_id: deviceId,
       date,
       points: allPoints,
+      resumen,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
