@@ -5,7 +5,7 @@ import { crearStore, idbBackend } from "./core/store.js";
 import { crearApi } from "./core/api.js";
 import { crearAuth } from "./core/auth.js";
 import { crearSync } from "./core/sync.js";
-import { pestanasPara } from "./core/permisos.js";
+import { pestanasPara, pantallasPara } from "./core/permisos.js";
 import { conectarSocket } from "./core/socket.js";
 import { crearNav } from "./ui/nav.js";
 import { toast } from "./ui/toast.js";
@@ -55,6 +55,7 @@ $("btn-salir").addEventListener("click", async () => {
   mostrarLogin();
 });
 $("btn-org").addEventListener("click", elegirOrg);
+$("btn-chat").addEventListener("click", () => { location.hash = "#/chat"; });
 
 // Lista de establecimientos elegibles: el superadmin no tiene membresías,
 // elige entre TODAS las orgs (/api/admin/orgs); el resto, entre sus membresías.
@@ -95,6 +96,10 @@ async function arrancar() {
   if (usuario.rol_global === "superadmin" && usuario.org_activa)
     orgsElegibles(usuario).then(orgs => { const o = orgs.find(x => x.slug === usuario.org_activa); if (o) $("org-nombre").textContent = o.nombre; }).catch(() => {});
 
+  // El chat vive en la barra de arriba, no en la de abajo: es una pantalla
+  // suelta (ver pantallasPara). Se muestra solo si el rol la tiene permitida.
+  $("btn-chat").hidden = !pantallasPara(rol).includes("chat");
+
   nav = crearNav({ pestanas: pestanasPara(rol), onIr: (p) => { location.hash = `#/${p}`; } });
   const socket = conectarSocket({ token: auth.token(), onPosicion: (p) => ctx.onPosicion?.(p), onEstado: (s) => { if (s === "conectado") nav.setOffline(false); } });
   ctx = { api, store, auth, sync, usuario, rol, toast, socket, nav, onPosicion: null };
@@ -110,7 +115,7 @@ async function enrutar() {
   const partes  = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   const pestana = partes[0] || "inicio";
   const param   = partes[1] ? decodeURIComponent(partes[1]) : undefined;
-  const permitidas = pestanasPara(ctx.rol);
+  const permitidas = pantallasPara(ctx.rol);
   const destino = permitidas.includes(pestana) ? pestana : "inicio";
   if (destino !== pestana) { location.hash = `#/${destino}`; return; }
   actual?.desmontar?.(); ctx.onPosicion = null;

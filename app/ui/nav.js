@@ -2,8 +2,8 @@
 // badge de alertas.
 import { haceCuanto } from "../core/fecha.js";
 
-const ICONOS = { inicio: "🏠", mapa: "🗺️", lotes: "🌾", lluvias: "🌧️", alertas: "🔔", equipos: "📡" };
-const ROTULOS = { inicio: "Inicio", mapa: "Mapa", lotes: "Lotes", lluvias: "Lluvias", alertas: "Alertas", equipos: "Equipos" };
+const ICONOS = { inicio: "🏠", mapa: "🗺️", lotes: "🌾", siembra: "🌱", lluvias: "🌧️", alertas: "🔔", equipos: "📡" };
+const ROTULOS = { inicio: "Inicio", mapa: "Mapa", lotes: "Lotes", siembra: "Siembra", lluvias: "Lluvias", alertas: "Alertas", equipos: "Equipos" };
 
 export function crearNav({ pestanas, onIr }) {
   const nav = document.getElementById("nav");
