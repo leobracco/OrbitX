@@ -54,6 +54,16 @@
       <div style="font-size:10px;color:var(--ap-muted);margin-top:6px">Fuente: Servicio Meteorológico Nacional · se actualiza cada 15 min</div>
     </div>
 
+    <!-- AgroMet semanal INTA resumido por agrarIA (se oculta si no hay) -->
+    <div class="card" id="llu-agromet-card" style="padding:16px;display:none">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px">
+        <div style="font-size:14px;font-weight:600">🌾 INTA AgroMet <span id="llu-agromet-num"></span></div>
+        <a id="llu-agromet-pdf" href="#" target="_blank" rel="noopener" style="font-size:11px;color:var(--ap-green)">Ver informe completo ↗</a>
+      </div>
+      <div id="llu-agromet-body"></div>
+      <div style="font-size:10px;color:var(--ap-muted);margin-top:6px">Fuente: INTA · Instituto de Clima y Agua. Resumen generado por agrarIA.</div>
+    </div>
+
     <!-- Pronóstico real (Open-Meteo) -->
     <div class="card" id="llu-prono-card" style="padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -754,6 +764,31 @@ async function lluCargarAlertasSMN() {
   } catch { card.style.display = "none"; }
 }
 
+// ── AgroMet semanal INTA ────────────────────────────────────
+async function lluCargarAgromet() {
+  const card = document.getElementById("llu-agromet-card");
+  try {
+    const r = await Auth.get("/api/lluvias/agromet");
+    const inf = r.informe;
+    if (!inf) { card.style.display = "none"; return; }
+    const [a, m, d] = inf.fecha.split("-");
+    document.getElementById("llu-agromet-num").textContent = `N.º ${inf.numero} · ${d}/${m}/${a}`;
+    document.getElementById("llu-agromet-pdf").href = inf.pdf || inf.url;
+    const propias = inf.provincias.filter(p => p.propia);
+    const otras   = inf.provincias.filter(p => !p.propia);
+    const bloque = (p) => `
+      <div style="margin-top:8px">
+        <div style="font-size:12px;font-weight:600">${lluEscape(p.provincia)}</div>
+        <ul style="margin:4px 0 0 18px;padding:0;font-size:12px;line-height:1.5">${p.puntos.map(x => `<li>${lluEscape(x)}</li>`).join("")}</ul>
+      </div>`;
+    document.getElementById("llu-agromet-body").innerHTML =
+      `<div style="font-size:12px;line-height:1.5">${lluEscape(inf.general)}</div>` +
+      (propias.length ? propias.map(bloque).join("") : "") +
+      (otras.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--ap-muted)">${propias.length ? "Otras provincias" : "Por provincia"} (${otras.length})</summary>${otras.map(bloque).join("")}</details>` : "");
+    card.style.display = "block";
+  } catch { card.style.display = "none"; }
+}
+
 // ── Pronóstico real (Open-Meteo) del centroide del campo ──
 async function lluCargarPronostico() {
   const body = document.getElementById("llu-prono-body");
@@ -814,5 +849,6 @@ document.addEventListener("DOMContentLoaded", () => {
   lluCargarLotes();
   lluCargarPronostico();
   lluCargarAlertasSMN();
+  lluCargarAgromet();
 });
 </script>

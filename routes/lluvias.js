@@ -323,6 +323,41 @@ router.get("/smn/alertas", async (req, res) => {
   }
 });
 
+// GET /api/lluvias/agromet — último AgroMet semanal INTA resumido por agrarIA,
+// con las provincias de los lotes de la org primero.
+router.get("/agromet", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const doc = await require("../services/agromet").ultimoResumen();
+    if (!doc) return res.json({ informe: null });
+
+    const provs = new Set();
+    try {
+      const zona = require("../services/zona");
+      for (const p of await require("../lib/lotes-puntos").puntosLotes(estabSlug)) {
+        const dep = await zona.departamento(p.lat, p.lon).catch(() => null);
+        if (dep?.provincia) provs.add(dep.provincia);
+      }
+    } catch { /* sin lotes o sin Georef: se muestran todas */ }
+
+    const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const mias = new Set([...provs].map(norm));
+    const provincias = (doc.provincias || [])
+      .filter(p => p.puntos?.length)
+      .map(p => ({ ...p, propia: mias.has(norm(p.provincia)) }))
+      .sort((a, b) => b.propia - a.propia);
+
+    res.json({ informe: {
+      numero: doc.numero, fecha: doc.fecha, url: doc.url, pdf: doc.pdf,
+      general: doc.general, provincias,
+    } });
+  } catch (e) {
+    console.error("[lluvias/agromet]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════════
 //  ESTACIONES SIGA (INTA) — histórico diario por rango, como INA
 // ══════════════════════════════════════════════════════════

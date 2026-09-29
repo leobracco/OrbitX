@@ -398,6 +398,13 @@ cron.schedule("3,18,33,48 * * * *", async () => {
   catch (e) { console.warn("[CRON/smn-alertas]", e.message); }
 }, { timezone: "America/Argentina/Cordoba" });
 
+// AgroMet semanal INTA: sale los miércoles, a veces con atraso. Mirar el listado
+// es barato; el resumen con agrarIA corre una sola vez por informe.
+cron.schedule("30 11,18 * * 3,4,5", async () => {
+  try { await require("./services/agromet").sincronizar(); }
+  catch (e) { console.warn("[CRON/agromet]", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+
 // Sprint 2: retencion y limpieza
 // 03:40, antes del backup de las 03:00 del día siguiente y lejos del horario
 // de campo. Todo best-effort: si falla, se loguea y sigue.
