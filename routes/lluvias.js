@@ -1,6 +1,6 @@
-// routes/lluvias.js — Registro manual de lluvias por establecimiento + análisis agrarIA.
-// Slice inicial: carga manual (tipo pluviómetro). La integración con fuentes
-// oficiales (INA a5) se suma después sobre este mismo doc/pantalla.
+// routes/lluvias.js — Lluvias: la serie de cada lote (fuentes externas en vivo,
+// services/lluvia_lote.js), carga de pluviómetro, análisis agrarIA, alertas SMN,
+// AgroMet INTA y pronóstico Open-Meteo.
 const router = require("express").Router();
 const crypto = require("crypto");
 const db     = require("../services/couchdb");
@@ -34,20 +34,46 @@ async function listar(estabSlug) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  GET /api/lluvias — listar registros del establecimiento activo
+//  GET /api/lluvias?lote=<nombre>&dias=<n>
+//  Con lote: la lluvia del lote armada en el momento, un valor por día
+//  (pluviómetro > estación a ≤ 15 km > Open-Meteo), ver services/lluvia_lote.js.
+//  `registros` son los días con lluvia, igual formato que antes, así el mapa,
+//  el detalle del lote y la PWA no cambian.
+//  Sin lote: los registros de pluviómetro del establecimiento.
 // ══════════════════════════════════════════════════════════
 router.get("/", async (req, res) => {
   const estabSlug = estabDe(req);
   if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
   try {
-    let registros = await listar(estabSlug);
-    // ?lote=<nombre> → solo los registros de ese lote (para el detalle del lote).
     const lote = (req.query.lote || "").trim();
-    if (lote) registros = registros.filter(r => (r.lote || "") === lote);
+    if (lote) {
+      const dias = parseInt(req.query.dias, 10) || 365;
+      const r = await require("../services/lluvia_lote").lluviaLote(estabSlug, lote, { dias });
+      return res.json({ ...r, puede_editar: puedeEditar(req) });
+    }
+    const registros = (await listar(estabSlug)).filter(r => !r.fuente || r.fuente === "manual");
     res.json({ registros, puede_editar: puedeEditar(req) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error("[lluvias]", e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
+// GET /api/lluvias/lotes — lotes de la org para el selector (con o sin ubicación).
+router.get("/lotes", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const nombres = new Map();
+    for (const p of await require("../lib/lotes-puntos").puntosLotes(estabSlug))
+      if (p.nombre) nombres.set(p.nombre.trim().toLowerCase(), p.nombre.trim());
+    try {
+      const r = await db.getDB(estabSlug).find({ selector: { tipo: "lote_maestro" }, fields: ["nombre"], limit: 2000 });
+      for (const d of r.docs) if (d.nombre && !nombres.has(d.nombre.trim().toLowerCase())) nombres.set(d.nombre.trim().toLowerCase(), d.nombre.trim());
+    } catch { /* sin lotes maestros */ }
+    res.json({ lotes: [...nombres.values()].sort((a, b) => a.localeCompare(b, "es")) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // ══════════════════════════════════════════════════════════
 //  POST /api/lluvias — crear registro manual
 // ══════════════════════════════════════════════════════════
@@ -162,9 +188,13 @@ router.post("/analizar", async (req, res) => {
   const estabSlug = estabDe(req);
   if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
   try {
-    const registros = await listar(estabSlug);
+    // Con lote: la serie unificada del lote (un valor por día); sin lote, el pluviómetro.
+    const lote = (req.body?.lote || "").trim();
+    const registros = lote
+      ? (await require("../services/lluvia_lote").lluviaLote(estabSlug, lote, { dias: 365 })).registros
+      : (await listar(estabSlug)).filter(r => !r.fuente || r.fuente === "manual");
     if (!registros.length)
-      return res.status(400).json({ error: "No hay lluvias cargadas para analizar" });
+      return res.status(400).json({ error: "No hay lluvias para analizar" });
 
     const s = resumir(registros);
     const meses = Object.entries(s.por_mes)
@@ -173,7 +203,7 @@ router.post("/analizar", async (req, res) => {
       .map(([m, mm]) => `${m}: ${Math.round(mm * 10) / 10} mm`)
       .join("\n");
 
-    const prompt = `Registros de lluvia del establecimiento "${estabSlug}":
+    const prompt = `Registros de lluvia ${lote ? `del lote "${lote}" (último año)` : `del establecimiento "${estabSlug}"`}:
 Total acumulado histórico cargado: ${s.total_mm} mm en ${s.registros} registros.
 Acumulado del mes actual: ${s.mes_actual_mm} mm.
 Última lluvia: ${s.ultima ? `${s.ultima.fecha} (${s.ultima.mm} mm)` : "sin datos"}.
@@ -189,115 +219,6 @@ y 2-3 recomendaciones concretas para el manejo (siembra, humedad de suelo, riesg
     res.json({ analisis, resumen: s });
   } catch (e) {
     console.error("[lluvias/analizar]", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ══════════════════════════════════════════════════════════
-//  INTEGRACIÓN INA (alerta.ina.gob.ar) — histórico de lluvias
-// ══════════════════════════════════════════════════════════
-
-// Centroide aproximado del establecimiento: promedio de los orígenes (Field.txt)
-// de los lotes AOG sincronizados. Sirve para buscar la estación INA más cercana.
-async function ubicacionEstab(estabSlug) {
-  const pts = await require("../lib/lotes-puntos").puntosLotes(estabSlug);
-  if (!pts.length) return null;
-  return {
-    lat:    pts.reduce((a, p) => a + p.lat, 0) / pts.length,
-    lon:    pts.reduce((a, p) => a + p.lon, 0) / pts.length,
-    lotes:  pts.length,
-    puntos: pts.map(p => ({ nombre: p.nombre, lat: p.lat, lon: p.lon })),
-  };
-}
-
-// GET /api/lluvias/ina/ubicacion — centroide de los lotes de la org.
-router.get("/ina/ubicacion", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  try {
-    res.json({ ubicacion: await ubicacionEstab(estabSlug) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// GET /api/lluvias/ina/estaciones?lat=&lon=&q= — estaciones cercanas o por texto.
-router.get("/ina/estaciones", async (req, res) => {
-  try {
-    const ina = require("../services/ina");
-    const lat = parseFloat(req.query.lat);
-    const lon = parseFloat(req.query.lon);
-    const q   = (req.query.q || "").trim();
-    if (!q && !(Number.isFinite(lat) && Number.isFinite(lon)))
-      return res.status(400).json({ error: "Indicá lat/lon o un texto de búsqueda" });
-    const estaciones = await ina.buscarEstaciones({ lat, lon, q, limit: 8 });
-    res.json({ estaciones });
-  } catch (e) {
-    console.error("[lluvias/ina/estaciones]", e.message);
-    res.status(502).json({ error: `No se pudo consultar el INA: ${e.message}` });
-  }
-});
-
-// POST /api/lluvias/ina/importar { sitecode, desde, hasta }
-// Trae la serie diaria y guarda los días con lluvia como lluvia_registro
-// (fuente:"ina"), con _id determinista para evitar duplicados al re-importar.
-router.post("/ina/importar", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
-
-  const sitecode = parseInt(req.body.sitecode, 10);
-  const { desde, hasta } = req.body;
-  const lote = (req.body.lote || "").trim() || null;
-  if (!sitecode || !/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
-    return res.status(400).json({ error: "sitecode, desde y hasta (YYYY-MM-DD) requeridos" });
-  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
-
-  // Sufijo de lote para el _id: separa los registros por lote cuando una misma
-  // estación INA sirve a varios lotes (sin lote → campo, sin sufijo).
-  const loteSlug = lote ? "_" + lote.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
-
-  try {
-    const ina    = require("../services/ina");
-    const est     = (await ina.estaciones())[sitecode] || null;
-    const serie   = await ina.datosPrecip(sitecode, desde, hasta);
-    const lluvias = serie.filter(x => x.mm > 0);
-    if (!lluvias.length)
-      return res.json({ ok: true, importados: 0, estacion: est?.nombre || String(sitecode), mensaje: "Sin lluvias en el rango" });
-
-    const edb = db.getDB(estabSlug);
-    const now = Date.now();
-    const ids = lluvias.map(x => `lluvia_ina_${sitecode}${loteSlug}_${x.fecha}`);
-
-    // Traer los _rev existentes para que re-importar actualice (idempotente).
-    const revs = {};
-    try {
-      const f = await edb.fetch({ keys: ids });
-      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
-    } catch {}
-
-    const docs = lluvias.map(x => {
-      const _id = `lluvia_ina_${sitecode}${loteSlug}_${x.fecha}`;
-      return {
-        _id,
-        ...(revs[_id] ? { _rev: revs[_id] } : {}),
-        tipo:         "lluvia_registro",
-        fecha:        x.fecha,
-        mm:           Math.round(x.mm * 10) / 10,
-        lote:         lote,
-        nota:         `INA · ${est?.nombre || sitecode}`,
-        fuente:       "ina",
-        ina_sitecode: sitecode,
-        ina_estacion: est?.nombre || null,
-        ts:           new Date(x.fecha).getTime() || now,
-        updated_at:   now,
-      };
-    });
-
-    const r   = await edb.bulk({ docs });
-    const okc = r.filter(x => x.ok).length;
-    console.log(`[Lluvias/INA] ${estabSlug}: ${okc}/${docs.length} días de ${est?.nombre || sitecode}`);
-    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, estacion: est?.nombre || String(sitecode) });
-  } catch (e) {
-    console.error("[lluvias/ina/importar]", e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -359,171 +280,12 @@ router.get("/agromet", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
-//  ESTACIONES SIGA (INTA) — histórico diario por rango, como INA
-// ══════════════════════════════════════════════════════════
-
-// GET /api/lluvias/siga/estaciones?lat=&lon=&q=&inactivas=1
-router.get("/siga/estaciones", async (req, res) => {
-  try {
-    const siga = require("../services/siga");
-    const lat = parseFloat(req.query.lat);
-    const lon = parseFloat(req.query.lon);
-    const q   = (req.query.q || "").trim();
-    if (!q && !(Number.isFinite(lat) && Number.isFinite(lon)))
-      return res.status(400).json({ error: "Indicá lat/lon o un texto de búsqueda" });
-    const estaciones = await siga.buscarEstaciones({ lat, lon, q, limit: 8, inactivas: req.query.inactivas === "1" });
-    res.json({ estaciones });
-  } catch (e) {
-    console.error("[lluvias/siga/estaciones]", e.message);
-    res.status(502).json({ error: `No se pudo consultar el SIGA: ${e.message}` });
-  }
-});
-
-// POST /api/lluvias/siga/importar { id, desde, hasta, lote? }
-router.post("/siga/importar", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
-
-  const id = parseInt(req.body.id, 10);
-  const { desde, hasta } = req.body;
-  const lote = (req.body.lote || "").trim() || null;
-  if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
-    return res.status(400).json({ error: "id, desde y hasta (YYYY-MM-DD) requeridos" });
-  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
-
-  const loteSlug = lote ? "_" + lote.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
-  try {
-    const siga    = require("../services/siga");
-    const est     = (await siga.estaciones())[id] || null;
-    const serie   = await siga.datosDiarios(id, desde, hasta);
-    const lluvias = serie.filter(x => x.mm > 0);
-    const nombre  = est?.nombre || String(id);
-    if (!lluvias.length)
-      return res.json({ ok: true, importados: 0, estacion: nombre, mensaje: "Sin lluvias en el rango" });
-
-    const edb = db.getDB(estabSlug);
-    const now = Date.now();
-    const idDe = (fecha) => `lluvia_siga_${id}${loteSlug}_${fecha}`;
-    const revs = {};
-    try {
-      const f = await edb.fetch({ keys: lluvias.map(x => idDe(x.fecha)) });
-      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
-    } catch {}
-
-    const docs = lluvias.map(x => ({
-      _id:          idDe(x.fecha),
-      ...(revs[idDe(x.fecha)] ? { _rev: revs[idDe(x.fecha)] } : {}),
-      tipo:         "lluvia_registro",
-      fecha:        x.fecha,
-      mm:           Math.round(x.mm * 10) / 10,
-      lote,
-      nota:         `SIGA INTA · ${nombre}`,
-      fuente:       "siga",
-      siga_id:      id,
-      siga_estacion: est?.nombre || null,
-      ts:           new Date(x.fecha).getTime() || now,
-      updated_at:   now,
-    }));
-
-    const r   = await edb.bulk({ docs });
-    const okc = r.filter(x => x.ok).length;
-    console.log(`[Lluvias/SIGA] ${estabSlug}: ${okc}/${docs.length} días de ${nombre}`);
-    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, estacion: nombre });
-  } catch (e) {
-    console.error("[lluvias/siga/importar]", e.message);
-    res.status(502).json({ error: `No se pudo importar del SIGA: ${e.message}` });
-  }
-});
-
-// ══════════════════════════════════════════════════════════
-//  ESTACIONES BCP (Bolsa de Cereales de Bahía Blanca)
-//  No hay histórico por rango: la org "sigue" estaciones y el cron
-//  (services/bcp_sync.js) va guardando la lluvia diaria desde entonces.
-// ══════════════════════════════════════════════════════════
-
-// GET /api/lluvias/bcp/estaciones?lat=&lon=&q= — estaciones activas con el dato actual.
-router.get("/bcp/estaciones", async (req, res) => {
-  try {
-    const bcp = require("../services/bcp");
-    const lat = parseFloat(req.query.lat);
-    const lon = parseFloat(req.query.lon);
-    const q   = (req.query.q || "").trim();
-    res.json({ estaciones: await bcp.buscarEstaciones({ lat, lon, q, limit: 8 }) });
-  } catch (e) {
-    console.error("[lluvias/bcp/estaciones]", e.message);
-    res.status(502).json({ error: `No se pudo consultar la BCP: ${e.message}` });
-  }
-});
-
-// GET /api/lluvias/bcp/suscripciones — estaciones que sigue la org, con su dato actual.
-router.get("/bcp/suscripciones", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  try {
-    const sync = require("../services/bcp_sync");
-    const cfg  = await sync.leerConfig(estabSlug);
-    let actual = {};
-    try {
-      const lista = await require("../services/bcp").estaciones();
-      actual = Object.fromEntries(lista.map(e => [e.sitio, e]));
-    } catch { /* sin BCP igual mostramos lo suscripto */ }
-    res.json({ suscripciones: (cfg.estaciones || []).map(s => ({ ...s, actual: actual[s.sitio] || null })) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST /api/lluvias/bcp/suscripciones { sitio, lote? } — seguir una estación.
-router.post("/bcp/suscripciones", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso" });
-  const sitio = parseInt(req.body.sitio, 10);
-  const lote  = (req.body.lote || "").trim() || null;
-  if (!sitio) return res.status(400).json({ error: "sitio requerido" });
-  try {
-    const est = (await require("../services/bcp").estaciones()).find(e => e.sitio === sitio);
-    if (!est || !est.activa) return res.status(404).json({ error: "Estación inexistente o dada de baja" });
-
-    const sync = require("../services/bcp_sync");
-    const cfg  = await sync.leerConfig(estabSlug);
-    const subs = cfg.estaciones || [];
-    if (!subs.some(s => s.sitio === sitio && (s.lote || null) === lote)) {
-      subs.push({ sitio, nombre: est.nombre, lote, desde: Date.now() });
-      await sync.guardarConfig(estabSlug, { ...cfg, estaciones: subs });
-    }
-    const n = await sync.sincronizarOrg(estabSlug);
-    console.log(`[Lluvias/BCP] ${estabSlug}: sigue ${est.nombre}${lote ? ` (${lote})` : ""}, ${n} registros`);
-    res.json({ ok: true, estacion: est.nombre, registros: n });
-  } catch (e) {
-    console.error("[lluvias/bcp/suscripciones]", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// DELETE /api/lluvias/bcp/suscripciones?sitio=&lote= — dejar de seguir (los registros quedan).
-router.delete("/bcp/suscripciones", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso" });
-  const sitio = parseInt(req.query.sitio, 10);
-  const lote  = (req.query.lote || "").trim() || null;
-  try {
-    const sync = require("../services/bcp_sync");
-    const cfg  = await sync.leerConfig(estabSlug);
-    const subs = (cfg.estaciones || []).filter(s => !(s.sitio === sitio && (s.lote || null) === lote));
-    if (cfg._rev) await sync.guardarConfig(estabSlug, { ...cfg, estaciones: subs });
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ══════════════════════════════════════════════════════════
 //  INTEGRACIÓN OPEN-METEO (open-meteo.com) — pronóstico + histórico
 //  Modelo grillado por lat/lon: no necesita estación cercana.
 //  A diferencia de agrarIA, esto SÍ es un pronóstico real del clima.
 // ══════════════════════════════════════════════════════════
 
 const omOrg      = require("../lib/openmeteo-org");
-const fuentesReg = require("../services/lluvias_fuentes");
 const ROLES_CONFIG_OM = ["owner", "admin_org", "superadmin"];
 
 // GET /api/lluvias/openmeteo/config — estado de la API key de la org (enmascarada).
@@ -561,8 +323,17 @@ async function resolverPunto(req, estabSlug) {
   const lat = parseFloat(req.query.lat ?? req.body?.lat);
   const lon = parseFloat(req.query.lon ?? req.body?.lon);
   if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, origen: "punto" };
-  const u = await ubicacionEstab(estabSlug);
-  if (u) return { lat: u.lat, lon: u.lon, origen: "centroide" };
+  const lote = (req.query.lote || "").trim();
+  if (lote) {
+    const p = await require("../services/lluvia_lote").puntoLote(estabSlug, lote);
+    if (p) return { lat: p.lat, lon: p.lon, origen: "lote" };
+  }
+  const pts = await require("../lib/lotes-puntos").puntosLotes(estabSlug);
+  if (pts.length) return {
+    lat: pts.reduce((a, p) => a + p.lat, 0) / pts.length,
+    lon: pts.reduce((a, p) => a + p.lon, 0) / pts.length,
+    origen: "centroide",
+  };
   return null;
 }
 
@@ -584,84 +355,6 @@ router.get("/openmeteo/pronostico", async (req, res) => {
   } catch (e) {
     console.error("[lluvias/openmeteo/pronostico]", e.message);
     res.status(502).json({ error: `No se pudo consultar Open-Meteo: ${e.message}` });
-  }
-});
-
-// Guarda una serie [{fecha,mm}] como docs lluvia_registro (idempotente por
-// fuente/punto/fecha). Solo guarda los días con lluvia (mm>0).
-async function guardarSerie(edb, { fuenteId, lat, lon, lluvias, lote, nota }) {
-  const now   = Date.now();
-  const clave = `${lat.toFixed(3)}_${lon.toFixed(3)}`;
-  const idDe  = (fecha) => `lluvia_${fuenteId}_${clave}_${fecha}`;
-
-  const revs = {};
-  try {
-    const f = await edb.fetch({ keys: lluvias.map(x => idDe(x.fecha)) });
-    f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
-  } catch {}
-
-  const docs = lluvias.map(x => {
-    const _id = idDe(x.fecha);
-    return {
-      _id,
-      ...(revs[_id] ? { _rev: revs[_id] } : {}),
-      tipo:       "lluvia_registro",
-      fecha:      x.fecha,
-      mm:         Math.round(x.mm * 10) / 10,
-      lote:       (lote || "").trim() || null,
-      nota,
-      fuente:     fuenteId,
-      pt_lat:     Math.round(lat * 1000) / 1000,
-      pt_lon:     Math.round(lon * 1000) / 1000,
-      ts:         new Date(x.fecha).getTime() || now,
-      updated_at: now,
-    };
-  });
-
-  const r = await edb.bulk({ docs });
-  return r.filter(x => x.ok).length;
-}
-
-// GET /api/lluvias/fuentes — catálogo de fuentes disponibles + capacidades.
-router.get("/fuentes", (req, res) => {
-  res.json({ fuentes: fuentesReg.list() });
-});
-
-// POST /api/lluvias/fuentes/:id/importar { lat, lon, desde, hasta, lote? }
-// Importa el histórico de una fuente satelital por-punto (openmeteo/nasapower/chirps).
-router.post("/fuentes/:id/importar", async (req, res) => {
-  const estabSlug = estabDe(req);
-  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
-  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
-
-  const fuente = fuentesReg.get(req.params.id);
-  if (!fuente || !fuente.historico)
-    return res.status(404).json({ error: "Fuente desconocida o sin histórico" });
-
-  const { desde, hasta, lote } = req.body;
-  const p = await resolverPunto(req, estabSlug);
-  if (!p) return res.status(400).json({ error: "Indicá lat/lon o cargá lotes con ubicación" });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
-    return res.status(400).json({ error: "desde y hasta (YYYY-MM-DD) requeridos" });
-  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
-
-  try {
-    const opts    = fuente.id === "openmeteo" ? { apiKey: await omOrg.getApiKey(estabSlug) } : {};
-    const serie   = await fuente.historico(p.lat, p.lon, desde, hasta, opts);
-    const lluvias = serie.filter(x => x.mm > 0);
-    if (!lluvias.length)
-      return res.json({ ok: true, importados: 0, mensaje: "Sin lluvias en el rango" });
-
-    const edb = db.getDB(estabSlug);
-    const okc = await guardarSerie(edb, {
-      fuenteId: fuente.id, lat: p.lat, lon: p.lon, lluvias, lote,
-      nota: `${fuente.nombre} (histórico)`,
-    });
-    console.log(`[Lluvias/${fuente.id}] ${estabSlug}: ${okc}/${lluvias.length} días @ ${p.lat.toFixed(3)},${p.lon.toFixed(3)}`);
-    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, fuente: fuente.nombre });
-  } catch (e) {
-    console.error(`[lluvias/fuentes/${req.params.id}/importar]`, e.message);
-    res.status(502).json({ error: `No se pudo consultar ${fuente.nombre}: ${e.message}` });
   }
 });
 

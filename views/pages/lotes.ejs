@@ -726,14 +726,14 @@ async function renderLluviasLote(nombre) {
   try {
     const r = await Auth.get(`/api/lluvias?lote=${encodeURIComponent(nombre)}`);
     const items = r.registros || [];
-    const verBtn = `<a href="/lluvias" class="btn btn-ghost" style="font-size:11px;padding:4px 10px;text-decoration:none">🌧 Ver lluvias</a>`;
+    const verBtn = `<a href="/lluvias?lote=${encodeURIComponent(nombre)}" class="btn btn-ghost" style="font-size:11px;padding:4px 10px;text-decoration:none">🌧 Ver lluvias</a>`;
 
     if (!items.length) {
       box.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div style="font-size:13px;color:var(--text)">🌧 Lluvias</div>${verBtn}
         </div>
-        <div style="font-size:11px;color:var(--muted2);margin-top:6px">Sin lluvias cargadas para este lote.</div>`;
+        <div style="font-size:11px;color:var(--muted2);margin-top:6px">Sin lluvias en el último año para este lote.</div>`;
       return;
     }
 

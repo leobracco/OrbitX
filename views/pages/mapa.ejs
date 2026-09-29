@@ -738,7 +738,6 @@ function renderCapaDatos(nombreEnc) {
         <option value="90" selected>90 días</option>
         <option value="180">180 días</option>
         <option value="365">1 año</option>
-        <option value="0">Todo</option>
       </select>
     </div>`;
 }
@@ -768,22 +767,27 @@ async function dibujarLluvias(nombreEnc) {
   }
   mostrarLoading("Cargando lluvias…");
   try {
-    const r = await Auth.get(`/api/lluvias?lote=${nombreEnc}`);
-    let items = r.registros || [];
+    // Serie armada en el momento: pluviómetro > estación a ≤ 15 km > Open-Meteo.
     _lluviaDias = parseInt(document.getElementById("lluvia-dias")?.value || "90", 10);
-    if (_lluviaDias > 0) {
-      const desde = new Date(Date.now() - _lluviaDias * 86400000).toISOString().slice(0, 10);
-      items = items.filter(x => (x.fecha || "") >= desde);
-    }
+    const r = await Auth.get(`/api/lluvias?lote=${nombreEnc}&dias=${_lluviaDias}`);
+    const items = r.registros || [];
     const total = items.reduce((a, x) => a + (Number(x.mm) || 0), 0);
     const color = colorLluvia(total);
+    const pf  = r.por_fuente || {};
+    const est = (r.estaciones || [])[0];
+    const fuentes = [
+      pf.pluviometro ? `pluviómetro ${pf.pluviometro} d` : "",
+      pf.estacion ? `estación ${est ? `${est.nombre} (${est.dist_km} km) ` : ""}${pf.estacion} d` : "",
+      pf.openmeteo ? `Open-Meteo ${pf.openmeteo} d` : "",
+    ].filter(Boolean).join(" · ");
 
     quitarLluvias();
     const poly = L.polygon(_loteBoundary, {
       color, weight: 2, opacity: 0.95, fillColor: color, fillOpacity: 0.35,
     }).addTo(_mapa);
     poly.bindTooltip(
-      `🌧 ${Math.round(total * 10) / 10} mm · ${items.length} lluvia${items.length !== 1 ? "s" : ""} (${_lluviaDias ? _lluviaDias + "d" : "todo"})`,
+      `🌧 ${Math.round(total * 10) / 10} mm · ${items.length} día${items.length !== 1 ? "s" : ""} con lluvia (${_lluviaDias} d)` +
+        (fuentes ? `<br><span style="font-size:10px;opacity:.8">${fuentes}</span>` : ""),
       { sticky: true });
     _lluviaLayers = [poly];
     _lluviaOn = true;

@@ -38,6 +38,7 @@ function serie(j) {
   const out = [];
   for (let i = 0; i < t.length; i++) {
     const fecha = t[i];
+    if (pp[i] == null) continue; // día sin dato todavía (Number(null) daría 0 mm)
     const mm    = Number(pp[i]);
     if (fecha && Number.isFinite(mm)) out.push({ fecha, mm });
   }
