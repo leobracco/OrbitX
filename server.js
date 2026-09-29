@@ -229,6 +229,7 @@ app.use("/api/agraria",        auth.required, routeAgraria);
 // Grupos: JWT + guard superadmin interno (router.use(soloAdmin) en grupos.js).
 app.use("/api/grupos",         auth.required, routeGrupos);
 app.use("/api/lluvias",        auth.required, routeLluvias);
+app.use("/api/zona",           auth.required, require("./routes/zona"));
 // ── Sprint 1: actividad / reportes / releases ─────────────
 // noDevices: un token de equipo (PilotX) no tiene por qué leer la actividad ni los reportes de la org.
 const { noDevices: sinEquipos } = require("./routes/devices");

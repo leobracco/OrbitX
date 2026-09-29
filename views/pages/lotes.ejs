@@ -16,6 +16,12 @@
   </div>
 </div>
 
+<!-- Rindes de la zona (SAGyP por departamento de los lotes) -->
+<details class="card" id="zona-card" style="padding:14px 16px;margin-bottom:16px" ontoggle="if(this.open)cargarRindesZona()">
+  <summary style="cursor:pointer;font-size:14px;font-weight:600">📊 Rindes de la zona <span style="font-size:11px;font-weight:400;color:var(--ap-muted)">· promedio oficial del departamento de tus lotes</span></summary>
+  <div id="zona-body" style="margin-top:12px;font-size:12px;color:var(--ap-muted)">Cargando…</div>
+</details>
+
 <!-- ═══════════════════════════════════════════════════════ -->
 <!-- MODAL: crear lote (dibujar boundary y enviar a PilotX) -->
 <!-- ═══════════════════════════════════════════════════════ -->
@@ -937,6 +943,50 @@ async function analizarConIA() {
 }
 
 document.addEventListener('DOMContentLoaded', cargarLotes);
+
+// ── Rindes de la zona ───────────────────────────────────────
+let _zonaCargada = false;
+async function cargarRindesZona() {
+  if (_zonaCargada) return;
+  const body = document.getElementById('zona-body');
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const tn  = (kg) => kg ? (kg / 1000).toFixed(1).replace('.', ',') : '—';
+  try {
+    const r = await Auth.get('/api/zona/rindes');
+    _zonaCargada = true;
+    if (!r.departamentos?.length) {
+      body.innerHTML = 'Todavía no hay lotes con ubicación sincronizada desde PilotX.';
+      return;
+    }
+    const camps = (r.campanias || []).slice(-5);
+    body.innerHTML = r.departamentos.map(d => `
+      <div style="margin-bottom:14px">
+        <div style="font-size:13px;font-weight:600;color:var(--ap-text)">${esc(d.nombre)} <span style="font-weight:400;color:var(--ap-muted)">(${esc(d.provincia)}) · ${esc(d.lotes.join(', '))}</span></div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:12px">
+            <thead><tr style="color:var(--ap-muted);text-align:right">
+              <th style="text-align:left;padding:4px 8px">Cultivo · t/ha</th>
+              ${camps.map(c => `<th style="padding:4px 8px">${esc(c)}</th>`).join('')}
+              <th style="padding:4px 8px">Prom. 5</th>
+            </tr></thead>
+            <tbody>
+              ${d.cultivos.map(c => {
+                const por = Object.fromEntries(c.serie.map(s => [s.campania, s]));
+                return `<tr style="border-top:1px solid var(--ap-border);text-align:right;color:var(--ap-text)">
+                  <td style="text-align:left;padding:4px 8px;text-transform:capitalize">${esc(c.cultivo)}</td>
+                  ${camps.map(k => `<td style="padding:4px 8px">${tn(por[k]?.rinde_kgha)}</td>`).join('')}
+                  <td style="padding:4px 8px;font-weight:600;color:var(--ap-green)">${tn(c.promedio_5_kgha)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`).join('') +
+      `<div style="font-size:10px">Fuente: ${esc(r.fuente)}${r.fuente_actualizada ? ' · actualizado ' + esc(String(r.fuente_actualizada).slice(0, 10)) : ''}. Rinde = producción / superficie cosechada.</div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="alert error show">${esc(e.message)}</div>`;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════
 // CREAR LOTE — modal con dibujo de boundary en mapa Leaflet
