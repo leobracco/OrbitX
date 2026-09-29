@@ -17,6 +17,7 @@
     "node-cron": "^4.2.1",
     "nodemailer": "^6.9.16",
     "socket.io": "^4.8.3",
+    "unpdf": "^1.8.1",
     "web-push": "^3.6.7"
   }
 }

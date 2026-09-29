@@ -9,8 +9,10 @@ const db = require("./couchdb");
 
 const URL_LISTADO = "https://www.argentina.gob.ar/informacion-agroclimatica/agromet-semanal";
 const API         = "https://api.anthropic.com/v1/messages";
-const MODELO      = "claude-opus-5";
-const MAX_PDF     = 25 * 1024 * 1024; // el request a la API tope 32 MB (base64 suma ~33%)
+// Con solo el texto (~7-10k tokens) sale ~USD 0,04 por informe. Haiku cuesta
+// la mitad pero resume más escueto; con el PDF entero llegó a invertir un dato.
+const MODELO      = "claude-sonnet-5";
+const MAX_PDF     = 40 * 1024 * 1024; // resguardo de RAM en el droplet (los informes pesan ~7 MB)
 
 // Provincias agrícolas que se resumen siempre (un solo llamado por informe).
 const PROVINCIAS = [
@@ -73,7 +75,17 @@ AgroMet semanal del INTA para productores y contratistas. Español rioplatense, 
 sin markdown. Usá solo lo que dice el informe: si una provincia no aparece o no hay nada relevante
 para ella, devolvé sus puntos vacíos en vez de inventar.`;
 
-async function resumir(pdf, inf) {
+// Solo el texto: mandado como PDF, cada página cuenta también como imagen
+// (~45k tokens contra ~6k). Los mapas del informe están descriptos en el texto.
+async function textoDePdf(buf) {
+  const { extractText, getDocumentProxy } = await import("unpdf");
+  const pdf = await getDocumentProxy(new Uint8Array(buf));
+  const { text } = await extractText(pdf, { mergePages: true });
+  if (!text || text.length < 2000) throw new Error("AgroMet: el PDF no trae texto extraíble");
+  return text;
+}
+
+async function resumir(texto, inf, modelo = MODELO) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY no configurada");
 
@@ -83,19 +95,20 @@ async function resumir(pdf, inf) {
       "Content-Type":      "application/json",
       "x-api-key":         key,
       "anthropic-version": "2023-06-01",
-      "anthropic-beta":    "server-side-fallback-2026-07-01",
     },
     signal: AbortSignal.timeout(300_000),
     body: JSON.stringify({
-      model:      MODELO,
+      model:      modelo,
       max_tokens: 8000,
-      fallbacks:  "default",
-      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
+      output_config: {
+        ...(modelo.includes("haiku") ? {} : { effort: "low" }),
+        format: { type: "json_schema", schema: SCHEMA },
+      },
       system:     SYSTEM,
       messages: [{
         role: "user",
         content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf.toString("base64") } },
+          { type: "text", text: `<informe>\n${texto}\n</informe>` },
           { type: "text", text:
 `Informe AgroMet N.${inf.numero} del ${inf.fecha}.
 En "general": 2 o 3 oraciones con lo principal a nivel país (lluvias de la semana, agua en el suelo, temperaturas/heladas, perspectiva).
@@ -126,7 +139,7 @@ async function sincronizar() {
   const pdf    = await get(pdfUrl, "buffer");
   if (pdf.length > MAX_PDF) throw new Error(`AgroMet N.${ultimo.numero}: PDF de ${Math.round(pdf.length / 1e6)} MB, supera el límite`);
 
-  const resumen = await resumir(pdf, ultimo);
+  const resumen = await resumir(await textoDePdf(pdf), ultimo);
   const doc = {
     _id: id, tipo: "agromet",
     numero: ultimo.numero, fecha: ultimo.fecha, url: ultimo.url, pdf: pdfUrl,
@@ -151,4 +164,4 @@ async function ultimoResumen() {
   return r.docs[0] || null;
 }
 
-module.exports = { listarInformes, urlPdf, resumir, sincronizar, ultimoResumen, PROVINCIAS };
+module.exports = { listarInformes, urlPdf, textoDePdf, resumir, sincronizar, ultimoResumen, PROVINCIAS };
