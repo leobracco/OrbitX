@@ -317,6 +317,164 @@ router.post("/ina/importar", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
+//  ESTACIONES SIGA (INTA) — histórico diario por rango, como INA
+// ══════════════════════════════════════════════════════════
+
+// GET /api/lluvias/siga/estaciones?lat=&lon=&q=&inactivas=1
+router.get("/siga/estaciones", async (req, res) => {
+  try {
+    const siga = require("../services/siga");
+    const lat = parseFloat(req.query.lat);
+    const lon = parseFloat(req.query.lon);
+    const q   = (req.query.q || "").trim();
+    if (!q && !(Number.isFinite(lat) && Number.isFinite(lon)))
+      return res.status(400).json({ error: "Indicá lat/lon o un texto de búsqueda" });
+    const estaciones = await siga.buscarEstaciones({ lat, lon, q, limit: 8, inactivas: req.query.inactivas === "1" });
+    res.json({ estaciones });
+  } catch (e) {
+    console.error("[lluvias/siga/estaciones]", e.message);
+    res.status(502).json({ error: `No se pudo consultar el SIGA: ${e.message}` });
+  }
+});
+
+// POST /api/lluvias/siga/importar { id, desde, hasta, lote? }
+router.post("/siga/importar", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso para importar" });
+
+  const id = parseInt(req.body.id, 10);
+  const { desde, hasta } = req.body;
+  const lote = (req.body.lote || "").trim() || null;
+  if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(desde || "") || !/^\d{4}-\d{2}-\d{2}$/.test(hasta || ""))
+    return res.status(400).json({ error: "id, desde y hasta (YYYY-MM-DD) requeridos" });
+  if (desde > hasta) return res.status(400).json({ error: "El rango de fechas está invertido" });
+
+  const loteSlug = lote ? "_" + lote.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
+  try {
+    const siga    = require("../services/siga");
+    const est     = (await siga.estaciones())[id] || null;
+    const serie   = await siga.datosDiarios(id, desde, hasta);
+    const lluvias = serie.filter(x => x.mm > 0);
+    const nombre  = est?.nombre || String(id);
+    if (!lluvias.length)
+      return res.json({ ok: true, importados: 0, estacion: nombre, mensaje: "Sin lluvias en el rango" });
+
+    const edb = db.getDB(estabSlug);
+    const now = Date.now();
+    const idDe = (fecha) => `lluvia_siga_${id}${loteSlug}_${fecha}`;
+    const revs = {};
+    try {
+      const f = await edb.fetch({ keys: lluvias.map(x => idDe(x.fecha)) });
+      f.rows.forEach(r => { if (r.doc) revs[r.id] = r.doc._rev; });
+    } catch {}
+
+    const docs = lluvias.map(x => ({
+      _id:          idDe(x.fecha),
+      ...(revs[idDe(x.fecha)] ? { _rev: revs[idDe(x.fecha)] } : {}),
+      tipo:         "lluvia_registro",
+      fecha:        x.fecha,
+      mm:           Math.round(x.mm * 10) / 10,
+      lote,
+      nota:         `SIGA INTA · ${nombre}`,
+      fuente:       "siga",
+      siga_id:      id,
+      siga_estacion: est?.nombre || null,
+      ts:           new Date(x.fecha).getTime() || now,
+      updated_at:   now,
+    }));
+
+    const r   = await edb.bulk({ docs });
+    const okc = r.filter(x => x.ok).length;
+    console.log(`[Lluvias/SIGA] ${estabSlug}: ${okc}/${docs.length} días de ${nombre}`);
+    res.json({ ok: true, importados: okc, dias_con_lluvia: lluvias.length, estacion: nombre });
+  } catch (e) {
+    console.error("[lluvias/siga/importar]", e.message);
+    res.status(502).json({ error: `No se pudo importar del SIGA: ${e.message}` });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  ESTACIONES BCP (Bolsa de Cereales de Bahía Blanca)
+//  No hay histórico por rango: la org "sigue" estaciones y el cron
+//  (services/bcp_sync.js) va guardando la lluvia diaria desde entonces.
+// ══════════════════════════════════════════════════════════
+
+// GET /api/lluvias/bcp/estaciones?lat=&lon=&q= — estaciones activas con el dato actual.
+router.get("/bcp/estaciones", async (req, res) => {
+  try {
+    const bcp = require("../services/bcp");
+    const lat = parseFloat(req.query.lat);
+    const lon = parseFloat(req.query.lon);
+    const q   = (req.query.q || "").trim();
+    res.json({ estaciones: await bcp.buscarEstaciones({ lat, lon, q, limit: 8 }) });
+  } catch (e) {
+    console.error("[lluvias/bcp/estaciones]", e.message);
+    res.status(502).json({ error: `No se pudo consultar la BCP: ${e.message}` });
+  }
+});
+
+// GET /api/lluvias/bcp/suscripciones — estaciones que sigue la org, con su dato actual.
+router.get("/bcp/suscripciones", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const sync = require("../services/bcp_sync");
+    const cfg  = await sync.leerConfig(estabSlug);
+    let actual = {};
+    try {
+      const lista = await require("../services/bcp").estaciones();
+      actual = Object.fromEntries(lista.map(e => [e.sitio, e]));
+    } catch { /* sin BCP igual mostramos lo suscripto */ }
+    res.json({ suscripciones: (cfg.estaciones || []).map(s => ({ ...s, actual: actual[s.sitio] || null })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/lluvias/bcp/suscripciones { sitio, lote? } — seguir una estación.
+router.post("/bcp/suscripciones", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso" });
+  const sitio = parseInt(req.body.sitio, 10);
+  const lote  = (req.body.lote || "").trim() || null;
+  if (!sitio) return res.status(400).json({ error: "sitio requerido" });
+  try {
+    const est = (await require("../services/bcp").estaciones()).find(e => e.sitio === sitio);
+    if (!est || !est.activa) return res.status(404).json({ error: "Estación inexistente o dada de baja" });
+
+    const sync = require("../services/bcp_sync");
+    const cfg  = await sync.leerConfig(estabSlug);
+    const subs = cfg.estaciones || [];
+    if (!subs.some(s => s.sitio === sitio && (s.lote || null) === lote)) {
+      subs.push({ sitio, nombre: est.nombre, lote, desde: Date.now() });
+      await sync.guardarConfig(estabSlug, { ...cfg, estaciones: subs });
+    }
+    const n = await sync.sincronizarOrg(estabSlug);
+    console.log(`[Lluvias/BCP] ${estabSlug}: sigue ${est.nombre}${lote ? ` (${lote})` : ""}, ${n} registros`);
+    res.json({ ok: true, estacion: est.nombre, registros: n });
+  } catch (e) {
+    console.error("[lluvias/bcp/suscripciones]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/lluvias/bcp/suscripciones?sitio=&lote= — dejar de seguir (los registros quedan).
+router.delete("/bcp/suscripciones", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  if (!puedeEditar(req)) return res.status(403).json({ error: "Sin permiso" });
+  const sitio = parseInt(req.query.sitio, 10);
+  const lote  = (req.query.lote || "").trim() || null;
+  try {
+    const sync = require("../services/bcp_sync");
+    const cfg  = await sync.leerConfig(estabSlug);
+    const subs = (cfg.estaciones || []).filter(s => !(s.sitio === sitio && (s.lote || null) === lote));
+    if (cfg._rev) await sync.guardarConfig(estabSlug, { ...cfg, estaciones: subs });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════
 //  INTEGRACIÓN OPEN-METEO (open-meteo.com) — pronóstico + histórico
 //  Modelo grillado por lat/lon: no necesita estación cercana.
 //  A diferencia de agrarIA, esto SÍ es un pronóstico real del clima.

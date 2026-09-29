@@ -98,12 +98,19 @@
 
     <!-- Opciones avanzadas: estación INA, otras fuentes, mapa -->
     <details style="margin-top:14px">
-      <summary style="cursor:pointer;font-size:12px;color:var(--ap-muted)">Opciones avanzadas · estación INA, otras fuentes, mapa</summary>
+      <summary style="cursor:pointer;font-size:12px;color:var(--ap-muted)">Opciones avanzadas · estaciones INA / SIGA INTA / Bolsa B. Blanca, otras fuentes, mapa</summary>
       <div style="margin-top:12px">
 
     <!-- Buscar estación INA por nombre -->
     <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">Buscar estación INA por nombre
+      <label style="font-size:11px;color:var(--ap-muted)">Red
+        <select id="ina-red" onchange="document.getElementById('ina-lista').innerHTML='';document.getElementById('ina-import-box').style.display='none'"
+          style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none">
+          <option value="ina">INA</option>
+          <option value="siga">SIGA INTA</option>
+        </select>
+      </label>
+      <label style="font-size:11px;color:var(--ap-muted);flex:1;min-width:150px">Buscar estación por nombre
         <input type="text" id="ina-q" placeholder="Ej: Pergamino"
           onkeydown="if(event.key==='Enter'){event.preventDefault();lluBuscarINA()}"
           style="width:100%;margin-top:4px;background:var(--ap-bg);border:1px solid var(--ap-border);color:var(--ap-text);padding:8px;border-radius:8px;font-size:13px;outline:none"/>
@@ -136,6 +143,20 @@
       </div>
       <div id="om-fuente-desc" style="font-size:11px;color:var(--ap-muted);margin-top:6px"></div>
       <div id="om-import-msg" style="font-size:12px;color:var(--ap-muted);margin-top:6px"></div>
+    </div>
+
+    <!-- Estaciones de la Bolsa de Cereales de Bahía Blanca: se siguen, no se importan -->
+    <div style="margin-top:12px;padding:12px;border:1px dashed var(--ap-border);border-radius:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:12px;font-weight:600">📡 Estaciones Bolsa de Cereales B. Blanca</div>
+          <div style="font-size:11px;color:var(--ap-muted)">Sin histórico: al seguir una estación, guardamos su lluvia diaria desde hoy (se actualiza cada 30 min).</div>
+        </div>
+        <button class="btn btn-ghost" style="flex-shrink:0" id="bcp-btn-buscar" onclick="lluBuscarBCP()" disabled>Estaciones cercanas al punto</button>
+      </div>
+      <div id="bcp-seguidas" style="margin-top:8px"></div>
+      <div id="bcp-lista" style="margin-top:8px"></div>
+      <div id="bcp-msg" style="font-size:12px;color:var(--ap-muted);margin-top:6px"></div>
     </div>
 
     <div id="ina-lista" style="margin-top:12px;overflow:auto;flex:1;min-height:80px"></div>
@@ -186,7 +207,7 @@ function lluFmtFecha(f) {
   return `${d}/${m}/${y.slice(2)}`;
 }
 
-const FUENTE_BADGE = { ina: "INA", openmeteo: "OM", nasapower: "POWER", chirps: "CHIRPS" };
+const FUENTE_BADGE = { ina: "INA", openmeteo: "OM", nasapower: "POWER", chirps: "CHIRPS", bcp: "BCP", siga: "SIGA" };
 function lluBadgeFuente(fuente) {
   const t = FUENTE_BADGE[fuente];
   if (!t) return "";
@@ -375,6 +396,9 @@ async function lluAbrirINA() {
   lluMontarMapa();
   lluLlenarLotes();
   lluCargarFuentes();
+  document.getElementById("bcp-lista").innerHTML = "";
+  document.getElementById("bcp-msg").textContent = "";
+  lluCargarBCPSeguidas();
 }
 
 function lluMontarMapa() {
@@ -402,6 +426,7 @@ function lluMarcarPunto(lat, lon, recenter = true) {
   else _inaMarker = L.marker([lat, lon]).addTo(_inaMapa);
   if (recenter) _inaMapa.panTo([lat, lon]);
   document.getElementById("ina-btn-punto").disabled = false;
+  document.getElementById("bcp-btn-buscar").disabled = false;
   document.getElementById("ina-ubic-msg").textContent = `Punto: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
   document.getElementById("om-box").style.display = "block";
 }
@@ -472,8 +497,8 @@ async function lluBuscarEnPunto() {
   const lista = document.getElementById("ina-lista");
   lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando estaciones cercanas…</div>';
   try {
-    const r = await Auth.get(`/api/lluvias/ina/estaciones?lat=${_inaPunto.lat}&lon=${_inaPunto.lon}`);
-    lluRenderEstaciones(r.estaciones || []);
+    const r = await Auth.get(`/api/lluvias/${lluRed()}/estaciones?lat=${_inaPunto.lat}&lon=${_inaPunto.lon}`);
+    lluRenderEstaciones((r.estaciones || []).map(lluNormEstacion));
   } catch (e) {
     lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
   }
@@ -485,11 +510,23 @@ async function lluBuscarINA() {
   if (!q) { lluBuscarEnPunto(); return; }
   lista.innerHTML = '<div class="loading"><span class="spinner"></span> Buscando…</div>';
   try {
-    const r = await Auth.get(`/api/lluvias/ina/estaciones?q=${encodeURIComponent(q)}`);
-    lluRenderEstaciones(r.estaciones || []);
+    const r = await Auth.get(`/api/lluvias/${lluRed()}/estaciones?q=${encodeURIComponent(q)}`);
+    lluRenderEstaciones((r.estaciones || []).map(lluNormEstacion));
   } catch (e) {
     lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
   }
+}
+
+function lluRed() {
+  return document.getElementById("ina-red")?.value || "ina";
+}
+
+// SIGA trae otros nombres de campo: se llevan al formato de INA para reusar la lista.
+function lluNormEstacion(e) {
+  if (lluRed() !== "siga") return e;
+  const ult = e.ult_dato ? `último dato ${String(e.ult_dato).slice(0, 10)}` : "";
+  return { ...e, sitecode: e.id, from_date: e.desde, to_date: e.hasta,
+    distrito: [e.localidad, e.provincia].filter(Boolean).join(", ") + (ult ? ` · ${ult}` : ""), obs_count: null };
 }
 
 function lluRenderEstaciones(ests) {
@@ -507,7 +544,7 @@ function lluRenderEstaciones(ests) {
         onmouseover="this.style.borderColor='var(--ap-green)'" onmouseout="this.style.borderColor='var(--ap-border)'">
         <div style="min-width:0">
           <div style="font-size:13px;font-weight:600">${lluEscape(e.nombre || ("#" + e.sitecode))}</div>
-          <div style="font-size:11px;color:var(--ap-muted)">${lluEscape(e.distrito || e.red || "")} · datos ${cov} · ${e.obs_count || 0} obs</div>
+          <div style="font-size:11px;color:var(--ap-muted)">${lluEscape(e.distrito || e.red || "")} · datos ${cov}${e.obs_count != null ? ` · ${e.obs_count} obs` : ""}</div>
         </div>
         <div style="flex-shrink:0;text-align:right">
           ${dist ? `<div style="font-size:12px;color:var(--ap-green);font-weight:600">${dist}</div>` : ""}
@@ -539,9 +576,12 @@ async function lluImportarINA() {
 
   btn.disabled = true;
   msg.style.color = "var(--ap-muted)";
-  msg.innerHTML = '<span class="spinner"></span> Importando del INA…';
+  const red = lluRed();
+  msg.innerHTML = `<span class="spinner"></span> Importando ${red === "siga" ? "del SIGA INTA" : "del INA"}…`;
   try {
-    const r = await Auth.post("/api/lluvias/ina/importar", { sitecode: _inaSel.sitecode, desde, hasta, lote: lluLoteSeleccionado() });
+    const r = red === "siga"
+      ? await Auth.post("/api/lluvias/siga/importar", { id: _inaSel.sitecode, desde, hasta, lote: lluLoteSeleccionado() })
+      : await Auth.post("/api/lluvias/ina/importar", { sitecode: _inaSel.sitecode, desde, hasta, lote: lluLoteSeleccionado() });
     msg.style.color = "var(--ap-green)";
     msg.textContent = r.importados
       ? `Importados ${r.importados} días con lluvia de ${r.estacion} ✓`
@@ -602,6 +642,88 @@ async function lluImportarOM() {
     msg.textContent = e.message;
   } finally {
     btn.disabled = false;
+  }
+}
+
+// ── Estaciones BCP (seguir / dejar de seguir) ──────────────
+function lluResumenBCP(e) {
+  if (!e) return "sin dato actual";
+  const partes = [];
+  if (e.pp_dia != null) partes.push(`hoy ${e.pp_dia} mm`);
+  if (e.pp_mes != null) partes.push(`mes ${e.pp_mes} mm`);
+  if (e.temp != null)   partes.push(`${e.temp} ºC`);
+  const hora = e.ult_dato ? new Date(e.ult_dato).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+  partes.push(`${e.atrasada ? "⚠ atrasada · " : ""}último dato ${hora}`);
+  return partes.join(" · ");
+}
+
+async function lluCargarBCPSeguidas() {
+  const box = document.getElementById("bcp-seguidas");
+  try {
+    const r = await Auth.get("/api/lluvias/bcp/suscripciones");
+    const subs = r.suscripciones || [];
+    box.innerHTML = subs.length
+      ? `<div style="font-size:11px;color:var(--ap-muted);margin-bottom:4px">Seguidas por el establecimiento:</div>` +
+        subs.map(s => `
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--ap-border);border-radius:6px;margin-bottom:4px">
+            <div style="min-width:0">
+              <div style="font-size:12px;font-weight:600">${lluEscape(s.nombre)}${s.lote ? ` <span style="color:var(--ap-muted);font-weight:400">→ ${lluEscape(s.lote)}</span>` : ""}</div>
+              <div style="font-size:11px;color:var(--ap-muted)">${lluEscape(lluResumenBCP(s.actual))}</div>
+            </div>
+            <button class="btn btn-ghost" style="flex-shrink:0;padding:4px 8px;font-size:11px"
+              onclick='lluDejarBCP(${s.sitio}, ${JSON.stringify(s.lote || "").replace(/'/g, "&#39;")})'>Dejar de seguir</button>
+          </div>`).join("")
+      : "";
+  } catch { box.innerHTML = ""; }
+}
+
+async function lluBuscarBCP() {
+  if (!_inaPunto) return;
+  const lista = document.getElementById("bcp-lista");
+  lista.innerHTML = '<div class="loading"><span class="spinner"></span> Consultando la Bolsa…</div>';
+  try {
+    const r = await Auth.get(`/api/lluvias/bcp/estaciones?lat=${_inaPunto.lat}&lon=${_inaPunto.lon}`);
+    const ests = (r.estaciones || []).slice(0, 5);
+    lista.innerHTML = ests.map(e => `
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--ap-border);border-radius:6px;margin-bottom:4px">
+        <div style="min-width:0">
+          <div style="font-size:12px;font-weight:600">${lluEscape(e.nombre)} <span style="color:var(--ap-green);font-weight:600">${Number.isFinite(e.dist_km) ? e.dist_km + " km" : ""}</span></div>
+          <div style="font-size:11px;color:var(--ap-muted)">${lluEscape(lluResumenBCP(e))}</div>
+        </div>
+        <button class="btn" style="flex-shrink:0;padding:4px 8px;font-size:11px" onclick="lluSeguirBCP(${e.sitio})">Seguir</button>
+      </div>`).join("") || '<div style="font-size:12px;color:var(--ap-muted)">No hay estaciones activas.</div>';
+  } catch (e) {
+    lista.innerHTML = `<div class="alert error show">${lluEscape(e.message)}</div>`;
+  }
+}
+
+async function lluSeguirBCP(sitio) {
+  const msg  = document.getElementById("bcp-msg");
+  const lote = lluLoteSeleccionado();
+  msg.style.color = "var(--ap-muted)";
+  msg.innerHTML = '<span class="spinner"></span> Guardando…';
+  try {
+    const r = await Auth.post("/api/lluvias/bcp/suscripciones", { sitio, lote });
+    msg.style.color = "var(--ap-green)";
+    msg.textContent = `Siguiendo ${r.estacion}${lote ? ` para ${lote}` : ""} ✓` +
+      (r.registros ? ` — ${r.registros} registro(s) ya cargados.` : " — la lluvia se va a ir cargando sola.");
+    await Promise.all([lluCargarBCPSeguidas(), lluCargar()]);
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
+  }
+}
+
+async function lluDejarBCP(sitio, lote) {
+  const msg = document.getElementById("bcp-msg");
+  try {
+    await Auth.del(`/api/lluvias/bcp/suscripciones?sitio=${sitio}&lote=${encodeURIComponent(lote || "")}`);
+    msg.style.color = "var(--ap-muted)";
+    msg.textContent = "Listo, se dejó de seguir. Los registros ya guardados quedan.";
+    await lluCargarBCPSeguidas();
+  } catch (e) {
+    msg.style.color = "var(--ap-red, #e5484d)";
+    msg.textContent = e.message;
   }
 }
 

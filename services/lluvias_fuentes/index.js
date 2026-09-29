@@ -38,9 +38,29 @@ function meta(f) {
   return { id: f.id, nombre: f.nombre, tipo: f.tipo, resolucion: f.resolucion, capacidades: f.capacidades, punto: true };
 }
 
-// Lista de fuentes para la UI (satelitales por punto + INA por estación).
+// BCP: estaciones de la Bolsa de Cereales de Bahía Blanca. Sin histórico por
+// rango: se sigue la estación y el cron guarda la lluvia diaria (services/bcp_sync.js).
+const BCP_META = {
+  id:          "bcp",
+  nombre:      "Bolsa de Cereales B. Blanca (estaciones)",
+  tipo:        "estacion",
+  resolucion:  "estaciones automáticas · SO bonaerense · diario desde que se sigue",
+  capacidades: { historico: false, pronostico: false, estaciones: true, seguimiento: true },
+  punto:       false,
+};
+
+const SIGA_META = {
+  id:          "siga",
+  nombre:      "SIGA INTA (estaciones)",
+  tipo:        "estacion",
+  resolucion:  "estaciones INTA · diario con histórico desde 2000+",
+  capacidades: { historico: true, pronostico: false, estaciones: true },
+  punto:       false,
+};
+
+// Lista de fuentes para la UI (satelitales por punto + estaciones INA, SIGA y BCP).
 function list() {
-  return [...Object.values(PUNTO).map(meta), INA_META];
+  return [...Object.values(PUNTO).map(meta), INA_META, SIGA_META, BCP_META];
 }
 
 // Devuelve la fuente por-punto con su id, o null.

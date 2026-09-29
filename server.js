@@ -383,6 +383,14 @@ cron.schedule("*/5 * * * *", async () => {
     }
   } catch (e) { console.error("[CRON/caidos]", e.message); }
 }, { timezone: "America/Argentina/Cordoba" });
+// Lluvias de estaciones BCP que siguen las orgs: cada 30 min el parcial del
+// día, y el cierre exacto cuando la página avanza el acumulado mensual.
+// Minuto 7/37 para no pisarse con los crons en punto.
+cron.schedule("7,37 * * * *", async () => {
+  try { await require("./services/bcp_sync").sincronizar(); }
+  catch (e) { console.warn("[CRON/bcp]", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+
 // Sprint 2: retencion y limpieza
 // 03:40, antes del backup de las 03:00 del día siguiente y lejos del horario
 // de campo. Todo best-effort: si falla, se loguea y sigue.
