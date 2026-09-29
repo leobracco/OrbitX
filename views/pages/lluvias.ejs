@@ -47,6 +47,13 @@
 
   <!-- Gráfico + tabla -->
   <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+    <!-- Alertas SMN sobre los lotes (se oculta si no hay) -->
+    <div class="card" id="llu-smn-card" style="padding:16px;display:none">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">⚠ Alertas del SMN sobre tus lotes</div>
+      <div id="llu-smn-body"></div>
+      <div style="font-size:10px;color:var(--ap-muted);margin-top:6px">Fuente: Servicio Meteorológico Nacional · se actualiza cada 15 min</div>
+    </div>
+
     <!-- Pronóstico real (Open-Meteo) -->
     <div class="card" id="llu-prono-card" style="padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -727,6 +734,26 @@ async function lluDejarBCP(sitio, lote) {
   }
 }
 
+// ── Alertas SMN ─────────────────────────────────────────────
+const SMN_COLOR = { amarilla: "#e6c229", naranja: "#f08c28", roja: "#e5484d" };
+
+async function lluCargarAlertasSMN() {
+  const card = document.getElementById("llu-smn-card");
+  try {
+    const r = await Auth.get("/api/lluvias/smn/alertas");
+    const al = r.alertas || [];
+    if (!al.length) { card.style.display = "none"; return; }
+    const fmt = (iso) => iso ? new Date(iso).toLocaleString("es-AR", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+    document.getElementById("llu-smn-body").innerHTML = al.map(a => `
+      <div style="border-left:4px solid ${SMN_COLOR[a.nivel] || "#e6c229"};padding:6px 10px;margin-bottom:8px;background:var(--ap-bg);border-radius:0 6px 6px 0">
+        <div style="font-size:13px;font-weight:600">${lluEscape(a.evento)} · nivel ${lluEscape(a.nivel)}</div>
+        <div style="font-size:11px;color:var(--ap-muted)">${fmt(a.inicio)} → ${fmt(a.fin)} · ${lluEscape(a.lotes.join(", "))}</div>
+        <div style="font-size:12px;margin-top:4px">${lluEscape(a.descripcion || "")}</div>
+      </div>`).join("");
+    card.style.display = "block";
+  } catch { card.style.display = "none"; }
+}
+
 // ── Pronóstico real (Open-Meteo) del centroide del campo ──
 async function lluCargarPronostico() {
   const body = document.getElementById("llu-prono-body");
@@ -786,5 +813,6 @@ document.addEventListener("DOMContentLoaded", () => {
   lluCargar();
   lluCargarLotes();
   lluCargarPronostico();
+  lluCargarAlertasSMN();
 });
 </script>

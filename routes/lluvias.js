@@ -200,21 +200,7 @@ y 2-3 recomendaciones concretas para el manejo (siembra, humedad de suelo, riesg
 // Centroide aproximado del establecimiento: promedio de los orígenes (Field.txt)
 // de los lotes AOG sincronizados. Sirve para buscar la estación INA más cercana.
 async function ubicacionEstab(estabSlug) {
-  const edb = db.getDB(estabSlug);
-  let docs = [];
-  try {
-    const r = await edb.find({ selector: { tipo: "aog_archivo", subtipo: "field_origin" }, limit: 300 });
-    docs = r.docs;
-  } catch {
-    const all = await edb.list({ include_docs: true });
-    docs = all.rows.map(x => x.doc).filter(d => d && d.tipo === "aog_archivo" && d.subtipo === "field_origin");
-  }
-  const { parseFieldTxt } = require("../services/aog_parser");
-  const pts = [];
-  for (const d of docs) {
-    const o = parseFieldTxt(d.contenido);
-    if (o) pts.push({ ...o, nombre: d.lote_nombre || d.nombre || null });
-  }
+  const pts = await require("../lib/lotes-puntos").puntosLotes(estabSlug);
   if (!pts.length) return null;
   return {
     lat:    pts.reduce((a, p) => a + p.lat, 0) / pts.length,
@@ -313,6 +299,27 @@ router.post("/ina/importar", async (req, res) => {
   } catch (e) {
     console.error("[lluvias/ina/importar]", e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  ALERTAS SMN vigentes sobre los lotes de la org
+// ══════════════════════════════════════════════════════════
+
+// GET /api/lluvias/smn/alertas — sin polígonos (pesan); el cron avisa aparte.
+router.get("/smn/alertas", async (req, res) => {
+  const estabSlug = estabDe(req);
+  if (!estabSlug) return res.status(400).json({ error: "Seleccioná un establecimiento" });
+  try {
+    const r = await require("../services/smn_alertas_sync").alertasOrg(estabSlug);
+    res.json({
+      lotes:   r.lotes,
+      alertas: r.alertas.map(({ poligonos, url, id, ...a }) => a),
+      fuente:  "Servicio Meteorológico Nacional (CC BY 4.0)",
+    });
+  } catch (e) {
+    console.error("[lluvias/smn/alertas]", e.message);
+    res.status(502).json({ error: `No se pudo consultar el SMN: ${e.message}` });
   }
 });
 

@@ -391,6 +391,12 @@ cron.schedule("7,37 * * * *", async () => {
   catch (e) { console.warn("[CRON/bcp]", e.message); }
 }, { timezone: "America/Argentina/Cordoba" });
 
+// Alertas SMN sobre lotes de cada org → notify-org (evento alerta_smn) + push.
+cron.schedule("3,18,33,48 * * * *", async () => {
+  try { await require("./services/smn_alertas_sync").sincronizar(); }
+  catch (e) { console.warn("[CRON/smn-alertas]", e.message); }
+}, { timezone: "America/Argentina/Cordoba" });
+
 // Sprint 2: retencion y limpieza
 // 03:40, antes del backup de las 03:00 del día siguiente y lejos del horario
 // de campo. Todo best-effort: si falla, se loguea y sigue.
