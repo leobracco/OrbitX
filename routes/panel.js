@@ -445,8 +445,14 @@ router.get("/dispositivos", requireAuth, requireAdmin, async (req, res) => {
 
   } catch(e) { console.error("[Panel/dispositivos]", e.message); }
 
+  const rFw = await db.find({ selector: { tipo: "firmware", producto: "PilotX" }, fields: ["version", "ts", "created_at"], limit: 50 })
+    .catch(() => ({ docs: [] }));
+  const versionesPilotX = (rFw.docs || [])
+    .sort((a, b) => (b.ts || b.created_at || 0) - (a.ts || a.created_at || 0))
+    .map(d => d.version);
+
   const regBadge = await getRegBadge(db).catch(()=>0);
-  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos, ultimasFw, backups });
+  res.render("layout", { ...base(req, { regBadge }), title:"Dispositivos", page:"dispositivos", dispositivos, establecimientos, ultimasFw, backups, versionesPilotX });
 });
 
 // ─────────────────────────────────────────────────────────

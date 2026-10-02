@@ -12,6 +12,61 @@
   </div>
 </div>
 
+<% if (isSA) { %>
+<div class="card" id="card-aprobar" style="margin:16px 0">
+  <div class="card-head">
+    <span class="card-title">Pantallas esperando aprobación</span>
+  </div>
+  <div style="padding:0 16px 16px">
+    <p style="font-size:11px;color:var(--muted2);margin:0 0 12px">Pantallas que corrieron PilotX-Instalador.exe. Aprobá solo las que estás instalando vos.</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Código</th><th>Equipo</th><th>Instalación anterior</th><th>Red</th><th>Vence</th><th></th></tr></thead>
+        <tbody id="tb-pendientes"><tr><td colspan="6" class="td-dim">Buscando…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card-title" style="margin-top:16px;display:block">Instalaciones recientes</div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Equipo</th><th>Org</th><th>Versión</th><th>Estado</th><th>Último paso</th></tr></thead>
+        <tbody id="tb-instalaciones"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-aprobar">
+  <div class="modal">
+    <div class="modal-title">Aprobar pantalla <span id="ap-code"></span></div>
+
+    <div style="margin:16px 0;display:flex;flex-direction:column;gap:12px">
+      <div class="field">
+        <label>Organización</label>
+        <select id="ap-org"><% establecimientos.forEach(e => { %><option value="<%= e.slug %>"><%= e.nombre %></option><% }) %></select>
+      </div>
+      <div class="field">
+        <label>Versión de PilotX</label>
+        <select id="ap-version"><% versionesPilotX.forEach(v => { %><option value="<%= v %>"><%= v %></option><% }) %></select>
+      </div>
+      <div class="field">
+        <label>Nombre del equipo</label>
+        <input type="text" id="ap-nombre" maxlength="80" placeholder="Pantalla PilotX - Cliente">
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted2);cursor:pointer">
+        <input type="checkbox" id="ap-kiosko" checked> Modo kiosko
+      </label>
+    </div>
+
+    <div id="ap-alert" class="alert error"></div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-aprobar')">Cancelar</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmarAprobar()">Aprobar</button>
+    </div>
+  </div>
+</div>
+<% } %>
+
 <%
 const sinAsignar = dispositivos.filter(d => !d.estab_slug);
 const asignados  = dispositivos.filter(d =>  d.estab_slug);
@@ -357,6 +412,12 @@ async function confirmarRenombrar() {
         <label>Nombre que querés darle al tractor (opcional)</label>
         <input type="text" id="pair-nombre" placeholder="Ej: Tractor Deutz 5718"/>
       </div>
+      <% if (isSA) { %>
+      <div class="field">
+        <label>Organización</label>
+        <select id="pair-org"><% establecimientos.forEach(e => { %><option value="<%= e.slug %>"><%= e.nombre %></option><% }) %></select>
+      </div>
+      <% } %>
     </div>
 
     <div id="pair-alert" class="alert error"></div>
@@ -385,7 +446,8 @@ async function confirmarPair() {
   const btn = document.getElementById('btn-confirmar-pair');
   btn.disabled = true; btn.textContent = 'Vinculando…';
   try {
-    const d = await Auth.post('/api/devices/pair/claim', { code, nombre: nombre || undefined });
+    const orgSel = document.getElementById('pair-org');
+    const d = await Auth.post('/api/devices/pair/claim', { code, nombre: nombre || undefined, estab_slug: orgSel ? orgSel.value : undefined });
     toast('✓ Tractor vinculado', d.device_id + ' → ' + d.estab_slug, 'lime');
     closeModal('modal-pair'); resetPair();
     setTimeout(() => location.reload(), 800);
@@ -401,6 +463,58 @@ function resetPair() {
   const b = document.getElementById('btn-confirmar-pair');
   if (b) { b.disabled = false; b.textContent = 'Vincular'; }
 }
+
+<% if (isSA) { %>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+let apCode = null;
+async function cargarPendientes() {
+  try {
+    const [p, i] = await Promise.all([Auth.get('/api/devices/pair/pendientes'), Auth.get('/api/devices/instalaciones')]);
+    const tb = document.getElementById('tb-pendientes');
+    tb.innerHTML = p.pendientes.length ? p.pendientes.map(x => {
+      const r = x.resumen || {};
+      const ant = r.instalacion_anterior ? `Sí (${esc(r.lotes || 0)} lotes)` : 'No';
+      const red = (r.adaptadores || []).map(a => `${esc(a.tipo)} ${esc(a.ip)}${a.internet ? ' ✓' : ''}`).join('<br>');
+      return `<tr><td><b>${esc(x.code)}</b></td><td>${esc(r.hostname || x.hostname)}<br><small>${esc(r.windows)}</small></td>
+        <td>${ant}</td><td><small>${red}</small></td><td>${Math.ceil(x.expira_en_ms / 60000)} min</td>
+        <td><button class="btn btn-sm btn-primary" data-code="${esc(x.code)}" data-hostname="${esc(r.hostname || '')}">Aprobar</button></td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="td-dim">No hay pantallas esperando.</td></tr>';
+    document.getElementById('tb-instalaciones').innerHTML = i.instalaciones.map(x =>
+      `<tr><td>${esc(x.device_id)}</td><td>${esc(x.estab_slug)}</td><td>${esc(x.version)}</td><td>${esc(x.estado)}</td>
+       <td><small>${esc(x.ultimo_paso ? x.ultimo_paso.msg : '')}</small></td></tr>`).join('');
+  } catch (e) { console.warn('[aprobar]', e.message); }
+}
+// Delegación de eventos en vez de onclick inline: el hostname es texto libre
+// que viene del instalador y no puede terminar formando parte del atributo
+// onclick como código JS ejecutable.
+document.getElementById('tb-pendientes')?.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-code]');
+  if (!btn) return;
+  abrirAprobar(btn.dataset.code, btn.dataset.hostname);
+});
+function abrirAprobar(code, hostname) {
+  apCode = code;
+  document.getElementById('ap-code').textContent = code;
+  document.getElementById('ap-nombre').value = hostname ? 'Pantalla PilotX - ' + hostname : '';
+  openModal('modal-aprobar');
+}
+async function confirmarAprobar() {
+  try {
+    const d = await Auth.post('/api/devices/pair/claim', {
+      code: apCode,
+      estab_slug: document.getElementById('ap-org').value,
+      version: document.getElementById('ap-version').value,
+      kiosko: document.getElementById('ap-kiosko').checked,
+      nombre: document.getElementById('ap-nombre').value.trim() || undefined,
+    });
+    toast('✓ Pantalla aprobada', d.device_id + ' → ' + d.estab_slug, 'lime');
+    closeModal('modal-aprobar');
+    cargarPendientes();
+  } catch (e) { showAlert('ap-alert', e.message || 'Error aprobando'); }
+}
+cargarPendientes();
+setInterval(cargarPendientes, 5000);
+<% } %>
 </script>
 
 <!-- Modal nuevo dispositivo -->
