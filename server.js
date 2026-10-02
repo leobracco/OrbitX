@@ -21,7 +21,7 @@ const routeConfig = require("./routes/config");
 const routeAdmin = require("./routes/admin");
 const routePanel = require("./routes/panel"); // SSR panel
 const routeAOG = require("./routes/aog");
-const { router: routeDevices } = require("./routes/devices");
+const { router: routeDevices, deviceAuth } = require("./routes/devices");
 const routeVistaX = require("./routes/vistax");
 const routeLotesMaestro = require("./routes/lotes_maestro");
 const { router: routeIntegraciones } = require("./routes/integraciones");
@@ -298,6 +298,9 @@ app.use(
 // Rutas del agente (sin JWT — usan X-Auth-Token de dispositivo)
 // /api/devices: heartbeat sin JWT, resto con JWT
 // El router de devices maneja internamente deviceAuth para el heartbeat
+// Instalador online: endpoints con token de equipo (no JWT). Va antes del
+// montaje general de /api/devices para que auth.required no lo intercepte.
+app.use("/api/devices/instalacion", deviceAuth, require("./routes/instalacion"));
 app.use(
   "/api/devices",
   (req, res, next) => {
