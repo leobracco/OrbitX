@@ -7,12 +7,12 @@
     "Authorization": `Bearer ${TOKEN || ""}`,
   }, extra || {});
 
-  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","FlowX","ToolX","PilotX","PilotXParche","PilotXAndroid","CoreX-ECU"];
+  const PRODUCTOS = ["VistaX","SoilX","SignalX","CowX","QuantiX","LineX","SectionX","StormX","FlowX","ToolX","PilotX","PilotXParche","PilotXAndroid","PilotXInstalador","RustDesk","CoreX-ECU"];
 
   // Convención: <Producto>_v<X.Y.Z>.<ext>  (ej: FlowX_v1.9.1.bin)
   // Devuelve { producto, productoRaw, version } o null si no matchea.
   function detectarDesdeNombre(nombre) {
-    const m = /^(.+)_v(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\.(bin|hex|zip)$/i.exec(nombre || "");
+    const m = /^(.+)_v(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\.(bin|hex|zip|apk|exe)$/i.exec(nombre || "");
     if (!m) return null;
     const productoRaw = m[1];
     const producto = PRODUCTOS.find(p => p.toLowerCase() === productoRaw.toLowerCase()) || null;
