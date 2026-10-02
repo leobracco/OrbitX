@@ -5,7 +5,8 @@ const router = require("express").Router();
 const cfg  = require("../services/config_sistema");
 const inst = require("../lib/instalacion");
 
-const fallo = (res, e) => res.status(e.status || 500).json({ error: e.message || String(e) });
+// nano/CouchDB usa e.statusCode (no e.status); contemplamos ambos.
+const fallo = (res, e) => res.status(e.status || e.statusCode || 500).json({ error: e.message || String(e) });
 
 router.get("/", async (req, res) => {
   try {
@@ -13,24 +14,16 @@ router.get("/", async (req, res) => {
   } catch (e) { fallo(res, e); }
 });
 
-async function actualizar(req, fn) {
-  const gdb = req.app.locals.globalDB;
-  const d = await gdb.get(inst.idInstalacion(req.deviceId)).catch(() => null);
-  if (!d) throw { status: 404, message: "Esta pantalla no tiene una instalación aprobada" };
-  fn(d);
-  await gdb.insert(d);
-}
-
 router.post("/progreso", async (req, res) => {
   try {
-    await actualizar(req, d => inst.agregarPaso(d, req.body || {}, Date.now()));
+    await inst.actualizarDoc(req.app.locals.globalDB, req.deviceId, d => inst.agregarPaso(d, req.body || {}, Date.now()));
     res.json({ ok: true });
   } catch (e) { fallo(res, e); }
 });
 
 router.post("/red", async (req, res) => {
   try {
-    await actualizar(req, d => inst.guardarRed(d, req.body || null, Date.now()));
+    await inst.actualizarDoc(req.app.locals.globalDB, req.deviceId, d => inst.guardarRed(d, req.body || null, Date.now()));
     res.json({ ok: true });
   } catch (e) { fallo(res, e); }
 });

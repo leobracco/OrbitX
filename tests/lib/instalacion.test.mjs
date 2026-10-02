@@ -104,3 +104,60 @@ test("elegirUltimo toma el de mayor ts", () => {
   assert.equal(inst.elegirUltimo([{ version: "a", ts: 1 }, { version: "b", ts: 3 }, { version: "c", ts: 2 }]).version, "b");
   assert.equal(inst.elegirUltimo([]), null);
 });
+
+// actualizarDoc: reintento ante conflicto 409 (dos POST /progreso o /red concurrentes).
+test("actualizarDoc reintenta ante conflicto 409 y conserva el cambio del otro escritor", async () => {
+  const gdb = base();
+  const origInsert = gdb.insert.bind(gdb);
+  let insertCalls = 0;
+  gdb.insert = async (doc) => {
+    insertCalls++;
+    if (insertCalls === 1) {
+      // Otro escritor (otro POST concurrente) guarda primero, bumpeando el
+      // _rev real en el store ANTES de que este insert llegue a correr.
+      const fresco = await gdb.get("instalacion_OX-AAA");
+      fresco.otro_campo = "cambio-concurrente";
+      await origInsert(fresco);
+    }
+    return origInsert(doc);
+  };
+  const final = await inst.actualizarDoc(gdb, "OX-AAA", d => { d.mio = "mi-cambio"; });
+  assert.equal(insertCalls, 2);
+  assert.equal(final.otro_campo, "cambio-concurrente");
+  assert.equal(final.mio, "mi-cambio");
+  const guardado = await gdb.get("instalacion_OX-AAA");
+  assert.equal(guardado.otro_campo, "cambio-concurrente");
+  assert.equal(guardado.mio, "mi-cambio");
+});
+
+test("actualizarDoc: conflicto persistente rechaza con 409 tras 3 intentos (get llamado 3 veces)", async () => {
+  const gdb = base();
+  let getCalls = 0;
+  const origGet = gdb.get.bind(gdb);
+  gdb.get = async (id) => { getCalls++; return origGet(id); };
+  gdb.insert = async () => { const e = new Error("conflict"); e.statusCode = 409; throw e; };
+  await assert.rejects(
+    inst.actualizarDoc(gdb, "OX-AAA", d => { d.mio = "x"; }),
+    e => e.statusCode === 409
+  );
+  assert.equal(getCalls, 3);
+});
+
+test("actualizarDoc: sin instalación aprobada rechaza con 404", async () => {
+  await assert.rejects(
+    inst.actualizarDoc(base(), "OX-ZZZ", d => { d.mio = "x"; }),
+    e => e.status === 404
+  );
+});
+
+test("actualizarDoc: si fn tira (ej. guardarRed con payload > 16KB) no reintenta ni inserta", async () => {
+  const gdb = base();
+  let insertCalls = 0;
+  const origInsert = gdb.insert.bind(gdb);
+  gdb.insert = async (doc) => { insertCalls++; return origInsert(doc); };
+  await assert.rejects(
+    inst.actualizarDoc(gdb, "OX-AAA", d => inst.guardarRed(d, { x: "a".repeat(17000) }, 10)),
+    e => e.status === 413
+  );
+  assert.equal(insertCalls, 0);
+});
