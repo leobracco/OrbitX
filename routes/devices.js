@@ -4,6 +4,10 @@ const crypto = require("crypto");
 const db     = require("../services/couchdb");
 const { registrarAudit } = require("../services/auth_service");
 const { rateLimit } = require("../middleware/rate-limit");
+const { PAIRING_TTL_MS, validPairCode: _validPairCode, hashSecret: _hashSecret,
+        decidirClaim, limpiarResumen, listarPendientes } = require("../lib/pairing");
+const { nuevaInstalacion, idInstalacion } = require("../lib/instalacion");
+const { soloSuperadmin } = require("../middleware/auth");
 
 // O14 — pair/init es público (el tractor todavía no tiene token). Sin freno,
 // un atacante puede inundar el Map `pendingPairings` en memoria (DoS) y/o
@@ -30,8 +34,7 @@ const limPairInit = rateLimit({ windowMs: 60_000, max: 20 });
 //
 // Pending state en memoria (no en CouchDB): ephemeral, TTL 10 min, no vale la
 // pena ensuciar el bucket por intents.
-const PAIRING_TTL_MS = 10 * 60 * 1000;
-const pendingPairings = new Map(); // code → { device_id, device_secret_hash, hostname, version, ts, claimed, token, estab_slug, nombre }
+const pendingPairings = new Map(); // code → { device_id, device_secret_hash, hostname, version, ts, claimed, token, estab_slug, nombre, origen, resumen }
 
 // Limpieza periódica de intents vencidos.
 setInterval(() => {
@@ -40,21 +43,6 @@ setInterval(() => {
     if (now - p.ts > PAIRING_TTL_MS) pendingPairings.delete(code);
   }
 }, 60 * 1000).unref?.();
-
-function _hashSecret(s) {
-  return crypto.createHash("sha256").update(String(s || "")).digest("hex");
-}
-
-// Code validator: 6 chars del alfabeto seguro (sin I/O/0/1/L para evitar confusión
-// con la fuente de la pantalla del tractor).
-const PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-function _validPairCode(c) {
-  if (typeof c !== "string") return false;
-  c = c.toUpperCase();
-  if (c.length !== 6) return false;
-  for (const ch of c) if (!PAIR_ALPHABET.includes(ch)) return false;
-  return true;
-}
 
 // ── Validar token individual de un dispositivo ────────────
 // Cada dispositivo tiene su propio token guardado en CouchDB
@@ -475,7 +463,7 @@ async function _migrarUnassigned(deviceId, estabSlug) {
 //  device_secret que vuelve a guardar el server hasheado.
 // ══════════════════════════════════════════════════════════
 router.post("/pair/init", limPairInit, async (req, res) => {
-  const { code, device_secret, device_id, hostname, version } = req.body || {};
+  const { code, device_secret, device_id, hostname, version, origen, resumen } = req.body || {};
   if (!_validPairCode(code))
     return res.status(400).json({ error: "Código inválido (6 chars, alfabeto restringido)." });
   if (!device_secret || String(device_secret).length < 32)
@@ -503,6 +491,8 @@ router.post("/pair/init", limPairInit, async (req, res) => {
     token:    existing?.token    || null,
     estab_slug: existing?.estab_slug || null,
     nombre:   existing?.nombre   || null,
+    origen:  origen === "instalador" ? "instalador" : (existing?.origen || null),
+    resumen: limpiarResumen(resumen) || existing?.resumen || null,
   });
   res.json({ ok: true, expires_in: PAIRING_TTL_MS });
 });
@@ -513,7 +503,7 @@ router.post("/pair/init", limPairInit, async (req, res) => {
 //  body: { code, nombre?, estab_slug? (solo SA puede pasar otra) }
 // ══════════════════════════════════════════════════════════
 router.post("/pair/claim", noDevices, async (req, res) => {
-  const { code, nombre, estab_slug: estabBody } = req.body || {};
+  const { code, nombre, estab_slug: estabBody, version, kiosko } = req.body || {};
   if (!_validPairCode(code))
     return res.status(400).json({ error: "Código inválido." });
   const codeU = code.toUpperCase();
@@ -527,10 +517,18 @@ router.post("/pair/claim", noDevices, async (req, res) => {
 
   const esSA   = req.user?.rol_global === "superadmin";
   const miSlug = req.user?.estabSlug;
-  // Owners/admins claim siempre a su propia org. Solo SA puede pasar otra.
-  const estab_slug = esSA ? (estabBody || miSlug || null) : miSlug;
-  if (!estab_slug)
-    return res.status(403).json({ error: "Necesitás una org activa para vincular un tractor." });
+  const dec = decidirClaim({ intent: p, user: req.user, estabBody });
+  if (!dec.ok) return res.status(dec.status).json({ error: dec.error });
+  const estab_slug = dec.estab_slug;
+  const esInstalador = p.origen === "instalador";
+  if (esInstalador) {
+    const gdb0 = req.app.locals.globalDB;
+    const org = await gdb0.get(`org_${estab_slug}`).catch(() => null);
+    if (!org) return res.status(400).json({ error: "No existe esa organización" });
+    if (!version) return res.status(400).json({ error: "Elegí la versión de PilotX" });
+    const fwDoc = await gdb0.get(`firmware_PilotX_${version}`).catch(() => null);
+    if (!fwDoc) return res.status(400).json({ error: `PilotX ${version} no está en el OTA` });
+  }
 
   try {
     const globalDB = req.app.locals.globalDB;
@@ -581,6 +579,14 @@ router.post("/pair/claim", noDevices, async (req, res) => {
       });
     }
 
+    if (esInstalador) {
+      const previo = await globalDB.get(idInstalacion(p.device_id)).catch(() => null);
+      await globalDB.insert(nuevaInstalacion({
+        device_id: p.device_id, estab_slug, version, kiosko: kiosko !== false,
+        por: uid(req), now: Date.now(), previo,
+      }));
+    }
+
     // Marcar el intent como claimed. El tractor lo retira al hacer el próximo poll.
     p.claimed    = true;
     p.token      = token;
@@ -589,7 +595,7 @@ router.post("/pair/claim", noDevices, async (req, res) => {
     pendingPairings.set(codeU, p);
 
     await registrarAudit(estab_slug, uid(req), "device.pair", {
-      device_id: p.device_id, code: codeU,
+      device_id: p.device_id, code: codeU, origen: p.origen || "pilotx",
     });
     console.log(`[Devices/pair] ${codeU} → ${p.device_id} (${estab_slug})`);
     res.json({ ok: true, device_id: p.device_id, estab_slug, nombre: p.nombre });
@@ -643,6 +649,36 @@ router.get("/pair/status/:code", async (req, res) => {
     estab_slug: p.estab_slug,
     nombre:     p.nombre,
   });
+});
+
+// Pantallas del instalador esperando que Agro Parallel las apruebe.
+router.get("/pair/pendientes", noDevices, soloSuperadmin, (req, res) => {
+  res.json({ pendientes: listarPendientes(pendingPairings, Date.now()) });
+});
+
+// Últimas instalaciones (aprobadas, en curso o terminadas).
+router.get("/instalaciones", noDevices, soloSuperadmin, async (req, res) => {
+  try {
+    const r = await req.app.locals.globalDB.find({ selector: { tipo: "instalacion" }, limit: 200 });
+    const lista = (r.docs || [])
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
+      .slice(0, 20)
+      .map(d => ({ device_id: d.device_id, estab_slug: d.estab_slug, version: d.version, estado: d.estado,
+                   updated_at: d.updated_at, ultimo_paso: (d.pasos || []).at(-1) || null }));
+    res.json({ instalaciones: lista });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/:deviceId/instalacion", noDevices, async (req, res) => {
+  try {
+    const gdb = req.app.locals.globalDB;
+    const dev = await gdb.get(`device_${req.params.deviceId}`).catch(() => null);
+    if (!puedeTocarDevice(req, dev)) return res.status(404).json({ error: "No existe" });
+    const d = await gdb.get(idInstalacion(req.params.deviceId)).catch(() => null);
+    if (!d) return res.status(404).json({ error: "Sin instalación registrada" });
+    const { _rev, ...limpio } = d;
+    res.json(limpio);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // noDevices se exporta para que otros routers (ota) usen el mismo guard
