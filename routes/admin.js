@@ -4,6 +4,7 @@
 const router  = require("express").Router();
 const db      = require("../services/couchdb");
 const { soloSuperadmin } = require("../middleware/auth");
+const { normalizarCuit, validarCambiosOrg } = require("../lib/org-datos");
 
 // Orgs reales de producción: docs `org_<slug>` con tipo:"org" en orbitx_global.
 // (db.getEstablecimientos() consulta el tipo legacy "establecimiento" y devuelve vacío.)
@@ -39,6 +40,11 @@ router.get("/orgs", soloSuperadmin, async (req, res) => {
 router.post("/org", soloSuperadmin, async (req, res) => {
   try {
     const { nombre, slug, provincia, ciudad } = req.body || {};
+    let cuit = "";
+    try { cuit = normalizarCuit(req.body?.cuit); }
+    catch (e) { return res.status(e.status).json({ error: e.message }); }
+    if (String(nombre || "").includes("�"))
+      return res.status(400).json({ error: "El nombre tiene un carácter roto (�): revisá los acentos" });
     if (!nombre || !slug) return res.status(400).json({ error: "Hace falta nombre y slug" });
     if (!/^[a-z0-9_]{3,40}$/.test(slug))
       return res.status(400).json({ error: "Slug invalido: minusculas, numeros y _ (3 a 40)" });
@@ -49,7 +55,7 @@ router.post("/org", soloSuperadmin, async (req, res) => {
     await gdb.insert({
       _id: `org_${slug}`,
       tipo: "org",
-      nombre, slug,
+      nombre, slug, cuit,
       ha_total: null, provincia: provincia || "", pais: "Argentina",
       ciudad: ciudad || "", lat: null, lon: null,
       plan: "pro", plan_vence: null, activa: true, aprobada: true,
@@ -65,6 +71,22 @@ router.post("/org", soloSuperadmin, async (req, res) => {
     res.json({ ok: true, slug, nombre });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/admin/org/:slug — corregir nombre y/o CUIT de una org (superadmin).
+router.put("/org/:slug", soloSuperadmin, async (req, res) => {
+  try {
+    const cambios = validarCambiosOrg(req.body || {});
+    const gdb = db.getDB("global");
+    const org = await gdb.get(`org_${req.params.slug}`).catch(() => null);
+    if (!org) return res.status(404).json({ error: "No existe la organización" });
+    Object.assign(org, cambios, { updated_at: Date.now() });
+    await gdb.insert(org);
+    console.log(`[Admin] Org ${req.params.slug} actualizada: ${Object.keys(cambios).join(", ")}`);
+    res.json({ ok: true, slug: org.slug, nombre: org.nombre, cuit: org.cuit || "" });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
