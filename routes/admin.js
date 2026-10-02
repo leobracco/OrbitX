@@ -4,7 +4,7 @@
 const router  = require("express").Router();
 const db      = require("../services/couchdb");
 const { soloSuperadmin } = require("../middleware/auth");
-const { normalizarCuit, validarCambiosOrg } = require("../lib/org-datos");
+const { normalizarCuit, validarNombre, validarCambiosOrg } = require("../lib/org-datos");
 
 // Orgs reales de producción: docs `org_<slug>` con tipo:"org" en orbitx_global.
 // (db.getEstablecimientos() consulta el tipo legacy "establecimiento" y devuelve vacío.)
@@ -39,13 +39,14 @@ router.get("/orgs", soloSuperadmin, async (req, res) => {
 // invitar al cliente desde el panel.
 router.post("/org", soloSuperadmin, async (req, res) => {
   try {
-    const { nombre, slug, provincia, ciudad } = req.body || {};
+    const { slug, provincia, ciudad } = req.body || {};
+    let nombre = "";
     let cuit = "";
+    if (!req.body?.nombre || !slug) return res.status(400).json({ error: "Hace falta nombre y slug" });
+    try { nombre = validarNombre(req.body.nombre); }
+    catch (e) { return res.status(e.status).json({ error: e.message }); }
     try { cuit = normalizarCuit(req.body?.cuit); }
     catch (e) { return res.status(e.status).json({ error: e.message }); }
-    if (String(nombre || "").includes("�"))
-      return res.status(400).json({ error: "El nombre tiene un carácter roto (�): revisá los acentos" });
-    if (!nombre || !slug) return res.status(400).json({ error: "Hace falta nombre y slug" });
     if (!/^[a-z0-9_]{3,40}$/.test(slug))
       return res.status(400).json({ error: "Slug invalido: minusculas, numeros y _ (3 a 40)" });
     const gdb = db.getDB("global");
