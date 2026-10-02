@@ -238,6 +238,7 @@ app.use("/api/reportes", auth.required, sinEquipos, require("./routes/reportes")
 app.use("/reportes", auth.required, sinEquipos, require("./routes/reportes"));
 app.use("/api/ota/publico", require("./routes/ota_publico")); // sin auth: catálogo curado + descargas con límite por IP
 app.get("/releases", (req, res) => res.redirect("/api/ota/publico/pagina"));
+app.get("/instalador", (req, res) => res.redirect("/api/ota/publico/instalador"));
 // Toda la carpeta flash-app (índice, bootstrap, esp-web-tools y los productos): las páginas usan rutas relativas "../".
 app.use("/flash-publico", express.static(path.join(__dirname, "flash-app")));
 // ── fin Sprint 1 ──────────────────────────────────────────

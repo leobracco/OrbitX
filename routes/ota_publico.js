@@ -15,6 +15,7 @@ const path   = require("path");
 const fs     = require("fs");
 const fw     = require("../lib/firmware");
 const couch  = require("../services/couchdb");
+const { elegirUltimo } = require("../lib/instalacion");
 
 const PRODUCTOS_PUBLICOS = ["VistaX", "QuantiX", "FlowX", "SectionX", "ToolX", "StormX"];
 
@@ -131,6 +132,26 @@ router.get("/pagina", async (req, res) => {
   } catch (e) {
     console.error("[ota_publico/pagina]", e.message);
     res.status(500).send("Error cargando releases");
+  }
+});
+
+// El instalador de PilotX es público a propósito: no lleva secretos y sin la
+// aprobación de Agro Parallel en OrbitX no sirve para nada.
+router.get("/instalador", async (req, res) => {
+  try {
+    if (!limiteDescargas.permitir(ipCliente(req)))
+      return res.status(429).json({ error: "Demasiadas descargas, probá en un rato" });
+    const r = await couch.getDB("global").find({
+      selector: { tipo: "firmware", producto: "PilotXInstalador" },
+      fields: ["version", "ts", "created_at"], limit: 50,
+    });
+    const docs = (r.docs || []).map(d => ({ ...d, ts: d.ts || d.created_at || 0 }))
+      .filter(d => fw.existeBin("PilotXInstalador", d.version));
+    const ult = elegirUltimo(docs);
+    if (!ult) return res.status(404).json({ error: "Todavía no hay instalador publicado" });
+    res.download(fw.rutaBin("PilotXInstalador", ult.version), "PilotX-Instalador.exe");
+  } catch (e) {
+    res.status(500).json({ error: "Error interno" });
   }
 });
 
