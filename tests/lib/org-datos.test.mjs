@@ -26,8 +26,12 @@ test("validarNombre rechaza vacío después de trim", () => {
   assert.throws(() => o.validarNombre(""), e => e.status === 400);
 });
 
-test("validarNombre rechaza el carácter de reemplazo U+FFFD", () => {
-  assert.throws(() => o.validarNombre("PEQUEÑOSFFFDOtros"), e => e.status === 400 && e.message.includes("FFFD"));
+test("validarNombre rechaza el carácter Unicode de reemplazo (encoding roto)", () => {
+  assert.throws(() => o.validarNombre("PEQUE\uFFFDOS"), e => e.status === 400 && e.message.includes("\uFFFD"));
+});
+
+test("validarNombre acepta el texto plano que antes daba falso positivo", () => {
+  assert.equal(o.validarNombre("CAMPO FFFD"), "CAMPO FFFD");
 });
 
 test("validarNombre trunca a 160 caracteres", () => {
@@ -40,8 +44,8 @@ test("validarCambiosOrg toma nombre y cuit", () => {
     { nombre: "LOS PEQUEÑOS TURPIALES S.A.", cuit: "30606933122" });
 });
 
-test("validarCambiosOrg rechaza el carácter de reemplazo U+FFFD", () => {
-  assert.throws(() => o.validarCambiosOrg({ nombre: "PEQUEÑOSFFFDOtros" }), e => e.status === 400);
+test("validarCambiosOrg rechaza el carácter Unicode de reemplazo (encoding roto)", () => {
+  assert.throws(() => o.validarCambiosOrg({ nombre: "PEQUE\uFFFDOS" }), e => e.status === 400);
 });
 
 test("validarCambiosOrg sin cambios es 400", () => {
