@@ -75,6 +75,43 @@ router.post("/org", soloSuperadmin, async (req, res) => {
   }
 });
 
+// GET  /api/admin/org/:slug/modulos — módulos habilitados de la org (superadmin).
+// PUT  /api/admin/org/:slug/modulos/:modulo  { "activo": true|false }
+// Usa el array `modulos` del doc org_<slug> (schema_auth.js: "Módulos
+// habilitados para esta org"). Lo estrena la planimetría (módulo
+// "planimetria"), que además necesita PLANIMETRIA_ENABLED=1 en el .env.
+router.get("/org/:slug/modulos", soloSuperadmin, async (req, res) => {
+  try {
+    const org = await db.getDB("global").get(`org_${req.params.slug}`).catch(() => null);
+    if (!org) return res.status(404).json({ error: "No existe la organización" });
+    res.json({ ok: true, slug: org.slug, modulos: Array.isArray(org.modulos) ? org.modulos : [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put("/org/:slug/modulos/:modulo", soloSuperadmin, async (req, res) => {
+  try {
+    const modulo = String(req.params.modulo || "");
+    if (!/^[a-z_]{3,30}$/.test(modulo)) return res.status(400).json({ error: "Módulo inválido" });
+    if (typeof req.body?.activo !== "boolean") return res.status(400).json({ error: "Falta activo: true|false" });
+    const planimetria = require("../services/planimetria");
+    const gdb = db.getDB("global");
+    // Reintento ante 409: el doc de la org lo tocan otros endpoints también.
+    for (let intento = 0; intento < 3; intento++) {
+      const org = await gdb.get(`org_${req.params.slug}`).catch(() => null);
+      if (!org) return res.status(404).json({ error: "No existe la organización" });
+      org.modulos = planimetria.conModulo(org.modulos, modulo, req.body.activo);
+      org.updated_at = Date.now();
+      try {
+        await gdb.insert(org);
+        if (modulo === planimetria.MODULO) planimetria.olvidarOrg(org.slug);
+        console.log(`[Admin] Org ${org.slug}: módulo ${modulo} ${req.body.activo ? "ON" : "OFF"} por ${req.user?.uid || "?"}`);
+        return res.json({ ok: true, slug: org.slug, modulos: org.modulos });
+      } catch (e) { if (e.statusCode !== 409) throw e; }
+    }
+    res.status(409).json({ error: "Conflicto guardando la organización, probá de nuevo" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /api/admin/org/:slug — corregir nombre y/o CUIT de una org (superadmin).
 router.put("/org/:slug", soloSuperadmin, async (req, res) => {
   try {

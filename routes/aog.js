@@ -157,6 +157,18 @@ router.post("/sync", deviceAuth, async (req, res) => {
   // sigan funcionando con strings UTF-8.
   const esBinario = typeof contenido_base64 === "string" && contenido_base64.length > 0;
 
+  // Planimetría: las partes Elevation_NNNN.txt de PilotX (subtipo
+  // "elevation_points") NO se marcan es_lote aunque el tractor mande true.
+  // Varias consultas traen TODOS los docs es_lote de un lote CON contenido
+  // (contexto del lote, /lotes/:nombre, agrarIA con limit 20, panel con limit
+  // 200): decenas de partes de ~300 KB las inflaban y hasta podían dejar
+  // afuera el Boundary por el limit. La planimetría las busca por
+  // tipo+subtipo+lote_nombre, no necesita el flag.
+  // Tampoco se archiva historial: la parte que crece solo agrega filas al
+  // final (la versión anterior es un prefijo de la nueva) y archivarla en
+  // cada subida llenaría CouchDB de copias de 300 KB.
+  const esElevacion = (subtipo || "") === "elevation_points";
+
   try {
     const estabDB = getEstabDB(estabSlug);
     const safeRel = ruta_rel.replace(/[/\\:*?"<>|]/g, "_");
@@ -165,7 +177,7 @@ router.post("/sync", deviceAuth, async (req, res) => {
     // Guardar versión histórica si el contenido cambió
     try {
       const existing = await estabDB.get(docId);
-      if (existing.hash_md5 && existing.hash_md5 !== hash_md5) {
+      if (!esElevacion && existing.hash_md5 && existing.hash_md5 !== hash_md5) {
         const histId = `aog_hist_${estabSlug}_${safeRel}_${existing.ts||Date.now()}`.slice(0, 220);
         const histDoc = {
           _id:         histId,
@@ -199,7 +211,7 @@ router.post("/sync", deviceAuth, async (req, res) => {
     const docNuevo = {
       tipo:"aog_archivo", subtipo:subtipo||"field_file",
       orgSlug:estabSlug, ruta_rel, nombre,
-      es_lote:!!es_lote, lote_nombre:lote_nombre||null,
+      es_lote:esElevacion ? false : !!es_lote, lote_nombre:lote_nombre||null,
       hash_md5, tamaño:tamano, device_id:deviceId,
       ts:ts||Date.now(),
     };
@@ -829,6 +841,76 @@ router.get("/lotes/:nombre/temporadas", async (req, res) => {
   }
 });
 // fin Sprint 2: comparador por temporada
+
+// ══════════════════════════════════════════════════════════
+//  Planimetría (fase 2) — mapa de alturas del lote con los puntos RTK fijo
+//  que sube PilotX (subtipo "elevation_points"). Cálculo en lib/planimetria.js,
+//  cache y flags en services/planimetria.js. APAGADA por defecto: hace falta
+//  PLANIMETRIA_ENABLED=1 en el .env Y "planimetria" en org.modulos.
+// ══════════════════════════════════════════════════════════
+const planimetria = require("../services/planimetria");
+
+// Misma regla multi-org que /lotes/:nombre/temporadas: ?estab= solo si sos
+// superadmin o tenés membresía en esa org.
+function slugPlanimetria(req) {
+  const jwtUser = req.jwtUser || req.user;
+  const isSA    = jwtUser?.rol_global === "superadmin";
+  const miSlug  = jwtUser?.estabSlug || jwtUser?.estab_slug || null;
+  const slug    = req.query.estab || miSlug;
+  if (!slug) return { status: 400, error: "Sin organización activa" };
+  if (req.query.estab && !isSA && req.query.estab !== miSlug &&
+      !(jwtUser?.memberships || []).some(m => m.orgSlug === req.query.estab))
+    return { status: 403, error: "Sin acceso a esa organización" };
+  return { slug };
+}
+
+function nombreLoteParam(raw) {
+  try { return decodeURIComponent(raw); } catch { return raw; }
+}
+
+// GET /api/aog/planimetria/estado?estab=&lote= — el panel lo usa para mostrar
+// (o no) la pestaña "Altimetría". Con ?lote= dice además cuántas partes de
+// alturas tiene ese lote (consulta liviana: solo metadata, sin contenido).
+router.get("/planimetria/estado", async (req, res) => {
+  try {
+    if (!planimetria.habilitadaGlobal()) return res.json({ habilitada: false });
+    const s = slugPlanimetria(req);
+    if (s.error) return res.status(s.status).json({ error: s.error });
+    const habilitada = await planimetria.habilitadaParaOrg(s.slug);
+    const out = { habilitada };
+    if (habilitada && req.query.lote) out.partes = await planimetria.contarPartes(getEstabDB(s.slug), String(req.query.lote));
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/aog/lotes/:nombre/planimetria?res=3&curvas=0.1&umbral=0.05&estab=&fresco=1
+// res (m): 2|3|4|5|10 · curvas (m): auto (default)|0.05|0.1|0.2|0.25|0.5|1 · umbral de bajos (m)
+// Respuesta: grilla compacta (base64, fila 0 = norte), curvas GeoJSON lat/lon,
+// bajos y estadísticas. Cacheada por hash de las partes.
+router.get("/lotes/:nombre/planimetria", async (req, res) => {
+  try {
+    if (!planimetria.habilitadaGlobal())
+      return res.status(404).json({ error: "Planimetría deshabilitada", deshabilitada: true });
+    const s = slugPlanimetria(req);
+    if (s.error) return res.status(s.status).json({ error: s.error });
+    if (!(await planimetria.habilitadaParaOrg(s.slug)))
+      return res.status(404).json({ error: "La planimetría no está habilitada para esta organización", deshabilitada: true });
+
+    const lote = nombreLoteParam(req.params.nombre);
+    const { estado, json } = await planimetria.obtener(s.slug, lote, req.query, {
+      estabDB: getEstabDB(s.slug), fresco: req.query.fresco === "1",
+    });
+    // `error` lo lee Auth.get() del panel para mostrar el motivo.
+    if (estado === "sin_datos") return res.status(404).json({ error: json.motivo, ...json });
+    if (!json.ok) return res.status(422).json({ error: json.motivo, ...json });
+    res.set("Cache-Control", "private, max-age=60");
+    res.json(json);
+  } catch (e) {
+    console.error("[AOG/planimetria]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+// fin Planimetría (fase 2)
 
 router.get("/mapa", async (req, res) => {
   try {
