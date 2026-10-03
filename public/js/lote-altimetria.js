@@ -12,8 +12,9 @@
 // Exporta curvas (GeoJSON / KML) y la grilla (CSV), todo armado en el
 // navegador con lo que ya bajó.
 //
-// Script clásico: expone window.LoteAltimetria (panel EJS; la PWA lo puede
-// reusar). Necesita Leaflet (L) y Auth (Auth.get) cargados antes.
+// Script clásico: expone window.LoteAltimetria. Lo usan el panel EJS
+// (pestaña Altimetría) y la PWA (detalle del lote). Necesita Leaflet (L);
+// en el panel usa Auth.get, la PWA pasa su propio `get` (ver montar()).
 (function () {
   "use strict";
 
@@ -123,29 +124,41 @@ ${marcas}
   }
 
   /* ── Widget ────────────────────────────────────────────── */
-  // opts: { lote, estab?, avisar?(msg, tipo) }
+  // opts: { lote, estab?, avisar?(msg, tipo),
+  //         get?(url) → Promise<json>  (default Auth.get del panel),
+  //         tactil?  controles grandes para celular + tocar el mapa muestra el valor,
+  //         alto?    alto del mapa en px (340), columnas? tarjetas por fila (3),
+  //         clases?  { on, off, exp } clases de los botones (default las del panel) }
   function montar(el, opts) {
-    const st = { capa: "altura", relieve: true, curvas: "auto", res: 3, data: null, mapa: null, capas: [], lote: opts.lote };
+    const st = { capa: "altura", relieve: true, curvas: "auto", res: 3, data: null, mapa: null, capas: [], lote: opts.lote, toque: null };
     const id = "alt-" + Math.random().toString(36).slice(2, 8);
+    const tactil = !!opts.tactil;
+    const cls = Object.assign({ on: "btn btn-sm btn-primary", off: "btn btn-sm btn-ghost", exp: "btn btn-ghost btn-sm" }, opts.clases || {});
+    const pedir = opts.get || ((u) => Auth.get(u));
+    // Tamaños: en celular los controles tienen que poder tocarse con el dedo.
+    const fs = tactil ? 14 : 11;
+    const sel = `margin-left:4px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:${fs}px;` +
+      (tactil ? "padding:8px 10px;min-height:40px" : "padding:4px 6px");
+    const lbl = `font-size:${fs}px;color:var(--ap-muted)` + (tactil ? ";display:flex;align-items:center;flex:1" : "");
     el.innerHTML = `
       <div class="alt-ctrl" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-        <div style="display:flex;border:1px solid var(--ap-border);border-radius:8px;overflow:hidden" role="group" aria-label="Capa">
+        <div style="display:flex;border:1px solid var(--ap-border);border-radius:8px;overflow:hidden${tactil ? ";width:100%" : ""}" role="group" aria-label="Capa">
           ${[["altura", "Altura"], ["pendiente", "Pendiente"], ["bajos", "Bajos"]].map(([k, t]) =>
-            `<button type="button" data-capa="${k}" class="btn btn-sm" style="border:none;border-radius:0">${t}</button>`).join("")}
+            `<button type="button" data-capa="${k}" class="btn btn-sm" style="border:none;border-radius:0${tactil ? ";flex:1;padding:10px 0;font-size:14px" : ""}">${t}</button>`).join("")}
         </div>
-        <label style="font-size:11px;color:var(--ap-muted)">Curvas
-          <select data-k="curvas" style="margin-left:4px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:11px">
+        <label style="${lbl}">Curvas
+          <select data-k="curvas" style="${sel}">
             ${[["auto", "automático"], [0.05, "5 cm"], [0.1, "10 cm"], [0.2, "20 cm"], [0.25, "25 cm"], [0.5, "50 cm"], [0, "sin curvas"]].map(([v, t]) => `<option value="${v}" ${v === "auto" ? "selected" : ""}>${t}</option>`).join("")}
           </select></label>
-        <label style="font-size:11px;color:var(--ap-muted)">Celda
-          <select data-k="res" style="margin-left:4px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:11px">
+        <label style="${lbl}">Celda
+          <select data-k="res" style="${sel}">
             ${[2, 3, 5].map((v) => `<option value="${v}" ${v === 3 ? "selected" : ""}>${v} m</option>`).join("")}
           </select></label>
-        <label style="font-size:11px;color:var(--ap-muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" data-k="relieve" checked> Relieve</label>
+        <label style="font-size:${fs}px;color:var(--ap-muted);display:flex;align-items:center;gap:${tactil ? 8 : 4}px;cursor:pointer">
+          <input type="checkbox" data-k="relieve" checked${tactil ? ' style="width:20px;height:20px"' : ""}> Relieve</label>
       </div>
       <div style="position:relative">
-        <div id="${id}" style="height:340px;border-radius:8px;overflow:hidden;background:#000"></div>
+        <div id="${id}" style="height:${opts.alto || 340}px;border-radius:8px;overflow:hidden;background:#000"></div>
         <div data-k="hover" style="position:absolute;top:8px;right:8px;z-index:500;background:rgba(18,22,24,.86);color:#fff;padding:6px 9px;border-radius:6px;font-size:11px;line-height:1.5;pointer-events:none;display:none"></div>
         <div data-k="cargando" style="position:absolute;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:rgba(18,22,24,.55);color:#fff;font-size:12px;border-radius:8px"><span class="spinner" style="width:14px;height:14px;margin-right:8px"></span>Calculando altimetría…</div>
       </div>
@@ -155,9 +168,8 @@ ${marcas}
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
         <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Exportar</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button type="button" class="btn btn-ghost btn-sm" data-exp="geojson">Curvas GeoJSON</button>
-          <button type="button" class="btn btn-ghost btn-sm" data-exp="kml">Curvas KML</button>
-          <button type="button" class="btn btn-ghost btn-sm" data-exp="csv">Grilla CSV</button>
+          ${[["geojson", "Curvas GeoJSON"], ["kml", "Curvas KML"], ["csv", "Grilla CSV"]].map(([k, t]) =>
+            `<button type="button" class="${cls.exp}" data-exp="${k}"${tactil ? ' style="flex:1 1 30%;font-size:13px;padding:10px 6px"' : ""}>${t}</button>`).join("")}
         </div>
       </div>`;
     const $ = (sel) => el.querySelector(sel);
@@ -165,7 +177,7 @@ ${marcas}
     function marcarCapa() {
       el.querySelectorAll("[data-capa]").forEach((b) => {
         const on = b.dataset.capa === st.capa;
-        b.className = "btn btn-sm " + (on ? "btn-primary" : "btn-ghost");
+        b.className = on ? cls.on : cls.off;
         b.setAttribute("aria-pressed", on ? "true" : "false");
       });
     }
@@ -187,6 +199,14 @@ ${marcas}
       st.mapa.setView([-34.6, -60], 6);
       st.mapa.on("mousemove", (e) => mostrarValor(e.latlng));
       st.mapa.on("mouseout", () => { $('[data-k="hover"]').style.display = "none"; });
+      // Celular: no hay hover, el valor se ve tocando el mapa (con un punto
+      // donde se tocó). En escritorio el click también lo muestra, no molesta.
+      st.mapa.on("click", (e) => {
+        mostrarValor(e.latlng);
+        const dentro = $('[data-k="hover"]').style.display === "block";
+        if (st.toque) { st.mapa.removeLayer(st.toque); st.toque = null; }
+        if (dentro && tactil) st.toque = L.circleMarker(e.latlng, { radius: 6, color: "#fff", weight: 2, fillColor: "#000", fillOpacity: 0.6, interactive: false }).addTo(st.mapa);
+      });
     }
 
     function celdaEn(latlng) {
@@ -270,7 +290,7 @@ ${marcas}
           <div style="font-size:9px;color:var(--muted2);margin-top:1px">${sub}</div>
         </div>`;
       $('[data-k="stats"]').innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        <div style="display:grid;grid-template-columns:repeat(${opts.columnas || 3},1fr);gap:8px">
           ${tarjeta("Desnivel", `${num(s.desnivel_m, 2)} <span style="font-size:11px;color:var(--muted2)">m</span>`, `${num(s.z_min_m, 2)} – ${num(s.z_max_m, 2)} m`)}
           ${tarjeta("Pendiente", `${num(s.pendiente_media_pct, 2)} <span style="font-size:11px;color:var(--muted2)">%</span>`, `media · 90 % del lote bajo ${num(s.pendiente_p90_pct, 1)} %`)}
           ${tarjeta("Bajos", `${s.bajos_cantidad ?? 0}`, `${num(s.bajos_area_ha, 2)} ha · ${num(s.bajos_volumen_m3, 0)} m³ de agua`)}
@@ -285,10 +305,10 @@ ${marcas}
       $('[data-k="bajos"]').innerHTML = b.length ? `
         <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px">Bajos donde se junta agua</div>
         ${b.slice(0, 5).map((x, k) => `
-          <div class="capa-row" data-bajo="${k}" style="cursor:pointer">
+          <div class="capa-row" data-bajo="${k}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
             <span style="width:10px;height:10px;border-radius:50%;background:#0d366b;border:2px solid #fff;flex-shrink:0"></span>
             <span style="font-size:12px;color:var(--text)">Bajo ${k + 1}</span>
-            <span class="td-dim" style="font-size:11px">${x.prof_max_cm} cm de profundidad · ${num(x.area_m2 / 1e4, 2)} ha · ${num(x.volumen_m3, 0)} m³</span>
+            <span class="td-dim" style="font-size:11px;color:var(--muted2)">${x.prof_max_cm} cm de profundidad · ${num(x.area_m2 / 1e4, 2)} ha · ${num(x.volumen_m3, 0)} m³</span>
           </div>`).join("")}` : "";
       el.querySelectorAll("[data-bajo]").forEach((row) => row.addEventListener("click", () => {
         const x = b[+row.dataset.bajo];
@@ -304,7 +324,8 @@ ${marcas}
       try {
         const q = new URLSearchParams({ res: st.res, curvas: st.curvas || "auto" });
         if (opts.estab) q.set("estab", opts.estab);
-        const data = await Auth.get(`/api/aog/lotes/${encodeURIComponent(st.lote)}/planimetria?${q}`);
+        const data = await pedir(`/api/aog/lotes/${encodeURIComponent(st.lote)}/planimetria?${q}`);
+        if (!st.mapa) return;   // se destruyó mientras calculaba (cambió de lote / pantalla)
         const primera = !st.data;
         st.data = data;
         const g = data.grilla, dec = decodificar(g);
@@ -323,6 +344,7 @@ ${marcas}
         }
         dibujar(); stats();
       } catch (e) {
+        if (!st.mapa) return;   // destruido: el contenedor ya puede ser de otro widget
         el.innerHTML = `<div class="empty-state" style="padding:30px"><p>${esc(e.message)}</p>
           <p style="font-size:11px;color:var(--muted2);margin-top:8px">Las alturas las registra PilotX solo con RTK fijo, mientras se trabaja el lote, y se suben solas a OrbitX.</p></div>`;
         if (st.mapa) { st.mapa.remove(); st.mapa = null; }
