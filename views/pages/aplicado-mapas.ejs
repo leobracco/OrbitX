@@ -1,0 +1,56 @@
+<%# pages/aplicado-mapas.ejs — Mapa de calor de lo aplicado por lote (FlowX, QuantiX, VistaX) %>
+
+<link rel="stylesheet" href="/lib/leaflet/leaflet.min.css">
+<script src="/lib/leaflet/leaflet.min.js"></script>
+
+<style>
+  .apm-barra { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px }
+  .apm-barra .input { min-width:220px }
+  .apm-modo { display:flex; gap:4px }
+  .apm-ley { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--muted2); align-items:center }
+  .apm-ley i { display:inline-block; width:14px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle }
+  .apm-grad { display:flex; align-items:center; gap:8px }
+  .apm-grad b { display:inline-block; width:260px; height:12px; border-radius:6px }
+  .apm-calor { image-rendering:auto }
+  .apm-tabla { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:12px }
+  .apm-tabla th, .apm-tabla td { padding:6px 8px; border-bottom:1px solid var(--border, #2a332c); text-align:right; white-space:nowrap }
+  .apm-tabla th:first-child, .apm-tabla td:first-child { text-align:left }
+  .apm-tabla th { color:var(--muted2); font-weight:600 }
+  .apm-ok { color:#4ABA3E } .apm-warn { color:#E2B53E } .apm-bad { color:#E15A5A }
+</style>
+
+<div class="page-header">
+  <div>
+    <h2>Mapas de aplicación</h2>
+    <p>Lo que echó cada máquina, dónde: FlowX (L/ha por corte), QuantiX (por motor) y VistaX (por surco). Tramos de ~10 m registrados por PilotX.</p>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+    <select id="apm-lote" class="input" style="min-width:280px">
+      <option value="">Cargando lotes...</option>
+    </select>
+    <a href="/aplicado-mapas" class="btn">↻ Actualizar</a>
+  </div>
+</div>
+
+<div class="apm-barra">
+  <select id="apm-capa" class="input" disabled><option value="">— Elegí un lote —</option></select>
+  <div class="apm-modo">
+    <button id="apm-modo-desvio" class="btn btn-sm btn-primary" onclick="apmModo('desvio')">Desvío del objetivo</button>
+    <button id="apm-modo-valor" class="btn btn-sm" onclick="apmModo('valor')">Valor</button>
+  </div>
+  <div class="apm-modo">
+    <button id="apm-vista-calor" class="btn btn-sm btn-primary" onclick="apmVista('calor')">Mapa de calor</button>
+    <button id="apm-vista-tramos" class="btn btn-sm" onclick="apmVista('tramos')">Tramos</button>
+  </div>
+  <button class="btn btn-sm" onclick="apmEncajar()">⤢ Encajar al lote</button>
+  <button class="btn btn-sm" onclick="apmGeoJson()">⬇ GeoJSON</button>
+  <div id="apm-info" style="font-size:12px; color:var(--muted2); flex:1; min-width:200px"></div>
+</div>
+
+<div id="apm-mapa" style="height:calc(100vh - 340px); min-height:420px; border-radius:10px; overflow:hidden; background:#0a0a0a"></div>
+
+<div id="apm-leyenda" class="apm-ley" style="margin-top:8px"></div>
+
+<div id="apm-resumen"></div>
+
+<script src="/js/aplicado-mapas.js"></script>

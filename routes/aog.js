@@ -167,7 +167,11 @@ router.post("/sync", deviceAuth, async (req, res) => {
   // Tampoco se archiva historial: la parte que crece solo agrega filas al
   // final (la versión anterior es un prefijo de la nueva) y archivarla en
   // cada subida llenaría CouchDB de copias de 300 KB.
-  const esElevacion = (subtipo || "") === "elevation_points";
+  //
+  // Lo mismo vale para los otros registros en PARTES de PilotX: el registro
+  // VistaX por surco ("vistax_surcos") y el de lo aplicado ("aplicado_tramos",
+  // FlowX/QuantiX). La parte que crece sube cada 5 min solo agregando tramos.
+  const esElevacion = SUBTIPOS_PARTES.has(subtipo || "");
 
   try {
     const estabDB = getEstabDB(estabSlug);
@@ -233,6 +237,115 @@ router.post("/sync", deviceAuth, async (req, res) => {
     }
     // fin Sprint 2: stats de cobertura precalculadas
   } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Registros en PARTES append-only (ver /sync): sin historial y es_lote=false.
+const SUBTIPOS_PARTES = new Set(["elevation_points", "vistax_surcos", "aplicado_tramos"]);
+
+// ══════════════════════════════════════════════════
+//  Mapas de aplicación (registro por lote de PilotX)
+//
+//  PilotX sube por lote, en partes NDJSON:
+//    aplicado_tramos / aplicado_resumen  → FlowX (L/ha por corte) y QuantiX
+//                                          (kg/ha o sem/m por motor), schema agp.aplicado/1
+//    vistax_surcos / vistax_resumen      → VistaX por surco, schema agp.vistax.surcos/1
+//  Cada tramo (~10 m) trae lat/lon (centro), rumbo (0 = norte, horario) y
+//  dist; cada canal/surco su corrimiento off_m a la DERECHA del rumbo.
+// ══════════════════════════════════════════════════
+const SUBTIPOS_MAPA = ["aplicado_tramos", "aplicado_resumen", "vistax_surcos", "vistax_resumen"];
+
+// GET /api/aog/aplicado/lotes → [{ lote, ts_ultimo, aplicado, vistax }]
+router.get("/aplicado/lotes", async (req, res) => {
+  try {
+    const estabDB = getEstabDB(req.user.estabSlug);
+    // Una consulta por subtipo (igualdad): usa el índice [tipo, subtipo];
+    // con $in Mango recorre todos los aog_archivo del establecimiento.
+    const docs = [];
+    for (const subtipo of SUBTIPOS_MAPA) {
+      const r = await estabDB.find({
+        selector: { tipo: "aog_archivo", subtipo },
+        fields: ["lote_nombre", "subtipo", "ts", "tamaño"],
+        limit: 20000,
+      });
+      docs.push(...(r.docs || []));
+    }
+    const lotes = {};
+    for (const d of docs) {
+      const n = d.lote_nombre;
+      if (!n) continue;
+      const l = lotes[n] || (lotes[n] = { lote: n, ts_ultimo: 0, aplicado: 0, vistax: 0, tamano: 0 });
+      if (d.subtipo === "aplicado_tramos") l.aplicado++;
+      if (d.subtipo === "vistax_surcos") l.vistax++;
+      l.tamano += d.tamaño || 0;
+      if ((d.ts || 0) > l.ts_ultimo) l.ts_ultimo = d.ts || 0;
+    }
+    res.json(Object.values(lotes)
+      .filter(l => l.aplicado > 0 || l.vistax > 0)
+      .sort((a, b) => b.ts_ultimo - a.ts_ultimo));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Línea NDJSON → objeto, o null (cabecera cortada por un apagón, basura).
+function _json(linea) {
+  if (!linea || !linea.trim()) return null;
+  try { return JSON.parse(linea); } catch { return null; }
+}
+
+// Orden de las partes por el número del nombre (aplicado_0007.ndjson).
+function _nroParte(d) {
+  const m = String(d.nombre || d.ruta_rel || "").match(/_(\d+)\.ndjson$/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// GET /api/aog/aplicado/datos?lote=X
+// Junta todas las partes del lote y devuelve lo mínimo para dibujar:
+//   canales: { id: {prod, nombre, unidad} }
+//   tramos:  [[lat, lon, rumbo, dist, t, vel, [[id, off, ancho, real|null, obj, frac], ...]], ...]
+//   surcos:  [[lat, lon, rumbo, dist, t, vel, [[surco, off, sem_m|null, sing|null, dob|null, fal|null], ...]], ...]
+//   resumen: { aplicado: {...}|null, vistax: {...}|null }
+router.get("/aplicado/datos", async (req, res) => {
+  try {
+    const lote = String(req.query.lote || "");
+    if (!lote) return res.status(400).json({ error: "lote requerido" });
+    const estabDB = getEstabDB(req.user.estabSlug);
+    const r = await estabDB.find({
+      selector: { tipo: "aog_archivo", lote_nombre: lote, subtipo: { "$in": SUBTIPOS_MAPA } },
+      fields: ["subtipo", "nombre", "ruta_rel", "contenido"],
+      limit: 5000,
+    });
+    const docs = r.docs || [];
+    const out = { lote, canales: {}, tramos: [], surcos: [], resumen: { aplicado: null, vistax: null } };
+
+    const partes = docs.filter(d => d.subtipo === "aplicado_tramos" || d.subtipo === "vistax_surcos")
+                       .sort((a, b) => a.subtipo.localeCompare(b.subtipo) || _nroParte(a) - _nroParte(b));
+    for (const d of partes) {
+      const esVx = d.subtipo === "vistax_surcos";
+      for (const linea of String(d.contenido || "").split(/\r?\n/)) {
+        const o = _json(linea);
+        if (!o) continue;
+        if (o.def && o.def.id) {
+          out.canales[o.def.id] = { prod: o.def.prod || "", nombre: o.def.nombre || o.def.id, unidad: o.def.unidad || "" };
+          continue;
+        }
+        if (typeof o.lat !== "number" || typeof o.lon !== "number") continue;
+        if (Math.abs(o.lat) < 1e-6 && Math.abs(o.lon) < 1e-6) continue;
+        const base = [o.lat, o.lon, o.rumbo || 0, o.dist || 0, o.t || "", o.vel || 0];
+        if (esVx && Array.isArray(o.s)) {
+          // cols: tren, surco, off_m, sem_m, sing, dob, fal, cv, n
+          base.push(o.s.map(f => [f[1], f[2], f[3], f[4], f[5], f[6]]));
+          out.surcos.push(base);
+        } else if (!esVx && Array.isArray(o.c)) {
+          base.push(o.c);
+          out.tramos.push(base);
+        }
+      }
+    }
+    for (const d of docs) {
+      if (d.subtipo === "aplicado_resumen") out.resumen.aplicado = _json(d.contenido);
+      if (d.subtipo === "vistax_resumen")   out.resumen.vistax   = _json(d.contenido);
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ══════════════════════════════════════════════════

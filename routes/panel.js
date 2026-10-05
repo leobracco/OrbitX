@@ -700,6 +700,15 @@ router.get("/vistax-mapas", requireAuth, async (req, res) => {
   res.render("layout", { ...base(req, { regBadge }), title:"VistaX — Mapas de sesión", page:"vistax-mapas" });
 });
 
+// Mapas de aplicación: lo que dosificó cada máquina en el lote (FlowX L/ha
+// por corte, QuantiX por motor, VistaX sem/m por surco). Datos del registro
+// por lote de PilotX vía /api/aog/aplicado/*.
+router.get("/aplicado-mapas", requireAuth, async (req, res) => {
+  const db = req.app.locals.globalDB;
+  const regBadge = await getRegBadge(db).catch(()=>0);
+  res.render("layout", { ...base(req, { regBadge }), title:"Mapas de aplicación", page:"aplicado-mapas" });
+});
+
 // ─────────────────────────────────────────────────────────
 // agrarIA
 // ─────────────────────────────────────────────────────────
