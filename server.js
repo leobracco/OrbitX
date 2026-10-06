@@ -189,6 +189,9 @@ app.use((req, _, next) => {
 });
 
 // ── Panel SSR (rutas HTML) ────────────────────────────────
+// Agenda de RustDesk (OrbitX como API server del cliente) — antes del panel SSR.
+app.use("/rustdesk", require("./routes/rustdesk"));
+
 app.use("/", routePanel);
 
 // ── API JSON ──────────────────────────────────────────────
